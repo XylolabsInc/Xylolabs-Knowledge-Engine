@@ -35,6 +35,7 @@ type Config struct {
 
 	// Bot
 	SystemPromptFile string
+	Language         string
 
 	// Knowledge Base Repo
 	KBRepoDir string
@@ -84,6 +85,7 @@ func Load() *Config {
 		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.1-pro-preview"),
 
 		SystemPromptFile: envOrDefault("SYSTEM_PROMPT_FILE", ""),
+		Language:         envOrDefault("LANGUAGE", "en"),
 
 		KBRepoDir: envOrDefault("KB_REPO_DIR", ""),
 
