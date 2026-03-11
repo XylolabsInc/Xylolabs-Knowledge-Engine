@@ -15,9 +15,11 @@ import (
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 	"google.golang.org/api/slides/v1"
+	"google.golang.org/api/tasks/v1"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
@@ -30,6 +32,8 @@ type Connector struct {
 	docsService     *docs.Service
 	sheetsService   *sheets.Service
 	slidesService   *slides.Service
+	gmailService    *gmail.Service
+	tasksService    *tasks.Service
 	engine          *kb.Engine
 	store           kb.Storage
 	logger          *slog.Logger
@@ -38,18 +42,20 @@ type Connector struct {
 	scopes          []string
 	extractor       *extractor.Extractor
 	driveFolders    []string
+	impersonateEmail string
 }
 
 // NewConnector creates a Google Workspace connector.
-func NewConnector(credsFile, tokenFile string, scopes []string, driveFolders []string, engine *kb.Engine, store kb.Storage, logger *slog.Logger) (*Connector, error) {
+func NewConnector(credsFile, tokenFile string, scopes []string, driveFolders []string, impersonateEmail string, engine *kb.Engine, store kb.Storage, logger *slog.Logger) (*Connector, error) {
 	c := &Connector{
-		engine:       engine,
-		store:        store,
-		logger:       logger.With("component", "google-connector"),
-		credsFile:    credsFile,
-		tokenFile:    tokenFile,
-		scopes:       scopes,
-		driveFolders: driveFolders,
+		engine:           engine,
+		store:            store,
+		logger:           logger.With("component", "google-connector"),
+		credsFile:        credsFile,
+		tokenFile:        tokenFile,
+		scopes:           scopes,
+		driveFolders:     driveFolders,
+		impersonateEmail: impersonateEmail,
 	}
 
 	if err := c.initServices(); err != nil {
@@ -100,6 +106,21 @@ func (c *Connector) SheetsService() *sheets.Service {
 // SlidesService returns the Google Slides service.
 func (c *Connector) SlidesService() *slides.Service {
 	return c.slidesService
+}
+
+// CalendarService returns the Google Calendar service.
+func (c *Connector) CalendarService() *calendar.Service {
+	return c.calendarService
+}
+
+// GmailService returns the Gmail service.
+func (c *Connector) GmailService() *gmail.Service {
+	return c.gmailService
+}
+
+// TasksService returns the Google Tasks service.
+func (c *Connector) TasksService() *tasks.Service {
+	return c.tasksService
 }
 
 // Sync fetches new and updated files from Google Drive.
@@ -223,6 +244,18 @@ func (c *Connector) initServices() error {
 	}
 	c.slidesService = slidesSvc
 
+	gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		return fmt.Errorf("create gmail service: %w", err)
+	}
+	c.gmailService = gmailSvc
+
+	tasksSvc, err := tasks.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		return fmt.Errorf("create tasks service: %w", err)
+	}
+	c.tasksService = tasksSvc
+
 	return nil
 }
 
@@ -237,11 +270,14 @@ func (c *Connector) buildHTTPClient(ctx context.Context, credBytes []byte) (*htt
 	}
 
 	if creds.Type == "service_account" {
-		// Service account — use JWT config
 		c.logger.Info("using service account credentials")
 		jwtConfig, err := google.JWTConfigFromJSON(credBytes, c.scopes...)
 		if err != nil {
 			return nil, fmt.Errorf("parse service account key: %w", err)
+		}
+		if c.impersonateEmail != "" {
+			jwtConfig.Subject = c.impersonateEmail
+			c.logger.Info("impersonating user", "email", c.impersonateEmail)
 		}
 		return jwtConfig.Client(ctx), nil
 	}

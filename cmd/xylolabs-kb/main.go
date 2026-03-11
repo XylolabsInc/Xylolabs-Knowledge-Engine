@@ -121,7 +121,7 @@ func main() {
 
 	if cfg.GoogleEnabled() {
 		var err error
-		googleConn, err = googleconn.NewConnector(cfg.GoogleCredsFile, cfg.GoogleTokenFile, cfg.GoogleScopes, cfg.GoogleDriveFolders, engine, store, logger)
+		googleConn, err = googleconn.NewConnector(cfg.GoogleCredsFile, cfg.GoogleTokenFile, cfg.GoogleScopes, cfg.GoogleDriveFolders, cfg.GoogleImpersonateEmail, engine, store, logger)
 		if err != nil {
 			logger.Error("failed to initialize google connector", "error", err)
 			googleConn = nil
@@ -160,7 +160,7 @@ func main() {
 	if botHandler != nil {
 		var gw *tools.GoogleWriter
 		if googleConn != nil {
-			gw = tools.NewGoogleWriter(googleConn.DriveService(), googleConn.DocsService(), googleConn.SheetsService(), googleConn.SlidesService(), logger)
+			gw = tools.NewGoogleWriter(googleConn.DriveService(), googleConn.DocsService(), googleConn.SheetsService(), googleConn.SlidesService(), googleConn.CalendarService(), googleConn.TasksService(), googleConn.GmailService(), logger)
 		}
 		var nw *tools.NotionWriter
 		if cfg.NotionEnabled() {

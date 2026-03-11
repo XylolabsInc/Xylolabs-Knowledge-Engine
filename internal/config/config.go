@@ -18,10 +18,11 @@ type Config struct {
 	SlackSignSecret  string
 
 	// Google Workspace
-	GoogleCredsFile    string
-	GoogleTokenFile    string
-	GoogleScopes       []string
-	GoogleDriveFolders []string
+	GoogleCredsFile        string
+	GoogleTokenFile        string
+	GoogleScopes           []string
+	GoogleDriveFolders     []string
+	GoogleImpersonateEmail string
 
 	// Notion
 	NotionAPIKey     string
@@ -69,8 +70,11 @@ func Load() *Config {
 			"https://www.googleapis.com/auth/documents",
 			"https://www.googleapis.com/auth/spreadsheets",
 			"https://www.googleapis.com/auth/presentations",
-			"https://www.googleapis.com/auth/calendar.readonly",
+			"https://www.googleapis.com/auth/calendar",
+			"https://www.googleapis.com/auth/tasks",
+			"https://www.googleapis.com/auth/gmail.send",
 		}),
+		GoogleImpersonateEmail: os.Getenv("GOOGLE_IMPERSONATE_EMAIL"),
 
 		NotionAPIKey:    os.Getenv("NOTION_API_KEY"),
 		NotionRootPages: splitEnv("NOTION_ROOT_PAGES", nil),
