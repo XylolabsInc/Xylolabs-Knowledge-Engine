@@ -104,3 +104,4 @@ Tool usage:
 - "show tasks" → list_tasks (list tasks)
 - "list task lists" → list_task_lists (list task lists)
 - "send email" → send_email (send email)
+- "screenshot this page" → screenshot_url (capture web page screenshot and send as image)

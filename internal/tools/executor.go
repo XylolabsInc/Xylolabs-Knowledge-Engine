@@ -12,9 +12,10 @@ import (
 
 // ToolExecutor manages available tools and dispatches function calls.
 type ToolExecutor struct {
-	googleWriter    *GoogleWriter
-	notionWriter    *NotionWriter
-	logger          *slog.Logger
+	googleWriter      *GoogleWriter
+	notionWriter      *NotionWriter
+	screenshotter     *Screenshotter
+	logger            *slog.Logger
 	defaultCalendarID string
 
 	mu          sync.Mutex
@@ -23,13 +24,14 @@ type ToolExecutor struct {
 
 // NewToolExecutor creates a ToolExecutor.
 // Either writer can be nil if not configured.
-func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, logger *slog.Logger) *ToolExecutor {
+func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, ss *Screenshotter, logger *slog.Logger) *ToolExecutor {
 	return &ToolExecutor{
-		googleWriter:    gw,
-		notionWriter:    nw,
+		googleWriter:      gw,
+		notionWriter:      nw,
+		screenshotter:     ss,
 		defaultCalendarID: defaultCalendarID,
-		logger:          logger.With("component", "tool-executor"),
-		attachments:     make(map[string][]byte),
+		logger:            logger.With("component", "tool-executor"),
+		attachments:       make(map[string][]byte),
 	}
 }
 
@@ -46,6 +48,17 @@ func (e *ToolExecutor) ClearAttachments() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.attachments = make(map[string][]byte)
+}
+
+// PopScreenshot removes and returns the screenshot attachment if present.
+func (e *ToolExecutor) PopScreenshot() ([]byte, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	data, ok := e.attachments["screenshot.png"]
+	if ok {
+		delete(e.attachments, "screenshot.png")
+	}
+	return data, ok
 }
 
 // Declarations returns the function declarations for all available tools.
@@ -855,6 +868,30 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		)
 	}
 
+	// --- Screenshot Tool ---
+	if e.screenshotter != nil {
+		decls = append(decls,
+			gemini.FunctionDeclaration{
+				Name:        "screenshot_url",
+				Description: "Take a screenshot of a web page and send it as an image. Use when the user wants to see what a web page looks like.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{
+							"type":        "string",
+							"description": "URL of the web page to capture",
+						},
+						"full_page": map[string]any{
+							"type":        "boolean",
+							"description": "Capture full scrollable page (default: false, captures only viewport)",
+						},
+					},
+					"required": []string{"url"},
+				},
+			},
+		)
+	}
+
 	return decls
 }
 
@@ -1608,6 +1645,32 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return nil, err
 		}
 		return map[string]any{"url": url, "page_id": pageID}, nil
+
+	case "screenshot_url":
+		if e.screenshotter == nil {
+			return nil, fmt.Errorf("screenshot is not configured")
+		}
+		url, _ := call.Args["url"].(string)
+		if url == "" {
+			return nil, fmt.Errorf("url is required")
+		}
+		fullPage, _ := call.Args["full_page"].(bool)
+
+		pngBytes, err := e.screenshotter.Capture(ctx, url, 1280, 960, fullPage)
+		if err != nil {
+			return nil, err
+		}
+
+		e.mu.Lock()
+		e.attachments["screenshot.png"] = pngBytes
+		e.mu.Unlock()
+
+		return map[string]any{
+			"status":     "captured",
+			"file_name":  "screenshot.png",
+			"size_bytes": len(pngBytes),
+			"message":    "Screenshot captured. The image has been attached and will be sent with the response.",
+		}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)

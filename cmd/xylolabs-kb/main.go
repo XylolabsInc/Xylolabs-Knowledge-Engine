@@ -183,7 +183,8 @@ func main() {
 		if cfg.NotionEnabled() {
 			nw = tools.NewNotionWriter(cfg.NotionAPIKey, logger)
 		}
-		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, logger)
+		ss := tools.NewScreenshotter(logger)
+		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, logger)
 		botHandler.SetToolExecutor(toolExecutor)
 		logger.Info("tool executor enabled",
 			"google_drive", gw != nil,

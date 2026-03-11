@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"fmt"
@@ -391,6 +392,27 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 			Role:              "user",
 			FunctionResponses: responses,
 		})
+	}
+
+	// 5.5. Upload screenshot attachments if any were produced by tools.
+	if b.toolExecutor != nil {
+		if screenshotData, ok := b.toolExecutor.PopScreenshot(); ok {
+			go func(data []byte, channel, ts string) {
+				uploadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_, err := b.slackClient.UploadFileContext(uploadCtx, slack.UploadFileParameters{
+					Channel:         channel,
+					Filename:        "screenshot.png",
+					FileSize:        len(data),
+					Reader:          bytes.NewReader(data),
+					Title:           "Web Page Screenshot",
+					ThreadTimestamp: ts,
+				})
+				if err != nil {
+					b.logger.Warn("failed to upload screenshot", "error", err)
+				}
+			}(screenshotData, ev.Channel, threadTS)
+		}
 	}
 
 	// 5. Check if the model decided to skip this message.
