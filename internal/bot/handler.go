@@ -222,18 +222,28 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 			if mimeType == "" {
 				mimeType = "application/octet-stream"
 			}
-			// Only send supported MIME types as inline data to Gemini
+			fileName := f.Name
+			if fileName == "" {
+				fileName = f.ID
+			}
+			// Send supported MIME types as inline data to Gemini
 			if strings.HasPrefix(mimeType, "image/") || mimeType == "application/pdf" {
 				images = append(images, gemini.Image{
 					MimeType: mimeType,
 					Data:     data,
 				})
+			} else if b.extractor != nil {
+				// Extract text from document files (HWP, DOCX, XLSX, etc.)
+				result, err := b.extractor.ExtractFromBytes(ctx, data, mimeType, fileName)
+				if err == nil && result.Text != "" && !strings.HasPrefix(result.Text, "[") {
+					content := result.Text
+					if len(content) > 8000 {
+						content = content[:8000] + "\n..."
+					}
+					query += fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", fileName, content)
+				}
 			}
 			// Store for potential Drive upload
-			fileName := f.Name
-			if fileName == "" {
-				fileName = f.ID
-			}
 			fileAttachments[fileName] = data
 			fileNames = append(fileNames, fileName)
 		}
