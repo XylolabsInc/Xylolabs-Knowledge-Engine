@@ -160,7 +160,7 @@ func main() {
 	if botHandler != nil {
 		var gw *tools.GoogleWriter
 		if googleConn != nil {
-			gw = tools.NewGoogleWriter(googleConn.DriveService(), googleConn.DocsService(), googleConn.SheetsService(), googleConn.SlidesService(), googleConn.CalendarService(), googleConn.TasksService(), googleConn.GmailService(), logger)
+			gw = tools.NewGoogleWriter(googleConn.DriveService(), googleConn.DocsService(), googleConn.SheetsService(), googleConn.SlidesService(), googleConn.CalendarService(), googleConn.TasksService(), googleConn.GmailService(), cfg.GoogleImpersonateEmail, logger)
 		}
 		var nw *tools.NotionWriter
 		if cfg.NotionEnabled() {

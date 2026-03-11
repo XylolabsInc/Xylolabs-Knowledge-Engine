@@ -33,11 +33,12 @@ type GoogleWriter struct {
 	calendarService *calendar.Service
 	tasksService    *tasks.Service
 	gmailService    *gmail.Service
+	senderEmail     string
 	logger          *slog.Logger
 }
 
 // NewGoogleWriter creates a GoogleWriter from Google API services.
-func NewGoogleWriter(driveService *drive.Service, docsService *docs.Service, sheetsService *sheets.Service, slidesService *slides.Service, calendarService *calendar.Service, tasksService *tasks.Service, gmailService *gmail.Service, logger *slog.Logger) *GoogleWriter {
+func NewGoogleWriter(driveService *drive.Service, docsService *docs.Service, sheetsService *sheets.Service, slidesService *slides.Service, calendarService *calendar.Service, tasksService *tasks.Service, gmailService *gmail.Service, senderEmail string, logger *slog.Logger) *GoogleWriter {
 	return &GoogleWriter{
 		service:         driveService,
 		docsService:     docsService,
@@ -46,6 +47,7 @@ func NewGoogleWriter(driveService *drive.Service, docsService *docs.Service, she
 		calendarService: calendarService,
 		tasksService:    tasksService,
 		gmailService:    gmailService,
+		senderEmail:     senderEmail,
 		logger:          logger.With("component", "google-writer"),
 	}
 }
@@ -1200,7 +1202,11 @@ func (w *GoogleWriter) ListTaskLists(ctx context.Context) ([]map[string]any, err
 // SendEmail sends an email via Gmail API.
 func (w *GoogleWriter) SendEmail(ctx context.Context, to, cc, subject, body string) error {
 	header := make(map[string]string)
-	header["From"] = "me"
+	from := w.senderEmail
+	if from == "" {
+		from = "me"
+	}
+	header["From"] = from
 	header["To"] = to
 	if cc != "" {
 		header["Cc"] = cc
