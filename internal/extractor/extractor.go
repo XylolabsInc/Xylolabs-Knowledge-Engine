@@ -94,6 +94,20 @@ func (e *Extractor) ExtractFromBytes(ctx context.Context, data []byte, mimeType 
 		}
 		return &ExtractResult{Text: text, MimeType: baseMIME}, nil
 
+	case baseMIME == "application/x-hwp" || baseMIME == "application/haansofthwp":
+		text, err := extractHWP(data)
+		if err != nil {
+			return nil, fmt.Errorf("extractor: extract hwp: %w", err)
+		}
+		return &ExtractResult{Text: text, MimeType: baseMIME}, nil
+
+	case baseMIME == "application/hwp+zip" || baseMIME == "application/x-hwpx":
+		text, err := extractHWPX(data)
+		if err != nil {
+			return nil, fmt.Errorf("extractor: extract hwpx: %w", err)
+		}
+		return &ExtractResult{Text: text, MimeType: baseMIME}, nil
+
 	case strings.HasPrefix(baseMIME, "text/"),
 		baseMIME == "application/json",
 		baseMIME == "application/xml",
@@ -170,6 +184,10 @@ func mimeFromFilename(filename string) string {
 		return "image/gif"
 	case ".webp":
 		return "image/webp"
+	case ".hwp":
+		return "application/x-hwp"
+	case ".hwpx":
+		return "application/hwp+zip"
 	default:
 		return ""
 	}
