@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,32 +12,41 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/sheets/v4"
 	"google.golang.org/api/slides/v1"
+	"google.golang.org/api/tasks/v1"
 )
 
 const defaultDriveFolderID = ""
 
 // GoogleWriter handles Google Workspace write/read operations.
 type GoogleWriter struct {
-	service       *drive.Service
-	docsService   *docs.Service
-	sheetsService *sheets.Service
-	slidesService *slides.Service
-	logger        *slog.Logger
+	service         *drive.Service
+	docsService     *docs.Service
+	sheetsService   *sheets.Service
+	slidesService   *slides.Service
+	calendarService *calendar.Service
+	tasksService    *tasks.Service
+	gmailService    *gmail.Service
+	logger          *slog.Logger
 }
 
 // NewGoogleWriter creates a GoogleWriter from Google API services.
-func NewGoogleWriter(driveService *drive.Service, docsService *docs.Service, sheetsService *sheets.Service, slidesService *slides.Service, logger *slog.Logger) *GoogleWriter {
+func NewGoogleWriter(driveService *drive.Service, docsService *docs.Service, sheetsService *sheets.Service, slidesService *slides.Service, calendarService *calendar.Service, tasksService *tasks.Service, gmailService *gmail.Service, logger *slog.Logger) *GoogleWriter {
 	return &GoogleWriter{
-		service:       driveService,
-		docsService:   docsService,
-		sheetsService: sheetsService,
-		slidesService: slidesService,
-		logger:        logger.With("component", "google-writer"),
+		service:         driveService,
+		docsService:     docsService,
+		sheetsService:   sheetsService,
+		slidesService:   slidesService,
+		calendarService: calendarService,
+		tasksService:    tasksService,
+		gmailService:    gmailService,
+		logger:          logger.With("component", "google-writer"),
 	}
 }
 
@@ -892,4 +902,326 @@ func (w *GoogleWriter) ExportPDF(ctx context.Context, fileID, fileName string) (
 
 	w.logger.Info("exported file as pdf", "source_id", fileID, "file_name", fileName, "url", url)
 	return url, nil
+}
+
+// CreateEvent creates a new Google Calendar event.
+func (w *GoogleWriter) CreateEvent(ctx context.Context, calendarID, summary, description, location, startTime, endTime string, attendees []string) (string, error) {
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	event := &calendar.Event{
+		Summary:     summary,
+		Description: description,
+		Location:    location,
+	}
+	// Support both date-only (all-day) and datetime formats
+	if len(startTime) <= 10 {
+		event.Start = &calendar.EventDateTime{Date: startTime}
+	} else {
+		event.Start = &calendar.EventDateTime{DateTime: startTime}
+	}
+	if len(endTime) <= 10 {
+		event.End = &calendar.EventDateTime{Date: endTime}
+	} else {
+		event.End = &calendar.EventDateTime{DateTime: endTime}
+	}
+	for _, email := range attendees {
+		event.Attendees = append(event.Attendees, &calendar.EventAttendee{Email: email})
+	}
+	created, err := w.calendarService.Events.Insert(calendarID, event).Context(ctx).SendUpdates("all").Do()
+	if err != nil {
+		return "", fmt.Errorf("create calendar event: %w", err)
+	}
+	w.logger.Info("created calendar event", "summary", summary, "id", created.Id, "url", created.HtmlLink)
+	return created.HtmlLink, nil
+}
+
+// EditEvent updates an existing Google Calendar event. Only non-empty fields are updated.
+func (w *GoogleWriter) EditEvent(ctx context.Context, calendarID, eventID, summary, description, location, startTime, endTime string, attendees []string) (string, error) {
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	// Fetch existing event
+	existing, err := w.calendarService.Events.Get(calendarID, eventID).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("get calendar event: %w", err)
+	}
+	if summary != "" {
+		existing.Summary = summary
+	}
+	if description != "" {
+		existing.Description = description
+	}
+	if location != "" {
+		existing.Location = location
+	}
+	if startTime != "" {
+		if len(startTime) <= 10 {
+			existing.Start = &calendar.EventDateTime{Date: startTime}
+		} else {
+			existing.Start = &calendar.EventDateTime{DateTime: startTime}
+		}
+	}
+	if endTime != "" {
+		if len(endTime) <= 10 {
+			existing.End = &calendar.EventDateTime{Date: endTime}
+		} else {
+			existing.End = &calendar.EventDateTime{DateTime: endTime}
+		}
+	}
+	if len(attendees) > 0 {
+		existing.Attendees = nil
+		for _, email := range attendees {
+			existing.Attendees = append(existing.Attendees, &calendar.EventAttendee{Email: email})
+		}
+	}
+	updated, err := w.calendarService.Events.Update(calendarID, eventID, existing).Context(ctx).SendUpdates("all").Do()
+	if err != nil {
+		return "", fmt.Errorf("update calendar event: %w", err)
+	}
+	w.logger.Info("updated calendar event", "id", eventID, "url", updated.HtmlLink)
+	return updated.HtmlLink, nil
+}
+
+// DeleteEvent deletes a Google Calendar event.
+func (w *GoogleWriter) DeleteEvent(ctx context.Context, calendarID, eventID string) error {
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	if err := w.calendarService.Events.Delete(calendarID, eventID).Context(ctx).SendUpdates("all").Do(); err != nil {
+		return fmt.Errorf("delete calendar event: %w", err)
+	}
+	w.logger.Info("deleted calendar event", "id", eventID)
+	return nil
+}
+
+// ListEvents lists Google Calendar events within a time range.
+func (w *GoogleWriter) ListEvents(ctx context.Context, calendarID, timeMin, timeMax string, maxResults int) ([]map[string]any, error) {
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	if maxResults <= 0 {
+		maxResults = 20
+	}
+	req := w.calendarService.Events.List(calendarID).Context(ctx).
+		SingleEvents(true).
+		OrderBy("startTime").
+		MaxResults(int64(maxResults))
+	if timeMin != "" {
+		req = req.TimeMin(timeMin)
+	}
+	if timeMax != "" {
+		req = req.TimeMax(timeMax)
+	}
+	events, err := req.Do()
+	if err != nil {
+		return nil, fmt.Errorf("list calendar events: %w", err)
+	}
+	var results []map[string]any
+	for _, ev := range events.Items {
+		start := ev.Start.DateTime
+		if start == "" {
+			start = ev.Start.Date
+		}
+		end := ev.End.DateTime
+		if end == "" {
+			end = ev.End.Date
+		}
+		var attendeeEmails []string
+		for _, a := range ev.Attendees {
+			attendeeEmails = append(attendeeEmails, a.Email)
+		}
+		results = append(results, map[string]any{
+			"id":          ev.Id,
+			"summary":     ev.Summary,
+			"description": ev.Description,
+			"location":    ev.Location,
+			"start":       start,
+			"end":         end,
+			"url":         ev.HtmlLink,
+			"attendees":   attendeeEmails,
+			"status":      ev.Status,
+		})
+	}
+	w.logger.Info("listed calendar events", "calendar", calendarID, "count", len(results))
+	return results, nil
+}
+
+// AddAttendees adds attendees to an existing calendar event.
+func (w *GoogleWriter) AddAttendees(ctx context.Context, calendarID, eventID string, attendees []string) error {
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	existing, err := w.calendarService.Events.Get(calendarID, eventID).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("get calendar event: %w", err)
+	}
+	for _, email := range attendees {
+		existing.Attendees = append(existing.Attendees, &calendar.EventAttendee{Email: email})
+	}
+	if _, err := w.calendarService.Events.Update(calendarID, eventID, existing).Context(ctx).SendUpdates("all").Do(); err != nil {
+		return fmt.Errorf("add attendees: %w", err)
+	}
+	w.logger.Info("added attendees to event", "id", eventID, "added", len(attendees))
+	return nil
+}
+
+// ListCalendars lists all accessible Google Calendars.
+func (w *GoogleWriter) ListCalendars(ctx context.Context) ([]map[string]any, error) {
+	list, err := w.calendarService.CalendarList.List().Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("list calendars: %w", err)
+	}
+	var results []map[string]any
+	for _, cal := range list.Items {
+		results = append(results, map[string]any{
+			"id":          cal.Id,
+			"summary":     cal.Summary,
+			"description": cal.Description,
+			"primary":     cal.Primary,
+			"access_role": cal.AccessRole,
+		})
+	}
+	w.logger.Info("listed calendars", "count", len(results))
+	return results, nil
+}
+
+// CreateTask creates a new Google Task.
+func (w *GoogleWriter) CreateTask(ctx context.Context, taskListID, title, notes, due string) (string, error) {
+	if taskListID == "" {
+		taskListID = "@default"
+	}
+	task := &tasks.Task{
+		Title: title,
+		Notes: notes,
+	}
+	if due != "" {
+		// Ensure RFC3339 format
+		if len(due) <= 10 {
+			due = due + "T00:00:00Z"
+		}
+		task.Due = due
+	}
+	created, err := w.tasksService.Tasks.Insert(taskListID, task).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("create task: %w", err)
+	}
+	w.logger.Info("created task", "title", title, "id", created.Id)
+	return created.Id, nil
+}
+
+// EditTask updates an existing Google Task.
+func (w *GoogleWriter) EditTask(ctx context.Context, taskListID, taskID, title, notes, due, status string) error {
+	if taskListID == "" {
+		taskListID = "@default"
+	}
+	existing, err := w.tasksService.Tasks.Get(taskListID, taskID).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("get task: %w", err)
+	}
+	if title != "" {
+		existing.Title = title
+	}
+	if notes != "" {
+		existing.Notes = notes
+	}
+	if due != "" {
+		if len(due) <= 10 {
+			due = due + "T00:00:00Z"
+		}
+		existing.Due = due
+	}
+	if status != "" {
+		existing.Status = status // "needsAction" or "completed"
+	}
+	if _, err := w.tasksService.Tasks.Update(taskListID, taskID, existing).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("update task: %w", err)
+	}
+	w.logger.Info("updated task", "id", taskID)
+	return nil
+}
+
+// DeleteTask deletes a Google Task.
+func (w *GoogleWriter) DeleteTask(ctx context.Context, taskListID, taskID string) error {
+	if taskListID == "" {
+		taskListID = "@default"
+	}
+	if err := w.tasksService.Tasks.Delete(taskListID, taskID).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("delete task: %w", err)
+	}
+	w.logger.Info("deleted task", "id", taskID)
+	return nil
+}
+
+// ListTasks lists tasks in a task list.
+func (w *GoogleWriter) ListTasks(ctx context.Context, taskListID string, maxResults int) ([]map[string]any, error) {
+	if taskListID == "" {
+		taskListID = "@default"
+	}
+	if maxResults <= 0 {
+		maxResults = 20
+	}
+	resp, err := w.tasksService.Tasks.List(taskListID).Context(ctx).MaxResults(int64(maxResults)).Do()
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	var results []map[string]any
+	for _, t := range resp.Items {
+		results = append(results, map[string]any{
+			"id":      t.Id,
+			"title":   t.Title,
+			"notes":   t.Notes,
+			"due":     t.Due,
+			"status":  t.Status,
+			"updated": t.Updated,
+		})
+	}
+	w.logger.Info("listed tasks", "list", taskListID, "count", len(results))
+	return results, nil
+}
+
+// ListTaskLists lists all task lists.
+func (w *GoogleWriter) ListTaskLists(ctx context.Context) ([]map[string]any, error) {
+	resp, err := w.tasksService.Tasklists.List().Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("list task lists: %w", err)
+	}
+	var results []map[string]any
+	for _, tl := range resp.Items {
+		results = append(results, map[string]any{
+			"id":    tl.Id,
+			"title": tl.Title,
+		})
+	}
+	w.logger.Info("listed task lists", "count", len(results))
+	return results, nil
+}
+
+// SendEmail sends an email via Gmail API.
+func (w *GoogleWriter) SendEmail(ctx context.Context, to, cc, subject, body string) error {
+	header := make(map[string]string)
+	header["From"] = "me"
+	header["To"] = to
+	if cc != "" {
+		header["Cc"] = cc
+	}
+	header["Subject"] = subject
+	header["MIME-Version"] = "1.0"
+	header["Content-Type"] = "text/plain; charset=\"utf-8\""
+
+	var msg strings.Builder
+	for k, v := range header {
+		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	}
+	msg.WriteString("\r\n")
+	msg.WriteString(body)
+
+	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
+	gmailMsg := &gmail.Message{Raw: raw}
+	_, err := w.gmailService.Users.Messages.Send("me", gmailMsg).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("send email: %w", err)
+	}
+	w.logger.Info("sent email", "to", to, "subject", subject)
+	return nil
 }
