@@ -421,6 +421,7 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	var reactEmoji string
 	if m := reReactBlock.FindStringSubmatch(responseText); len(m) > 1 {
 		reactEmoji = strings.TrimSpace(m[1])
+		reactEmoji = strings.Trim(reactEmoji, ":")
 	}
 	responseText = reReactBlock.ReplaceAllString(responseText, "")
 	responseText = strings.TrimSpace(responseText)
@@ -437,8 +438,10 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	if reactEmoji != "" {
 		msgRef := slack.NewRefToMessage(ev.Channel, ev.TimeStamp)
 		go func(emoji string) {
-			if err := b.slackClient.AddReactionContext(ctx, emoji, msgRef); err != nil {
-				b.logger.Debug("failed to add reaction", "emoji", emoji, "error", err)
+			reactionCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := b.slackClient.AddReactionContext(reactionCtx, emoji, msgRef); err != nil {
+				b.logger.Warn("failed to add reaction", "emoji", emoji, "error", err)
 			}
 		}(reactEmoji)
 	}
