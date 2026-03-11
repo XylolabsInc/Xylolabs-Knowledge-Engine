@@ -323,7 +323,13 @@ func (c *Connector) buildImpersonatedHTTPClient(ctx context.Context, credBytes [
 		return nil, fmt.Errorf("impersonation requires service account credentials")
 	}
 
-	jwtConfig, err := google.JWTConfigFromJSON(credBytes, c.scopes...)
+	// Only request scopes that are authorized for domain-wide delegation.
+	impersonationScopes := []string{
+		"https://www.googleapis.com/auth/calendar",
+		"https://www.googleapis.com/auth/tasks",
+		"https://www.googleapis.com/auth/gmail.send",
+	}
+	jwtConfig, err := google.JWTConfigFromJSON(credBytes, impersonationScopes...)
 	if err != nil {
 		return nil, fmt.Errorf("parse service account key: %w", err)
 	}
