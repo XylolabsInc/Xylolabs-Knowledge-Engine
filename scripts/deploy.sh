@@ -171,75 +171,75 @@ notify_slack() {
 
     local channel_name="${DEPLOY_NOTIFY_CHANNEL:-자일로랩스-정상영업합니다}"
 
-    # Get recent commits for the changelog (last 10 commits, compact format)
+    # Get recent commits for the changelog
     local changelog
-    changelog=$(cd "$PROJECT_DIR" && git log --oneline -10 --no-decorate 2>/dev/null | head -10)
+    changelog=$(cd "$PROJECT_DIR" && git log --oneline -10 --no-decorate 2>/dev/null || echo "(no commits)")
 
-    # Build the message
-    local message
-    message=$(cat <<SLACK_EOF
-🚀 *Xylolabs Knowledge Engine 배포 완료*
-• 서버: \`$SERVER_HOST\`
-• 시간: $(date '+%Y-%m-%d %H:%M:%S %Z')
+    # Use python3 for all JSON/Slack work to avoid shell escaping issues
+    local tmpscript
+    tmpscript=$(mktemp /tmp/deploy-notify-XXXXXX.py)
+    cat > "$tmpscript" <<'PYEOF'
+import json, sys, urllib.request, os
 
-*최근 변경사항:*
-\`\`\`
-$changelog
-\`\`\`
-SLACK_EOF
+token = os.environ["SLACK_TOKEN"]
+channel_name = os.environ["SLACK_CHANNEL"]
+server = os.environ["DEPLOY_SERVER"]
+changelog = os.environ["DEPLOY_CHANGELOG"]
+deploy_time = os.environ["DEPLOY_TIME"]
+
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+# Find channel by name (paginate)
+channel_id = None
+cursor = ""
+for _ in range(10):  # max 10 pages
+    url = f"https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=200&exclude_archived=true"
+    if cursor:
+        url += f"&cursor={cursor}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read())
+    for ch in data.get("channels", []):
+        if ch.get("name") == channel_name or ch.get("name_normalized") == channel_name:
+            channel_id = ch["id"]
+            break
+    if channel_id:
+        break
+    cursor = data.get("response_metadata", {}).get("next_cursor", "")
+    if not cursor:
+        break
+
+if not channel_id:
+    print(f"Channel '{channel_name}' not found", file=sys.stderr)
+    sys.exit(0)  # non-fatal
+
+# Build message
+msg = (
+    f":rocket: *Xylolabs Knowledge Engine 배포 완료*\n"
+    f"• 서버: `{server}`\n"
+    f"• 시간: {deploy_time}\n\n"
+    f"*최근 변경사항:*\n```\n{changelog}\n```"
 )
 
-    # Find channel ID by name
-    local channel_id
-    channel_id=$(curl -sf -H "Authorization: Bearer $token" \
-        "https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=200" \
-        | grep -o "\"id\":\"[^\"]*\",\"name\":\"${channel_name}\"" \
-        | grep -o '"id":"[^"]*"' \
-        | cut -d'"' -f4)
+payload = json.dumps({"channel": channel_id, "text": msg, "unfurl_links": False}).encode()
+req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=payload, headers=headers, method="POST")
+with urllib.request.urlopen(req) as resp:
+    result = json.loads(resp.read())
 
-    if [ -z "$channel_id" ]; then
-        # Try URL-encoded name for Korean characters
-        local encoded_name
-        encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$channel_name'))" 2>/dev/null || echo "")
-        if [ -n "$encoded_name" ]; then
-            channel_id=$(curl -sf -H "Authorization: Bearer $token" \
-                "https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=1000" \
-                | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-for ch in data.get('channels', []):
-    if ch.get('name') == '$channel_name' or ch.get('name_normalized') == '$channel_name':
-        print(ch['id'])
-        break
-" 2>/dev/null)
-        fi
-    fi
+if result.get("ok"):
+    print(f"Sent to #{channel_name}")
+else:
+    print(f"Slack API error: {result.get('error', 'unknown')}", file=sys.stderr)
+PYEOF
 
-    if [ -z "$channel_id" ]; then
-        log "WARNING: Could not find Slack channel '$channel_name', skipping notification"
-        return 0
-    fi
+    SLACK_TOKEN="$token" \
+    SLACK_CHANNEL="$channel_name" \
+    DEPLOY_SERVER="$SERVER_HOST" \
+    DEPLOY_CHANGELOG="$changelog" \
+    DEPLOY_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')" \
+    python3 "$tmpscript" && log "Slack notification sent" || log "WARNING: Slack notification failed"
 
-    # Post message
-    local response
-    response=$(curl -sf -X POST \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "$(python3 -c "
-import json, sys
-msg = '''$message'''
-print(json.dumps({'channel': '$channel_id', 'text': msg, 'unfurl_links': False}))
-")" \
-        "https://slack.com/api/chat.postMessage")
-
-    local ok
-    ok=$(echo "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok', False))" 2>/dev/null || echo "False")
-
-    if [ "$ok" = "True" ]; then
-        log "Slack notification sent to #$channel_name"
-    else
-        log "WARNING: Failed to send Slack notification: $response"
-    fi
+    rm -f "$tmpscript"
 }
 
 # -----------------------------------------------------------------------------
