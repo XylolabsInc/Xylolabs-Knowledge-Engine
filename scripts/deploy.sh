@@ -213,12 +213,24 @@ if not channel_id:
     print(f"Channel '{channel_name}' not found", file=sys.stderr)
     sys.exit(0)  # non-fatal
 
+# Format commits as a cleaner list
+lines = changelog.strip().split("\n")
+formatted = []
+for line in lines:
+    # Remove commit hash prefix, keep gitmoji + message
+    parts = line.split(" ", 1)
+    if len(parts) == 2:
+        formatted.append(f"• {parts[1]}")
+    else:
+        formatted.append(f"• {line}")
+commit_list = "\n".join(formatted[:10])
+
 # Build message
 msg = (
     f":rocket: *Xylolabs Knowledge Engine 배포 완료*\n"
     f"• 서버: `{server}`\n"
     f"• 시간: {deploy_time}\n\n"
-    f"*최근 변경사항:*\n```\n{changelog}\n```"
+    f"*최근 변경사항:*\n{commit_list}"
 )
 
 payload = json.dumps({"channel": channel_id, "text": msg, "unfurl_links": False}).encode()
