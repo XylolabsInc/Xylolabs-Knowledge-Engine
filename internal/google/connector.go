@@ -220,7 +220,23 @@ func (c *Connector) initServices() error {
 	}
 	c.driveService = driveSvc
 
-	calSvc, err := calendar.NewService(ctx, option.WithHTTPClient(httpClient))
+	// Calendar, Tasks, Gmail use impersonated client when available (domain-wide delegation).
+	impersonatedClient := httpClient
+	if c.impersonateEmail != "" {
+		credBytes, err := os.ReadFile(c.credsFile)
+		if err != nil {
+			return fmt.Errorf("read credentials for impersonation: %w", err)
+		}
+		ic, err := c.buildImpersonatedHTTPClient(ctx, credBytes)
+		if err != nil {
+			c.logger.Warn("failed to create impersonated client, falling back to service account", "error", err)
+		} else {
+			impersonatedClient = ic
+			c.logger.Info("impersonated client created", "email", c.impersonateEmail)
+		}
+	}
+
+	calSvc, err := calendar.NewService(ctx, option.WithHTTPClient(impersonatedClient))
 	if err != nil {
 		return fmt.Errorf("create calendar service: %w", err)
 	}
@@ -244,32 +260,13 @@ func (c *Connector) initServices() error {
 	}
 	c.slidesService = slidesSvc
 
-	// Gmail needs a separate impersonated client (domain-wide delegation).
-	if c.impersonateEmail != "" {
-		credBytes, err := os.ReadFile(c.credsFile)
-		if err != nil {
-			return fmt.Errorf("read credentials for gmail: %w", err)
-		}
-		gmailClient, err := c.buildImpersonatedHTTPClient(ctx, credBytes)
-		if err != nil {
-			c.logger.Warn("failed to create impersonated Gmail client", "error", err)
-		} else {
-			gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(gmailClient))
-			if err != nil {
-				return fmt.Errorf("create gmail service: %w", err)
-			}
-			c.gmailService = gmailSvc
-			c.logger.Info("gmail service initialized with impersonation", "email", c.impersonateEmail)
-		}
-	} else {
-		gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(httpClient))
-		if err != nil {
-			return fmt.Errorf("create gmail service: %w", err)
-		}
-		c.gmailService = gmailSvc
+	gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(impersonatedClient))
+	if err != nil {
+		return fmt.Errorf("create gmail service: %w", err)
 	}
+	c.gmailService = gmailSvc
 
-	tasksSvc, err := tasks.NewService(ctx, option.WithHTTPClient(httpClient))
+	tasksSvc, err := tasks.NewService(ctx, option.WithHTTPClient(impersonatedClient))
 	if err != nil {
 		return fmt.Errorf("create tasks service: %w", err)
 	}
