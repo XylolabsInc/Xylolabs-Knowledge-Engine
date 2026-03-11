@@ -244,11 +244,30 @@ func (c *Connector) initServices() error {
 	}
 	c.slidesService = slidesSvc
 
-	gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(httpClient))
-	if err != nil {
-		return fmt.Errorf("create gmail service: %w", err)
+	// Gmail needs a separate impersonated client (domain-wide delegation).
+	if c.impersonateEmail != "" {
+		credBytes, err := os.ReadFile(c.credsFile)
+		if err != nil {
+			return fmt.Errorf("read credentials for gmail: %w", err)
+		}
+		gmailClient, err := c.buildImpersonatedHTTPClient(ctx, credBytes)
+		if err != nil {
+			c.logger.Warn("failed to create impersonated Gmail client", "error", err)
+		} else {
+			gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(gmailClient))
+			if err != nil {
+				return fmt.Errorf("create gmail service: %w", err)
+			}
+			c.gmailService = gmailSvc
+			c.logger.Info("gmail service initialized with impersonation", "email", c.impersonateEmail)
+		}
+	} else {
+		gmailSvc, err := gmail.NewService(ctx, option.WithHTTPClient(httpClient))
+		if err != nil {
+			return fmt.Errorf("create gmail service: %w", err)
+		}
+		c.gmailService = gmailSvc
 	}
-	c.gmailService = gmailSvc
 
 	tasksSvc, err := tasks.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
@@ -275,10 +294,6 @@ func (c *Connector) buildHTTPClient(ctx context.Context, credBytes []byte) (*htt
 		if err != nil {
 			return nil, fmt.Errorf("parse service account key: %w", err)
 		}
-		if c.impersonateEmail != "" {
-			jwtConfig.Subject = c.impersonateEmail
-			c.logger.Info("impersonating user", "email", c.impersonateEmail)
-		}
 		return jwtConfig.Client(ctx), nil
 	}
 
@@ -295,6 +310,29 @@ func (c *Connector) buildHTTPClient(ctx context.Context, credBytes []byte) (*htt
 	}
 
 	return config.Client(ctx, token), nil
+}
+
+// buildImpersonatedHTTPClient creates an HTTP client that impersonates a specific user.
+// Used for Gmail API which requires domain-wide delegation with a specific user identity.
+func (c *Connector) buildImpersonatedHTTPClient(ctx context.Context, credBytes []byte) (*http.Client, error) {
+	var creds struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(credBytes, &creds); err != nil {
+		return nil, fmt.Errorf("parse credentials type: %w", err)
+	}
+
+	if creds.Type != "service_account" {
+		return nil, fmt.Errorf("impersonation requires service account credentials")
+	}
+
+	jwtConfig, err := google.JWTConfigFromJSON(credBytes, c.scopes...)
+	if err != nil {
+		return nil, fmt.Errorf("parse service account key: %w", err)
+	}
+	jwtConfig.Subject = c.impersonateEmail
+	c.logger.Info("created impersonated client", "email", c.impersonateEmail)
+	return jwtConfig.Client(ctx), nil
 }
 
 func (c *Connector) loadToken() (*oauth2.Token, error) {
