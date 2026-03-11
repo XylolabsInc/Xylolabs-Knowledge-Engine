@@ -224,15 +224,72 @@ else:
     print(f"Slack API error: {result.get('error', 'unknown')}", file=sys.stderr)
 PYEOF
 
-    # Build Korean changelog from recent git commits (since last deploy tag or last 20 commits)
+    # Build changelog from git commits since last deploy tag
     local changelog=""
     cd "$PROJECT_DIR"
-    local last_tag
-    last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-    if [ -n "$last_tag" ]; then
-        changelog=$(git log --pretty=format:"• %s" "${last_tag}..HEAD" 2>/dev/null || echo "")
+    local last_deploy_tag
+    last_deploy_tag=$(git tag -l 'deploy-*' --sort=-version:refname | head -1)
+    if [ -n "$last_deploy_tag" ]; then
+        changelog=$(git log --pretty=format:"%s" "${last_deploy_tag}..HEAD" 2>/dev/null || echo "")
     else
-        changelog=$(git log --pretty=format:"• %s" -20 2>/dev/null || echo "")
+        changelog=$(git log --pretty=format:"%s" -10 2>/dev/null || echo "")
+    fi
+
+    # Translate changelog to Korean using Gemini API
+    local gemini_key
+    gemini_key=$(grep '^GEMINI_API_KEY=' "$env_file" | cut -d'=' -f2-)
+    local language
+    language=$(grep '^LANGUAGE=' "$env_file" | cut -d'=' -f2- || echo "ko")
+    language="${language:-ko}"
+
+    if [ -n "$gemini_key" ] && [ -n "$changelog" ]; then
+        local translate_script
+        translate_script=$(mktemp /tmp/deploy-translate-XXXXXX.py)
+        cat > "$translate_script" <<'TRANSLATEEOF'
+import json, sys, os, urllib.request
+
+api_key = os.environ["GEMINI_KEY"]
+lang = os.environ.get("LANG_TARGET", "ko")
+raw = os.environ["RAW_CHANGELOG"]
+
+lang_names = {"ko": "Korean", "en": "English", "ja": "Japanese"}
+lang_name = lang_names.get(lang, lang)
+
+prompt = f"""Translate these git commit messages into concise {lang_name} bullet points.
+Keep gitmoji. Remove conventional commit prefixes (feat/fix/etc) and scope.
+Each line should be a short, natural description of the change.
+
+Input:
+{raw}
+
+Output (one bullet per line, {lang_name}):"""
+
+payload = json.dumps({
+    "contents": [{"parts": [{"text": prompt}]}],
+    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
+}).encode()
+
+url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+try:
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    print(text)
+except Exception as e:
+    print(f"Translation failed: {e}", file=sys.stderr)
+    # Fallback: just bullet-ify the raw messages
+    for line in raw.strip().split("\n"):
+        if line.strip():
+            print(f"• {line.strip()}")
+TRANSLATEEOF
+
+        changelog=$(GEMINI_KEY="$gemini_key" LANG_TARGET="$language" RAW_CHANGELOG="$changelog" \
+            python3 "$translate_script" 2>/dev/null || echo "$changelog")
+        rm -f "$translate_script"
+    else
+        # No Gemini key — just bullet-ify
+        changelog=$(echo "$changelog" | sed 's/^/• /')
     fi
 
     SLACK_TOKEN="$token" \
@@ -240,6 +297,10 @@ PYEOF
     DEPLOY_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')" \
     CHANGELOG="$changelog" \
     python3 "$tmpscript" && log "Slack notification sent" || log "WARNING: Slack notification failed"
+
+    # Tag this deploy for next changelog diff
+    local deploy_tag="deploy-$(date -u '+%Y%m%d-%H%M%S')"
+    git tag "$deploy_tag" 2>/dev/null && log "Tagged deploy: $deploy_tag" || true
 
     rm -f "$tmpscript"
 }
