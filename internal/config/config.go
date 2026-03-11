@@ -37,6 +37,7 @@ type Config struct {
 	// Bot
 	SystemPromptFile string
 	Language         string
+	Timezone         string
 
 	// Knowledge Base Repo
 	KBRepoDir string
@@ -88,6 +89,7 @@ func Load() *Config {
 
 		SystemPromptFile: envOrDefault("SYSTEM_PROMPT_FILE", ""),
 		Language:         envOrDefault("LANGUAGE", "en"),
+		Timezone:         envOrDefault("TIMEZONE", "Asia/Seoul"),
 
 		KBRepoDir: envOrDefault("KB_REPO_DIR", ""),
 
@@ -121,6 +123,16 @@ func (c *Config) NotionEnabled() bool {
 // GeminiEnabled returns true if Gemini API key is configured.
 func (c *Config) GeminiEnabled() bool {
 	return c.GeminiAPIKey != ""
+}
+
+// Location returns the configured timezone as a *time.Location.
+// Falls back to UTC if the timezone string is invalid.
+func (c *Config) Location() *time.Location {
+	loc, err := time.LoadLocation(c.Timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 func envOrDefault(key, fallback string) string {

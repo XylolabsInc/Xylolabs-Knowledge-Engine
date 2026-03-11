@@ -41,6 +41,7 @@ type Bot struct {
 	botToken     string
 	proModel     string
 	systemPrompt string
+	location     *time.Location
 	logger       *slog.Logger
 	httpClient   *http.Client
 	toolExecutor *tools.ToolExecutor
@@ -58,7 +59,7 @@ type Bot struct {
 }
 
 // New creates a Bot handler.
-func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrepo.Reader, botUserID, botToken, proModel, systemPromptFile string, logger *slog.Logger) *Bot {
+func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrepo.Reader, botUserID, botToken, proModel, systemPromptFile string, location *time.Location, logger *slog.Logger) *Bot {
 	return &Bot{
 		slackClient:    slackClient,
 		gemini:         geminiClient,
@@ -67,6 +68,7 @@ func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrep
 		botToken:       botToken,
 		proModel:       proModel,
 		systemPrompt:   loadSystemPrompt(systemPromptFile),
+		location:       location,
 		logger:         logger.With("component", "bot"),
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		trackedThreads: make(map[string]bool),
@@ -281,8 +283,8 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	// 3. Build system prompt with full KB context.
 	// Resolve current user's display name for context.
 	userName := b.resolveUserName(ctx, ev.User)
-	now := time.Now().In(time.FixedZone("KST", 9*60*60))
-	currentTime := now.Format("2006-01-02 (Monday) 15:04 KST")
+	now := time.Now().In(b.location)
+	currentTime := now.Format("2006-01-02 (Monday) 15:04 MST")
 	systemPrompt := fmt.Sprintf(b.systemPrompt, userName) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	// 4. Build conversation messages with thread history for context continuity.
