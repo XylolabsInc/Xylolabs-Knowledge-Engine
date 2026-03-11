@@ -228,7 +228,6 @@ commit_list = "\n".join(formatted[:10])
 # Build message
 msg = (
     f":rocket: *Xylolabs Knowledge Engine 배포 완료*\n"
-    f"• 서버: `{server}`\n"
     f"• 시간: {deploy_time}\n\n"
     f"*최근 변경사항:*\n{commit_list}"
 )
