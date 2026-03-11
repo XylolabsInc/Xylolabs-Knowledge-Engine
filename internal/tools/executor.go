@@ -54,21 +54,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		decls = append(decls,
 			gemini.FunctionDeclaration{
 				Name:        "create_google_doc",
-				Description: "Google Drive에 새 Google Docs 문서를 생성합니다. 회의록, 보고서, 메모 등 텍스트 문서를 만들 때 사용합니다.",
+				Description: "Create a new Google Docs document in Google Drive. Use for creating text documents such as meeting notes, reports, and memos.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"title": map[string]any{
 							"type":        "string",
-							"description": "문서 제목",
+							"description": "Document title",
 						},
 						"content": map[string]any{
 							"type":        "string",
-							"description": "문서 내용 (Markdown 형식 사용 가능: 제목, 굵게, 목록, 링크 등)",
+							"description": "Document content (Markdown formatting supported: headings, bold, lists, links, etc.)",
 						},
 						"folder_id": map[string]any{
 							"type":        "string",
-							"description": "Google Drive 폴더 ID (비워두면 기본 공유 드라이브에 생성)",
+							"description": "Google Drive folder ID (defaults to shared drive root if empty)",
 						},
 					},
 					"required": []string{"title", "content"},
@@ -76,17 +76,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "create_drive_folder",
-				Description: "Google Drive에 새 폴더를 생성합니다. 여러 파일을 정리해서 업로드할 때 먼저 폴더를 만들고 그 안에 파일을 넣을 수 있습니다.",
+				Description: "Create a new folder in Google Drive. Useful for organizing files before uploading them into a structured folder.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"name": map[string]any{
 							"type":        "string",
-							"description": "폴더 이름",
+							"description": "Folder name",
 						},
 						"parent_folder_id": map[string]any{
 							"type":        "string",
-							"description": "상위 폴더 ID (비워두면 기본 공유 드라이브에 생성)",
+							"description": "Parent folder ID (defaults to shared drive root if empty)",
 						},
 					},
 					"required": []string{"name"},
@@ -94,17 +94,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "upload_to_drive",
-				Description: "첨부된 파일을 Google Drive에 업로드합니다. file_name을 지정하면 해당 파일만, 비워두면 모든 첨부파일을 한번에 업로드합니다.",
+				Description: "Upload attached files to Google Drive. Specify file_name to upload a single file, or leave empty to upload all attachments at once.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_name": map[string]any{
 							"type":        "string",
-							"description": "업로드할 파일 이름 (비워두면 모든 첨부파일 업로드)",
+							"description": "File name to upload (uploads all attachments if empty)",
 						},
 						"folder_id": map[string]any{
 							"type":        "string",
-							"description": "Google Drive 폴더 ID (비워두면 기본 공유 드라이브에 업로드)",
+							"description": "Google Drive folder ID (defaults to shared drive root if empty)",
 						},
 					},
 					"required": []string{},
@@ -112,13 +112,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "delete_drive_file",
-				Description: "Google Drive에서 파일이나 폴더를 삭제합니다.",
+				Description: "Delete a file or folder from Google Drive.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "삭제할 파일/폴더의 Google Drive ID",
+							"description": "Google Drive ID of the file/folder to delete",
 						},
 					},
 					"required": []string{"file_id"},
@@ -126,17 +126,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "rename_drive_file",
-				Description: "Google Drive 파일이나 폴더의 이름을 변경합니다.",
+				Description: "Rename a file or folder in Google Drive.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "이름을 변경할 파일/폴더의 Google Drive ID",
+							"description": "Google Drive ID of the file/folder to rename",
 						},
 						"new_name": map[string]any{
 							"type":        "string",
-							"description": "새 이름",
+							"description": "New name",
 						},
 					},
 					"required": []string{"file_id", "new_name"},
@@ -144,17 +144,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "edit_google_doc",
-				Description: "기존 Google Docs 문서의 내용을 교체합니다.",
+				Description: "Replace the content of an existing Google Docs document.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "수정할 Google Doc의 Drive ID",
+							"description": "Drive ID of the Google Doc to edit",
 						},
 						"content": map[string]any{
 							"type":        "string",
-							"description": "새 내용 (Markdown 형식 사용 가능: 제목, 굵게, 목록, 링크 등, 기존 내용을 대체)",
+							"description": "New content (Markdown formatting supported: headings, bold, lists, links, etc. Replaces existing content)",
 						},
 					},
 					"required": []string{"file_id", "content"},
@@ -162,13 +162,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "search_drive",
-				Description: "Google Drive에서 파일을 이름으로 검색합니다.",
+				Description: "Search for files in Google Drive by name.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"query": map[string]any{
 							"type":        "string",
-							"description": "검색어 (파일 이름에 포함된 텍스트)",
+							"description": "Search query (text contained in file name)",
 						},
 					},
 					"required": []string{"query"},
@@ -176,13 +176,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "get_drive_file_info",
-				Description: "Google Drive 파일의 메타데이터(이름, 타입, URL, 수정일시)를 조회합니다.",
+				Description: "Retrieve metadata (name, type, URL, modification date) for a Google Drive file.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Drive 파일 ID",
+							"description": "Google Drive file ID",
 						},
 					},
 					"required": []string{"file_id"},
@@ -190,13 +190,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "read_google_doc",
-				Description: "Google Docs 문서의 내용을 텍스트로 읽어옵니다.",
+				Description: "Read the content of a Google Docs document as text.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Doc의 Drive ID",
+							"description": "Drive ID of the Google Doc",
 						},
 					},
 					"required": []string{"file_id"},
@@ -204,17 +204,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "read_google_sheet",
-				Description: "Google Sheets 스프레드시트의 데이터를 읽어옵니다.",
+				Description: "Read data from a Google Sheets spreadsheet.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Sheets의 Drive ID",
+							"description": "Drive ID of the Google Sheets spreadsheet",
 						},
 						"range": map[string]any{
 							"type":        "string",
-							"description": "읽을 범위 (예: 'Sheet1', 'Sheet1!A1:D10'). 비워두면 'Sheet1' 전체를 읽음",
+							"description": "Range to read (e.g. 'Sheet1', 'Sheet1!A1:D10'). Reads all of 'Sheet1' if empty",
 						},
 					},
 					"required": []string{"file_id"},
@@ -222,21 +222,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "create_google_sheet",
-				Description: "새 Google Sheets 스프레드시트를 생성합니다. 초기 데이터를 넣을 수 있습니다.",
+				Description: "Create a new Google Sheets spreadsheet. Can include initial data.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"title": map[string]any{
 							"type":        "string",
-							"description": "스프레드시트 제목",
+							"description": "Spreadsheet title",
 						},
 						"data": map[string]any{
 							"type":        "string",
-							"description": "초기 데이터 (JSON 2D 배열, 예: [[\"이름\",\"나이\"],[\"홍길동\",\"30\"]]). 비워두면 빈 시트 생성",
+							"description": "Initial data (JSON 2D array, e.g. [[\"Name\",\"Age\"],[\"Alice\",\"30\"]]). Creates empty sheet if empty",
 						},
 						"folder_id": map[string]any{
 							"type":        "string",
-							"description": "Google Drive 폴더 ID (비워두면 기본 공유 드라이브에 생성)",
+							"description": "Google Drive folder ID (defaults to shared drive root if empty)",
 						},
 					},
 					"required": []string{"title"},
@@ -244,21 +244,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "edit_google_sheet",
-				Description: "Google Sheets의 특정 범위에 데이터를 씁니다 (기존 데이터 덮어쓰기).",
+				Description: "Write data to a specific range in Google Sheets (overwrites existing data).",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Sheets의 Drive ID",
+							"description": "Drive ID of the Google Sheets spreadsheet",
 						},
 						"range": map[string]any{
 							"type":        "string",
-							"description": "쓸 범위 (예: 'Sheet1!A1:C3')",
+							"description": "Range to write (e.g. 'Sheet1!A1:C3')",
 						},
 						"data": map[string]any{
 							"type":        "string",
-							"description": "데이터 (JSON 2D 배열, 예: [[\"이름\",\"나이\"],[\"홍길동\",\"30\"]])",
+							"description": "Data (JSON 2D array, e.g. [[\"Name\",\"Age\"],[\"Alice\",\"30\"]])",
 						},
 					},
 					"required": []string{"file_id", "range", "data"},
@@ -266,21 +266,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "append_google_sheet",
-				Description: "Google Sheets에 새 행을 추가합니다.",
+				Description: "Append new rows to a Google Sheets spreadsheet.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Sheets의 Drive ID",
+							"description": "Drive ID of the Google Sheets spreadsheet",
 						},
 						"range": map[string]any{
 							"type":        "string",
-							"description": "추가할 위치 (예: 'Sheet1')",
+							"description": "Location to append (e.g. 'Sheet1')",
 						},
 						"data": map[string]any{
 							"type":        "string",
-							"description": "추가할 행 데이터 (JSON 2D 배열, 예: [[\"홍길동\",\"30\"],[\"김철수\",\"25\"]])",
+							"description": "Row data to append (JSON 2D array, e.g. [[\"Alice\",\"30\"],[\"Bob\",\"25\"]])",
 						},
 					},
 					"required": []string{"file_id", "data"},
@@ -288,13 +288,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "read_google_slides",
-				Description: "Google Slides 프레젠테이션의 내용을 텍스트로 읽어옵니다.",
+				Description: "Read the content of a Google Slides presentation as text.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Slides의 Drive ID",
+							"description": "Drive ID of the Google Slides presentation",
 						},
 					},
 					"required": []string{"file_id"},
@@ -302,17 +302,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "create_google_slides",
-				Description: "새 Google Slides 프레젠테이션을 생성합니다.",
+				Description: "Create a new Google Slides presentation.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"title": map[string]any{
 							"type":        "string",
-							"description": "프레젠테이션 제목",
+							"description": "Presentation title",
 						},
 						"folder_id": map[string]any{
 							"type":        "string",
-							"description": "Google Drive 폴더 ID (비워두면 기본 공유 드라이브에 생성)",
+							"description": "Google Drive folder ID (defaults to shared drive root if empty)",
 						},
 					},
 					"required": []string{"title"},
@@ -320,21 +320,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "add_slide",
-				Description: "기존 Google Slides 프레젠테이션에 새 슬라이드를 추가합니다.",
+				Description: "Add a new slide to an existing Google Slides presentation.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Slides의 Drive ID",
+							"description": "Drive ID of the Google Slides presentation",
 						},
 						"title": map[string]any{
 							"type":        "string",
-							"description": "슬라이드 제목",
+							"description": "Slide title",
 						},
 						"body": map[string]any{
 							"type":        "string",
-							"description": "슬라이드 본문 내용",
+							"description": "Slide body content",
 						},
 					},
 					"required": []string{"file_id"},
@@ -342,17 +342,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "move_drive_file",
-				Description: "Google Drive 파일을 다른 폴더로 이동합니다.",
+				Description: "Move a Google Drive file to a different folder.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "이동할 파일의 Google Drive ID",
+							"description": "Google Drive ID of the file to move",
 						},
 						"new_folder_id": map[string]any{
 							"type":        "string",
-							"description": "이동할 대상 폴더의 Google Drive ID",
+							"description": "Google Drive ID of the destination folder",
 						},
 					},
 					"required": []string{"file_id", "new_folder_id"},
@@ -360,21 +360,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "copy_drive_file",
-				Description: "Google Drive 파일을 복사합니다. 템플릿 기반으로 새 문서를 만들 때 유용합니다.",
+				Description: "Copy a Google Drive file. Useful for creating new documents based on a template.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "복사할 파일의 Google Drive ID",
+							"description": "Google Drive ID of the file to copy",
 						},
 						"new_name": map[string]any{
 							"type":        "string",
-							"description": "복사본 이름 (비워두면 '사본: 원본이름'으로 생성)",
+							"description": "Name for the copy (defaults to 'Copy of: original name' if empty)",
 						},
 						"folder_id": map[string]any{
 							"type":        "string",
-							"description": "복사본을 넣을 폴더 ID (비워두면 기본 공유 드라이브)",
+							"description": "Folder ID for the copy (defaults to shared drive root if empty)",
 						},
 					},
 					"required": []string{"file_id"},
@@ -382,13 +382,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "list_drive_folder",
-				Description: "Google Drive 폴더 안의 파일 목록을 조회합니다.",
+				Description: "List files inside a Google Drive folder.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"folder_id": map[string]any{
 							"type":        "string",
-							"description": "조회할 폴더의 Google Drive ID",
+							"description": "Google Drive ID of the folder to list",
 						},
 					},
 					"required": []string{"folder_id"},
@@ -396,17 +396,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "append_to_google_doc",
-				Description: "기존 Google Docs 문서 끝에 내용을 추가합니다. 회의록 누적, 메모 추가 등에 사용합니다.",
+				Description: "Append content to the end of an existing Google Docs document. Use for accumulating meeting notes, adding memos, etc.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Doc의 Drive ID",
+							"description": "Drive ID of the Google Doc",
 						},
 						"content": map[string]any{
 							"type":        "string",
-							"description": "추가할 내용 (문서 끝에 추가됨)",
+							"description": "Content to append (added to end of document)",
 						},
 					},
 					"required": []string{"file_id", "content"},
@@ -414,13 +414,13 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "get_sheet_metadata",
-				Description: "Google Sheets 스프레드시트의 메타데이터를 조회합니다 (시트 탭 이름, 행/열 수 등).",
+				Description: "Retrieve metadata for a Google Sheets spreadsheet (sheet tab names, row/column counts, etc.).",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Sheets의 Drive ID",
+							"description": "Drive ID of the Google Sheets spreadsheet",
 						},
 					},
 					"required": []string{"file_id"},
@@ -428,17 +428,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "clear_google_sheet",
-				Description: "Google Sheets의 특정 범위의 데이터를 삭제합니다.",
+				Description: "Delete data in a specific range of a Google Sheets spreadsheet.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Sheets의 Drive ID",
+							"description": "Drive ID of the Google Sheets spreadsheet",
 						},
 						"range": map[string]any{
 							"type":        "string",
-							"description": "삭제할 범위 (예: 'Sheet1!A1:C3')",
+							"description": "Range to clear (e.g. 'Sheet1!A1:C3')",
 						},
 					},
 					"required": []string{"file_id", "range"},
@@ -446,21 +446,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "share_drive_file",
-				Description: "Google Drive 파일을 특정 사용자에게 공유합니다.",
+				Description: "Share a Google Drive file with a specific user.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "공유할 파일의 Google Drive ID",
+							"description": "Google Drive ID of the file to share",
 						},
 						"email": map[string]any{
 							"type":        "string",
-							"description": "공유 대상 이메일 주소",
+							"description": "Email address of the person to share with",
 						},
 						"role": map[string]any{
 							"type":        "string",
-							"description": "권한 수준: reader(보기), writer(편집), commenter(댓글). 비워두면 reader",
+							"description": "Permission level: reader (view), writer (edit), commenter (comment). Defaults to reader",
 						},
 					},
 					"required": []string{"file_id", "email"},
@@ -468,17 +468,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "delete_slide",
-				Description: "Google Slides 프레젠테이션에서 슬라이드를 삭제합니다.",
+				Description: "Delete a slide from a Google Slides presentation.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Slides의 Drive ID",
+							"description": "Drive ID of the Google Slides presentation",
 						},
 						"slide_id": map[string]any{
 							"type":        "string",
-							"description": "삭제할 슬라이드 ID (비워두면 마지막 슬라이드 삭제)",
+							"description": "ID of the slide to delete (deletes last slide if empty)",
 						},
 					},
 					"required": []string{"file_id"},
@@ -486,17 +486,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "add_sheet_tab",
-				Description: "Google Sheets 스프레드시트에 새 시트 탭을 추가합니다.",
+				Description: "Add a new sheet tab to a Google Sheets spreadsheet.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "Google Sheets의 Drive ID",
+							"description": "Drive ID of the Google Sheets spreadsheet",
 						},
 						"tab_name": map[string]any{
 							"type":        "string",
-							"description": "새 시트 탭 이름",
+							"description": "New sheet tab name",
 						},
 					},
 					"required": []string{"file_id", "tab_name"},
@@ -504,17 +504,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "export_as_pdf",
-				Description: "Google Drive 파일(Docs, Sheets, Slides)을 PDF로 내보내서 드라이브에 저장합니다.",
+				Description: "Export a Google Drive file (Docs, Sheets, Slides) as PDF and save to Drive.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"file_id": map[string]any{
 							"type":        "string",
-							"description": "PDF로 내보낼 파일의 Google Drive ID",
+							"description": "Google Drive ID of the file to export as PDF",
 						},
 						"file_name": map[string]any{
 							"type":        "string",
-							"description": "PDF 파일명 (비워두면 'export.pdf')",
+							"description": "PDF file name (defaults to 'export.pdf' if empty)",
 						},
 					},
 					"required": []string{"file_id"},
@@ -523,37 +523,37 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			// --- Calendar Tools ---
 			gemini.FunctionDeclaration{
 				Name:        "create_calendar_event",
-				Description: "Google Calendar에 새 이벤트를 생성합니다. 미팅, 회의, 약속 등을 잡을 때 사용합니다.",
+				Description: "Create a new Google Calendar event. Use for scheduling meetings, conferences, and appointments.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"summary": map[string]any{
 							"type":        "string",
-							"description": "이벤트 제목",
+							"description": "Event title/summary",
 						},
 						"start_time": map[string]any{
 							"type":        "string",
-							"description": "시작 시간 (RFC3339 형식: 2024-01-15T09:00:00+09:00 또는 종일 이벤트: 2024-01-15)",
+							"description": "Start time (RFC3339 format: 2024-01-15T09:00:00+09:00, or date-only for all-day: 2024-01-15)",
 						},
 						"end_time": map[string]any{
 							"type":        "string",
-							"description": "종료 시간 (RFC3339 형식: 2024-01-15T10:00:00+09:00 또는 종일 이벤트: 2024-01-16)",
+							"description": "End time (RFC3339 format: 2024-01-15T10:00:00+09:00, or date-only for all-day: 2024-01-16)",
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "캘린더 ID (비워두면 기본 캘린더 사용)",
+							"description": "Calendar ID (defaults to primary calendar if empty)",
 						},
 						"description": map[string]any{
 							"type":        "string",
-							"description": "이벤트 설명/메모",
+							"description": "Event description/notes",
 						},
 						"location": map[string]any{
 							"type":        "string",
-							"description": "장소",
+							"description": "Location",
 						},
 						"attendees": map[string]any{
 							"type":        "string",
-							"description": "참석자 이메일 주소 (쉼표로 구분, 예: a@co.com,b@co.com)",
+							"description": "Attendee email addresses (comma-separated, e.g. a@co.com,b@co.com)",
 						},
 					},
 					"required": []string{"summary", "start_time", "end_time"},
@@ -561,41 +561,41 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "edit_calendar_event",
-				Description: "기존 Google Calendar 이벤트를 수정합니다. 제목, 시간, 장소, 참석자 등을 변경할 수 있습니다.",
+				Description: "Edit an existing Google Calendar event. Can modify title, time, location, and attendees.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"event_id": map[string]any{
 							"type":        "string",
-							"description": "수정할 이벤트 ID",
+							"description": "Event ID to edit",
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "캘린더 ID (비워두면 기본 캘린더)",
+							"description": "Calendar ID (defaults to primary)",
 						},
 						"summary": map[string]any{
 							"type":        "string",
-							"description": "새 이벤트 제목",
+							"description": "New event title",
 						},
 						"description": map[string]any{
 							"type":        "string",
-							"description": "새 이벤트 설명",
+							"description": "New event description",
 						},
 						"location": map[string]any{
 							"type":        "string",
-							"description": "새 장소",
+							"description": "New location",
 						},
 						"start_time": map[string]any{
 							"type":        "string",
-							"description": "새 시작 시간 (RFC3339)",
+							"description": "New start time (RFC3339)",
 						},
 						"end_time": map[string]any{
 							"type":        "string",
-							"description": "새 종료 시간 (RFC3339)",
+							"description": "New end time (RFC3339)",
 						},
 						"attendees": map[string]any{
 							"type":        "string",
-							"description": "새 참석자 목록 (쉼표 구분, 기존 목록을 대체)",
+							"description": "New attendee list (comma-separated, replaces existing list)",
 						},
 					},
 					"required": []string{"event_id"},
@@ -603,17 +603,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "delete_calendar_event",
-				Description: "Google Calendar 이벤트를 삭제합니다.",
+				Description: "Delete a Google Calendar event.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"event_id": map[string]any{
 							"type":        "string",
-							"description": "삭제할 이벤트 ID",
+							"description": "Event ID to delete",
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "캘린더 ID (비워두면 기본 캘린더)",
+							"description": "Calendar ID (defaults to primary)",
 						},
 					},
 					"required": []string{"event_id"},
@@ -621,46 +621,46 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "list_calendar_events",
-				Description: "Google Calendar 이벤트 목록을 조회합니다. 특정 기간의 일정을 확인할 때 사용합니다.",
+				Description: "List Google Calendar events. Use to check schedules within a specific time range.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "캘린더 ID (비워두면 기본 캘린더)",
+							"description": "Calendar ID (defaults to primary)",
 						},
 						"time_min": map[string]any{
 							"type":        "string",
-							"description": "조회 시작 시간 (RFC3339)",
+							"description": "Query start time (RFC3339)",
 						},
 						"time_max": map[string]any{
 							"type":        "string",
-							"description": "조회 종료 시간 (RFC3339)",
+							"description": "Query end time (RFC3339)",
 						},
 						"max_results": map[string]any{
 							"type":        "number",
-							"description": "최대 결과 수 (기본값: 20)",
+							"description": "Maximum results (default: 20)",
 						},
 					},
 				},
 			},
 			gemini.FunctionDeclaration{
 				Name:        "add_event_attendees",
-				Description: "기존 캘린더 이벤트에 참석자를 추가합니다. 초대 메일이 자동 발송됩니다.",
+				Description: "Add attendees to an existing calendar event. Invitation emails are sent automatically.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"event_id": map[string]any{
 							"type":        "string",
-							"description": "이벤트 ID",
+							"description": "Event ID",
 						},
 						"attendees": map[string]any{
 							"type":        "string",
-							"description": "추가할 참석자 이메일 (쉼표 구분)",
+							"description": "Attendee emails to add (comma-separated)",
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "캘린더 ID (비워두면 기본 캘린더)",
+							"description": "Calendar ID (defaults to primary)",
 						},
 					},
 					"required": []string{"event_id", "attendees"},
@@ -668,7 +668,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "list_calendars",
-				Description: "접근 가능한 Google Calendar 목록을 조회합니다.",
+				Description: "List accessible Google Calendars.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{},
@@ -677,25 +677,25 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			// --- Tasks Tools ---
 			gemini.FunctionDeclaration{
 				Name:        "create_task",
-				Description: "Google Tasks에 새 할 일을 추가합니다.",
+				Description: "Create a new Google Tasks item.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"title": map[string]any{
 							"type":        "string",
-							"description": "할 일 제목",
+							"description": "Task title",
 						},
 						"task_list_id": map[string]any{
 							"type":        "string",
-							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+							"description": "Task list ID (defaults to default list if empty)",
 						},
 						"notes": map[string]any{
 							"type":        "string",
-							"description": "메모/상세 내용",
+							"description": "Notes/details",
 						},
 						"due": map[string]any{
 							"type":        "string",
-							"description": "마감일 (RFC3339 또는 YYYY-MM-DD)",
+							"description": "Due date (RFC3339 or YYYY-MM-DD)",
 						},
 					},
 					"required": []string{"title"},
@@ -703,33 +703,33 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "edit_task",
-				Description: "기존 Google Tasks 할 일을 수정합니다. 제목, 메모, 마감일, 완료 상태를 변경할 수 있습니다.",
+				Description: "Edit an existing Google Tasks item. Can modify title, notes, due date, and completion status.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"task_id": map[string]any{
 							"type":        "string",
-							"description": "수정할 태스크 ID",
+							"description": "Task ID to edit",
 						},
 						"task_list_id": map[string]any{
 							"type":        "string",
-							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+							"description": "Task list ID (defaults to default list if empty)",
 						},
 						"title": map[string]any{
 							"type":        "string",
-							"description": "새 제목",
+							"description": "New title",
 						},
 						"notes": map[string]any{
 							"type":        "string",
-							"description": "새 메모",
+							"description": "New notes",
 						},
 						"due": map[string]any{
 							"type":        "string",
-							"description": "새 마감일",
+							"description": "New due date",
 						},
 						"status": map[string]any{
 							"type":        "string",
-							"description": "상태 변경 (needsAction: 미완료, completed: 완료)",
+							"description": "Status change (needsAction: incomplete, completed: done)",
 						},
 					},
 					"required": []string{"task_id"},
@@ -737,17 +737,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "delete_task",
-				Description: "Google Tasks 할 일을 삭제합니다.",
+				Description: "Delete a Google Tasks item.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"task_id": map[string]any{
 							"type":        "string",
-							"description": "삭제할 태스크 ID",
+							"description": "Task ID to delete",
 						},
 						"task_list_id": map[string]any{
 							"type":        "string",
-							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+							"description": "Task list ID (defaults to default list if empty)",
 						},
 					},
 					"required": []string{"task_id"},
@@ -755,24 +755,24 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "list_tasks",
-				Description: "Google Tasks 할 일 목록을 조회합니다.",
+				Description: "List Google Tasks items.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"task_list_id": map[string]any{
 							"type":        "string",
-							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+							"description": "Task list ID (defaults to default list if empty)",
 						},
 						"max_results": map[string]any{
 							"type":        "number",
-							"description": "최대 결과 수 (기본값: 20)",
+							"description": "Maximum results (default: 20)",
 						},
 					},
 				},
 			},
 			gemini.FunctionDeclaration{
 				Name:        "list_task_lists",
-				Description: "Google Tasks 태스크 리스트 목록을 조회합니다.",
+				Description: "List Google Tasks task lists.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{},
@@ -781,25 +781,25 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			// --- Gmail Tool ---
 			gemini.FunctionDeclaration{
 				Name:        "send_email",
-				Description: "이메일을 발송합니다. 업무 관련 이메일, 초대, 알림 등을 보낼 때 사용합니다.",
+				Description: "Send an email. Use for work-related emails, invitations, and notifications.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"to": map[string]any{
 							"type":        "string",
-							"description": "수신자 이메일 주소 (쉼표로 여러 명 가능)",
+							"description": "Recipient email address (comma-separated for multiple)",
 						},
 						"subject": map[string]any{
 							"type":        "string",
-							"description": "이메일 제목",
+							"description": "Email subject",
 						},
 						"body": map[string]any{
 							"type":        "string",
-							"description": "이메일 본문",
+							"description": "Email body",
 						},
 						"cc": map[string]any{
 							"type":        "string",
-							"description": "참조(CC) 이메일 주소 (쉼표로 여러 명 가능)",
+							"description": "CC email address (comma-separated for multiple)",
 						},
 					},
 					"required": []string{"to", "subject", "body"},
@@ -812,21 +812,21 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		decls = append(decls,
 			gemini.FunctionDeclaration{
 				Name:        "create_notion_page",
-				Description: "Notion에 새 페이지를 생성합니다. 회의록, 문서, 메모 등을 Notion에 작성할 때 사용합니다.",
+				Description: "Create a new Notion page. Use for writing meeting notes, documents, and memos in Notion.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"title": map[string]any{
 							"type":        "string",
-							"description": "페이지 제목",
+							"description": "Page title",
 						},
 						"content": map[string]any{
 							"type":        "string",
-							"description": "페이지 내용 (plain text, 마크다운 헤딩/리스트 지원)",
+							"description": "Page content (plain text, supports markdown headings/lists)",
 						},
 						"parent_page_id": map[string]any{
 							"type":        "string",
-							"description": "부모 페이지 ID (비워두면 기본 루트 페이지 하위에 생성)",
+							"description": "Parent page ID (defaults to root page if empty)",
 						},
 					},
 					"required": []string{"title", "content"},
@@ -834,17 +834,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "update_notion_page",
-				Description: "기존 Notion 페이지에 내용을 추가합니다. 이미 존재하는 페이지에 새로운 내용을 덧붙일 때 사용합니다.",
+				Description: "Append content to an existing Notion page. Use to add new content to a page that already exists.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"page_id": map[string]any{
 							"type":        "string",
-							"description": "Notion 페이지 ID",
+							"description": "Notion page ID",
 						},
 						"content": map[string]any{
 							"type":        "string",
-							"description": "추가할 내용 (plain text, 마크다운 헤딩/리스트 지원)",
+							"description": "Content to append (plain text, supports markdown headings/lists)",
 						},
 					},
 					"required": []string{"page_id", "content"},
@@ -923,7 +923,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		e.mu.Unlock()
 
 		if len(allFiles) == 0 {
-			return nil, fmt.Errorf("첨부된 파일이 없습니다")
+			return nil, fmt.Errorf("no attached files")
 		}
 
 		// If file_name is empty, upload all attachments
