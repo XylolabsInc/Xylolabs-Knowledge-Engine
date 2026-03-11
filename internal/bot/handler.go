@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ type Bot struct {
 	botUserID    string
 	botToken     string
 	proModel     string
+	systemPrompt string
 	logger       *slog.Logger
 	httpClient   *http.Client
 	toolExecutor *tools.ToolExecutor
@@ -56,7 +58,7 @@ type Bot struct {
 }
 
 // New creates a Bot handler.
-func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrepo.Reader, botUserID, botToken, proModel string, logger *slog.Logger) *Bot {
+func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrepo.Reader, botUserID, botToken, proModel, systemPromptFile string, logger *slog.Logger) *Bot {
 	return &Bot{
 		slackClient:    slackClient,
 		gemini:         geminiClient,
@@ -64,11 +66,27 @@ func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrep
 		botUserID:      botUserID,
 		botToken:       botToken,
 		proModel:       proModel,
+		systemPrompt:   loadSystemPrompt(systemPromptFile),
 		logger:         logger.With("component", "bot"),
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		trackedThreads: make(map[string]bool),
 		notBotThreads:  make(map[string]time.Time),
 	}
+}
+
+// loadSystemPrompt returns the system prompt template from filePath if provided,
+// falling back to the embedded default if the path is empty or the file cannot be read.
+func loadSystemPrompt(filePath string) string {
+	if filePath == "" {
+		return systemPromptTemplate
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		slog.Warn("failed to load custom system prompt, using default", "path", filePath, "error", err)
+		return systemPromptTemplate
+	}
+	slog.Info("loaded custom system prompt", "path", filePath)
+	return string(data)
 }
 
 // SetToolExecutor sets the tool executor for function calling support.
@@ -263,7 +281,7 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	// 3. Build system prompt with full KB context.
 	// Resolve current user's display name for context.
 	userName := b.resolveUserName(ctx, ev.User)
-	systemPrompt := fmt.Sprintf(systemPromptTemplate, userName) + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
+	systemPrompt := fmt.Sprintf(b.systemPrompt, userName) + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	// 4. Build conversation messages with thread history for context continuity.
 	var messages []gemini.Message

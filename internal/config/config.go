@@ -32,6 +32,9 @@ type Config struct {
 	GeminiModel    string
 	GeminiProModel string
 
+	// Bot
+	SystemPromptFile string
+
 	// Knowledge Base Repo
 	KBRepoDir string
 
@@ -75,6 +78,8 @@ func Load() *Config {
 		GeminiAPIKey:   os.Getenv("GEMINI_API_KEY"),
 		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.1-flash-lite-preview"),
 		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.1-pro-preview"),
+
+		SystemPromptFile: envOrDefault("SYSTEM_PROMPT_FILE", ""),
 
 		KBRepoDir: envOrDefault("KB_REPO_DIR", ""),
 

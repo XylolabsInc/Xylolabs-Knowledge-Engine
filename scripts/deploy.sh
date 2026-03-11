@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Server config
-SERVER_HOST="${SERVER_HOST:-your-server-ip}"
+SERVER_HOST="${SERVER_HOST:-129.154.207.107}"
 SERVER_USER="${SERVER_USER:-ubuntu}"
 SSH_KEY="${SSH_KEY:-$PROJECT_DIR/key.pem}"
 REMOTE_DIR="/opt/xylolabs-kb"
@@ -82,11 +82,37 @@ upload() {
 upload_env() {
     if [ -f "$PROJECT_DIR/.env" ]; then
         log "Uploading .env..."
-        scp_cmd "$PROJECT_DIR/.env" "${SERVER_USER}@${SERVER_HOST}:/tmp/xylolabs-kb.env"
+        # Copy .env to temp, fix SYSTEM_PROMPT_FILE path for server
+        local tmpenv
+        tmpenv=$(mktemp)
+        sed 's|^SYSTEM_PROMPT_FILE=.*|SYSTEM_PROMPT_FILE=/opt/xylolabs-kb/system-prompt.txt|' "$PROJECT_DIR/.env" > "$tmpenv"
+        scp_cmd "$tmpenv" "${SERVER_USER}@${SERVER_HOST}:/tmp/xylolabs-kb.env"
         ssh_cmd "sudo mv /tmp/xylolabs-kb.env $REMOTE_DIR/.env && sudo chmod 600 $REMOTE_DIR/.env"
+        rm -f "$tmpenv"
     else
         log "No .env file found, skipping (ensure $REMOTE_DIR/.env exists on server)"
     fi
+}
+
+# -----------------------------------------------------------------------------
+# Upload system prompt file
+# -----------------------------------------------------------------------------
+upload_system_prompt() {
+    local prompt_file="$PROJECT_DIR/system-prompt.txt"
+    if [ ! -f "$prompt_file" ]; then
+        # Fall back to the example
+        prompt_file="$PROJECT_DIR/system-prompt-example.txt"
+    fi
+
+    if [ ! -f "$prompt_file" ]; then
+        log "WARNING: No system prompt file found, skipping"
+        return
+    fi
+
+    log "Uploading system prompt from $prompt_file..."
+    scp_cmd "$prompt_file" "${SERVER_USER}@${SERVER_HOST}:/tmp/system-prompt.txt"
+    ssh_cmd "sudo mv /tmp/system-prompt.txt $REMOTE_DIR/system-prompt.txt && sudo chmod 644 $REMOTE_DIR/system-prompt.txt"
+    log "System prompt uploaded"
 }
 
 # -----------------------------------------------------------------------------
@@ -167,6 +193,7 @@ main() {
 
     if [ "$with_env" = true ]; then
         upload_env
+        upload_system_prompt
     fi
 
     restart

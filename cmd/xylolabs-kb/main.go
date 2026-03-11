@@ -102,7 +102,7 @@ func main() {
 					kbReader = kbrepo.NewReader(cfg.KBRepoDir, logger)
 					logger.Info("kb repo reader enabled", "dir", cfg.KBRepoDir)
 				}
-				botHandler = bot.New(slackAPI, geminiClient, kbReader, authResp.UserID, cfg.SlackBotToken, cfg.GeminiProModel, logger)
+				botHandler = bot.New(slackAPI, geminiClient, kbReader, authResp.UserID, cfg.SlackBotToken, cfg.GeminiProModel, cfg.SystemPromptFile, logger)
 				botHandler.SetExtractor(ext)
 				slackConn.SetBot(botHandler, authResp.UserID)
 				logger.Info("slack bot enabled", "bot_user_id", authResp.UserID)
