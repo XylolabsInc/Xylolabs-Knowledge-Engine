@@ -281,7 +281,9 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	// 3. Build system prompt with full KB context.
 	// Resolve current user's display name for context.
 	userName := b.resolveUserName(ctx, ev.User)
-	systemPrompt := fmt.Sprintf(b.systemPrompt, userName) + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
+	now := time.Now().In(time.FixedZone("KST", 9*60*60))
+	currentTime := now.Format("2006-01-02 (Monday) 15:04 KST")
+	systemPrompt := fmt.Sprintf(b.systemPrompt, userName) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	// 4. Build conversation messages with thread history for context continuity.
 	var messages []gemini.Message

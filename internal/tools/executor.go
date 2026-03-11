@@ -535,11 +535,11 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 						"start_time": map[string]any{
 							"type":        "string",
-							"description": "Start time (RFC3339 format: 2024-01-15T09:00:00+09:00, or date-only for all-day: 2024-01-15)",
+							"description": "Start time in RFC3339 format (YYYY-MM-DDTHH:MM:SS+09:00 for KST). Use date-only for all-day events (YYYY-MM-DD)",
 						},
 						"end_time": map[string]any{
 							"type":        "string",
-							"description": "End time (RFC3339 format: 2024-01-15T10:00:00+09:00, or date-only for all-day: 2024-01-16)",
+							"description": "End time in RFC3339 format (YYYY-MM-DDTHH:MM:SS+09:00 for KST). Use next day for all-day events (YYYY-MM-DD)",
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
