@@ -72,7 +72,34 @@
 5. The Slack bot reads the markdown knowledge repo hierarchically — loading indexes first, then only relevant detail files matching the query
 6. The REST API layer reads directly from `Storage` for raw document search
 
-## Quick Start
+## Quickstart for Agents
+
+> Paste this prompt into [Claude Code](https://claude.com/claude-code), [OpenCode](https://github.com/nicepkg/opencode), [Codex](https://github.com/openai/codex), or any AI coding agent.
+
+```
+Set up Xylolabs Knowledge Engine from https://github.com/xylolabsinc/Xylolabs-Knowledge-Engine
+
+1. Clone the repo and cd into it
+2. Copy .env.example to .env
+3. Ask me for the following credentials (do NOT make up placeholder values):
+   - SLACK_BOT_TOKEN (xoxb-...)
+   - SLACK_APP_TOKEN (xapp-...)
+   - SLACK_SIGNING_SECRET
+   - GOOGLE_CREDENTIALS_FILE path (OAuth2 or service account JSON)
+   - NOTION_API_KEY (ntn_...)
+   - GEMINI_API_KEY
+4. Fill in .env with the values I provide. Leave unconfigured connectors empty — they auto-disable.
+5. Run `make build` to compile (requires Go 1.26+, no CGO needed)
+6. Run `make run` to start the service
+7. Verify: curl http://localhost:8080/health should return {"status":"ok"}
+
+The Slack bot is the main interface. Once running, @mention the bot in Slack to ask questions.
+For Google Workspace: the bot needs OAuth2 consent on first run — watch stdout for the auth URL.
+For Docker deployment: `make docker` instead of steps 5-6.
+Read docs/datasource-setup-guide.md for detailed credential setup per provider.
+```
+
+## Slowstart for Humans
 
 ### Prerequisites
 
@@ -82,31 +109,49 @@
 | SQLite (via `modernc.org/sqlite`) | bundled — no system install needed |
 | Docker & Docker Compose | optional, for containerised deployment |
 
-### Setup
+### 1. Clone & Configure
 
 ```bash
-# Clone the repository
 git clone https://github.com/xylolabsinc/Xylolabs-Knowledge-Engine.git
 cd Xylolabs-Knowledge-Engine
 
-# Copy and fill in environment config
 cp .env.example .env
-$EDITOR .env
-
-# Build
-make build
-
-# Run
-make run
 ```
 
-### Running with Docker
+### 2. Add Credentials
+
+Open `.env` and fill in the credentials for the connectors you want to enable. Connectors auto-enable when credentials are present — no flags needed.
+
+| Connector | Required Credentials | Setup Guide |
+|-----------|---------------------|-------------|
+| **Slack** | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` | [Slack setup](docs/datasource-setup-guide.md) |
+| **Google Workspace** | `GOOGLE_CREDENTIALS_FILE` (OAuth2 JSON on disk) | [Google setup](docs/datasource-setup-guide.md) |
+| **Notion** | `NOTION_API_KEY` | [Notion setup](docs/datasource-setup-guide.md) |
+| **Gemini AI** (for bot) | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) |
+
+### 3. Build & Run
 
 ```bash
-cp .env.example .env
-$EDITOR .env
+# Native
+make build
+make run
+
+# Or with Docker
 make docker
 ```
+
+### 4. Verify
+
+```bash
+curl http://localhost:8080/health
+# {"status":"ok","time":"..."}
+```
+
+### 5. Talk to the Bot
+
+The **Slack bot is the main interface**. @mention it in any channel or send a DM to start asking questions about your organization's knowledge.
+
+> **First-time Google OAuth:** On first run, the service prints an authorization URL to stdout. Open it in a browser, grant access, and the token is cached for future runs.
 
 ## Configuration
 
