@@ -403,6 +403,75 @@ curl http://localhost:8080/api/v1/stats
 }
 ```
 
+## Web Console
+
+The Knowledge Engine includes a built-in web console for monitoring and exploring your knowledge base.
+
+### Features
+
+- **Dashboard** — Overview statistics: total document counts, attachment storage usage, sync status for each source
+- **Documents** — Directory-style browser to navigate documents organized by source and channel with breadcrumb navigation
+- **Search** — Full-text search with filters by source, channel, and author
+- **Sources** — Sync status monitoring for Slack, Google Workspace, and Notion with manual sync triggers
+- **Jobs** — View scheduled message jobs and execution history
+- **Index** — Hierarchical tree view of all documents organized by source, channel, and thread
+
+### Access
+
+The console is available at:
+
+- **Local development:** `http://localhost:8080/console`
+- **Production:** `https://your-domain/console`
+
+### Authentication
+
+Password protection is optional and configured via environment variables:
+
+```bash
+CONSOLE_USERNAME=admin                    # Default username
+CONSOLE_PASSWORD=yourpassword             # Leave empty to disable authentication
+```
+
+If `CONSOLE_PASSWORD` is empty, the console is publicly accessible without authentication.
+
+### URL Routing
+
+The console uses hash-based routing for shareable, bookmarkable URLs:
+
+| URL | View |
+|-----|------|
+| `/console#tab/dashboard` | Dashboard with stats |
+| `/console#tab/search` | Full-text search |
+| `/console#docs/slack` | Browse all Slack documents |
+| `/console#docs/slack/general` | Browse documents in #general channel |
+| `/console#docs/google/drive` | Browse Google Drive documents |
+| `/console#doc/{id}` | View specific document details |
+| `/console#tab/sources` | Sync status and manual triggers |
+| `/console#tab/jobs` | Scheduled jobs view |
+| `/console#tab/index` | Hierarchical document index |
+
+### Production Deployment with Nginx
+
+A production nginx configuration is included at `configs/nginx-xylolabs-kb.conf` with:
+
+- **SSL/TLS** — Automatic certificate management via Let's Encrypt (certbot)
+- **Rate limiting** — Protects login endpoints (5 requests/minute) and API (30 requests/second)
+- **Security headers** — X-Frame-Options, X-Content-Type-Options, Strict-Transport-Security
+- **Caching** — Appropriate cache headers for static assets and API responses
+
+To deploy with nginx:
+
+```bash
+./scripts/deploy.sh --with-nginx
+```
+
+This will:
+1. Build the Go binary for linux/arm64
+2. Upload to the OCI server
+3. Copy the nginx configuration to `/etc/nginx/sites-available/`
+4. Enable the site and reload nginx
+5. Verify the service is healthy
+
 ## Slack Bot
 
 When `GEMINI_API_KEY` is set and Slack is enabled, the bot responds to:
