@@ -207,8 +207,11 @@ if not channel_id:
     print(f"Channel '{channel_name}' not found", file=sys.stderr)
     sys.exit(0)  # non-fatal
 
-# Build message (minimal — detailed changelog is posted separately in Korean)
+# Build message with Korean changelog
+changelog = os.environ.get("CHANGELOG", "").strip()
 msg = f":rocket: *Xylolabs Knowledge Engine* 배포 완료 ({deploy_time})"
+if changelog:
+    msg += f"\n\n:memo: *변경 내역:*\n{changelog}"
 
 payload = json.dumps({"channel": channel_id, "text": msg, "unfurl_links": False}).encode()
 req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=payload, headers=headers, method="POST")
@@ -221,9 +224,21 @@ else:
     print(f"Slack API error: {result.get('error', 'unknown')}", file=sys.stderr)
 PYEOF
 
+    # Build Korean changelog from recent git commits (since last deploy tag or last 20 commits)
+    local changelog=""
+    cd "$PROJECT_DIR"
+    local last_tag
+    last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+    if [ -n "$last_tag" ]; then
+        changelog=$(git log --pretty=format:"• %s" "${last_tag}..HEAD" 2>/dev/null || echo "")
+    else
+        changelog=$(git log --pretty=format:"• %s" -20 2>/dev/null || echo "")
+    fi
+
     SLACK_TOKEN="$token" \
     SLACK_CHANNEL="$channel_name" \
     DEPLOY_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')" \
+    CHANGELOG="$changelog" \
     python3 "$tmpscript" && log "Slack notification sent" || log "WARNING: Slack notification failed"
 
     rm -f "$tmpscript"
