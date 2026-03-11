@@ -12,9 +12,10 @@ import (
 
 // ToolExecutor manages available tools and dispatches function calls.
 type ToolExecutor struct {
-	googleWriter *GoogleWriter
-	notionWriter *NotionWriter
-	logger       *slog.Logger
+	googleWriter    *GoogleWriter
+	notionWriter    *NotionWriter
+	logger          *slog.Logger
+	defaultCalendarID string
 
 	mu          sync.Mutex
 	attachments map[string][]byte // file name → data, from Slack file downloads
@@ -22,12 +23,13 @@ type ToolExecutor struct {
 
 // NewToolExecutor creates a ToolExecutor.
 // Either writer can be nil if not configured.
-func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, logger *slog.Logger) *ToolExecutor {
+func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, logger *slog.Logger) *ToolExecutor {
 	return &ToolExecutor{
-		googleWriter: gw,
-		notionWriter: nw,
-		logger:       logger.With("component", "tool-executor"),
-		attachments:  make(map[string][]byte),
+		googleWriter:    gw,
+		notionWriter:    nw,
+		defaultCalendarID: defaultCalendarID,
+		logger:          logger.With("component", "tool-executor"),
+		attachments:     make(map[string][]byte),
 	}
 }
 
@@ -1337,6 +1339,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		startTime, _ := call.Args["start_time"].(string)
 		endTime, _ := call.Args["end_time"].(string)
 		calendarID, _ := call.Args["calendar_id"].(string)
+		if calendarID == "" {
+			calendarID = e.defaultCalendarID
+		}
 		description, _ := call.Args["description"].(string)
 		location, _ := call.Args["location"].(string)
 		attendeesStr, _ := call.Args["attendees"].(string)
@@ -1366,6 +1371,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		}
 		eventID, _ := call.Args["event_id"].(string)
 		calendarID, _ := call.Args["calendar_id"].(string)
+		if calendarID == "" {
+			calendarID = e.defaultCalendarID
+		}
 		summary, _ := call.Args["summary"].(string)
 		description, _ := call.Args["description"].(string)
 		location, _ := call.Args["location"].(string)
@@ -1395,6 +1403,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		}
 		eventID, _ := call.Args["event_id"].(string)
 		calendarID, _ := call.Args["calendar_id"].(string)
+		if calendarID == "" {
+			calendarID = e.defaultCalendarID
+		}
 		if eventID == "" {
 			return nil, fmt.Errorf("event_id is required")
 		}
@@ -1408,6 +1419,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return nil, fmt.Errorf("Google Calendar is not configured")
 		}
 		calendarID, _ := call.Args["calendar_id"].(string)
+		if calendarID == "" {
+			calendarID = e.defaultCalendarID
+		}
 		timeMin, _ := call.Args["time_min"].(string)
 		timeMax, _ := call.Args["time_max"].(string)
 		maxResults := 20
@@ -1427,6 +1441,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		eventID, _ := call.Args["event_id"].(string)
 		attendeesStr, _ := call.Args["attendees"].(string)
 		calendarID, _ := call.Args["calendar_id"].(string)
+		if calendarID == "" {
+			calendarID = e.defaultCalendarID
+		}
 		if eventID == "" || attendeesStr == "" {
 			return nil, fmt.Errorf("event_id and attendees are required")
 		}

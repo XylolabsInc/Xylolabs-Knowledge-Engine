@@ -22,7 +22,8 @@ type Config struct {
 	GoogleTokenFile        string
 	GoogleScopes           []string
 	GoogleDriveFolders     []string
-	GoogleImpersonateEmail string
+	GoogleImpersonateEmail  string
+	GoogleDefaultCalendarID string
 
 	// Notion
 	NotionAPIKey     string
@@ -75,7 +76,8 @@ func Load() *Config {
 			"https://www.googleapis.com/auth/tasks",
 			"https://www.googleapis.com/auth/gmail.send",
 		}),
-		GoogleImpersonateEmail: os.Getenv("GOOGLE_IMPERSONATE_EMAIL"),
+		GoogleImpersonateEmail:  os.Getenv("GOOGLE_IMPERSONATE_EMAIL"),
+		GoogleDefaultCalendarID: os.Getenv("GOOGLE_DEFAULT_CALENDAR_ID"),
 
 		NotionAPIKey:    os.Getenv("NOTION_API_KEY"),
 		NotionRootPages: splitEnv("NOTION_ROOT_PAGES", nil),
