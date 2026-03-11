@@ -1,6 +1,7 @@
 package extractor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	readability "github.com/go-shiori/go-readability"
+	"golang.org/x/net/html/charset"
 )
 
 // extractWebURL fetches a URL and extracts its text content.
@@ -22,7 +24,9 @@ func (e *Extractor) extractWebURL(ctx context.Context, rawURL string) (*ExtractR
 	if err != nil {
 		return nil, fmt.Errorf("web: create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "xylolabs-kb/1.0 (knowledge base crawler)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
+	req.Header.Set("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
@@ -42,6 +46,17 @@ func (e *Extractor) extractWebURL(ctx context.Context, rawURL string) (*ExtractR
 	}
 
 	contentType := resp.Header.Get("Content-Type")
+
+	// Detect and transcode non-UTF-8 charset (common with Korean sites using EUC-KR).
+	if strings.Contains(strings.ToLower(contentType), "text/html") {
+		reader, err := charset.NewReader(bytes.NewReader(body), contentType)
+		if err == nil {
+			if transcoded, err := io.ReadAll(reader); err == nil {
+				body = transcoded
+			}
+		}
+	}
+
 	baseMIME := strings.SplitN(contentType, ";", 2)[0]
 	baseMIME = strings.TrimSpace(baseMIME)
 
