@@ -246,7 +246,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			},
 			gemini.FunctionDeclaration{
 				Name:        "edit_google_sheet",
-				Description: "Write data to a specific range in Google Sheets (overwrites existing data).",
+				Description: "Write data to a specific range in Google Sheets (overwrites existing data). IMPORTANT: Always read_google_sheet first to check the column_map (e.g. A=Name, B=Email) before writing, so you target the correct columns.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -1066,7 +1066,25 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"data": data, "rows": len(data), "file_id": fileID}, nil
+
+		// Build column letter mapping so the model knows which column letter corresponds to which header
+		result := map[string]any{"data": data, "rows": len(data), "file_id": fileID}
+
+		if len(data) > 0 {
+			startCol := parseStartColumn(readRange)
+			startIdx := columnIndex(startCol)
+
+			// Build "A=Header1, B=Header2, ..." mapping from the first row
+			var colParts []string
+			for i, header := range data[0] {
+				letter := columnLetter(startIdx + i)
+				colParts = append(colParts, letter+"="+header)
+			}
+			result["column_map"] = strings.Join(colParts, ", ")
+			result["columns"] = len(data[0])
+		}
+
+		return result, nil
 
 	case "create_google_sheet":
 		if e.googleWriter == nil {
@@ -1594,4 +1612,47 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)
 	}
+}
+
+// columnLetter converts a 0-based column index to a spreadsheet column letter.
+// 0→A, 1→B, ..., 25→Z, 26→AA, 27→AB, ...
+func columnLetter(idx int) string {
+	var result string
+	for idx >= 0 {
+		result = string(rune('A'+idx%26)) + result
+		idx = idx/26 - 1
+	}
+	return result
+}
+
+// parseStartColumn extracts the starting column letter from a range string.
+// "Sheet1" → "A", "Sheet1!C3:F10" → "C", "B2:D5" → "B"
+func parseStartColumn(rangeStr string) string {
+	// Remove sheet name prefix
+	if idx := strings.Index(rangeStr, "!"); idx >= 0 {
+		rangeStr = rangeStr[idx+1:]
+	}
+	// Extract leading letters (column part)
+	var col string
+	for _, ch := range rangeStr {
+		if ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' {
+			col += string(ch)
+		} else {
+			break
+		}
+	}
+	if col == "" {
+		return "A"
+	}
+	return strings.ToUpper(col)
+}
+
+// columnIndex converts a column letter to a 0-based index. A→0, B→1, ..., Z→25, AA→26
+func columnIndex(col string) int {
+	col = strings.ToUpper(col)
+	idx := 0
+	for _, ch := range col {
+		idx = idx*26 + int(ch-'A') + 1
+	}
+	return idx - 1
 }
