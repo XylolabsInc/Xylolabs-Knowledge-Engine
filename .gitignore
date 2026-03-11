@@ -1,0 +1,52 @@
+# Binaries
+/xylolabs-kb
+*.exe
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Dependencies
+/vendor/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Attachments storage
+/data/
+/attachments/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OAuth tokens and credentials (never commit)
+token.json
+credentials.json
+google.json
+*.key.json
+service-account*.json
+key.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage.out
+coverage.html
+
+# Build
+/tmp/

@@ -1,0 +1,18 @@
+[Unit]
+Description=Xylolabs Knowledge Base Worker
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/xylolabs-kb
+ExecStart=/opt/xylolabs-kb/bin/xylolabs-kb
+EnvironmentFile=/opt/xylolabs-kb/.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,777 @@
+package bot
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
+	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
+	"github.com/xylolabsinc/xylolabs-kb/internal/kbrepo"
+	"github.com/xylolabsinc/xylolabs-kb/internal/tools"
+)
+
+const (
+	maxReplyLength    = 3000
+	maxFileDownload   = 10 * 1024 * 1024 // 10 MB
+	maxThreadHistory  = 20               // max prior messages to include as context
+	maxToolIterations = 5                // max function calling round-trips
+)
+
+// Bot handles Slack mentions and DMs with Gemini-powered responses.
+type Bot struct {
+	slackClient  *slack.Client
+	gemini       *gemini.Client
+	kbReader     *kbrepo.Reader
+	botUserID    string
+	botToken     string
+	proModel     string
+	logger       *slog.Logger
+	httpClient   *http.Client
+	toolExecutor *tools.ToolExecutor
+	extractor    *extractor.Extractor
+
+	// Track threads where the bot has responded, so follow-up replies are handled.
+	// Key: "channel:thread_ts"
+	trackedThreads   map[string]bool
+	trackedThreadsMu sync.RWMutex
+
+	// Negative cache for threads confirmed not involving the bot.
+	// Key: "channel:thread_ts", Value: when checked.
+	notBotThreads   map[string]time.Time
+	notBotThreadsMu sync.RWMutex
+}
+
+// New creates a Bot handler.
+func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrepo.Reader, botUserID, botToken, proModel string, logger *slog.Logger) *Bot {
+	return &Bot{
+		slackClient:    slackClient,
+		gemini:         geminiClient,
+		kbReader:       kbReader,
+		botUserID:      botUserID,
+		botToken:       botToken,
+		proModel:       proModel,
+		logger:         logger.With("component", "bot"),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		trackedThreads: make(map[string]bool),
+		notBotThreads:  make(map[string]time.Time),
+	}
+}
+
+// SetToolExecutor sets the tool executor for function calling support.
+func (b *Bot) SetToolExecutor(executor *tools.ToolExecutor) {
+	b.toolExecutor = executor
+}
+
+// SetExtractor sets the content extractor for URL fetching.
+func (b *Bot) SetExtractor(ext *extractor.Extractor) {
+	b.extractor = ext
+}
+
+// IsTrackedThread returns true if the bot has previously replied in this thread.
+// Checks in-memory cache first, then falls back to Slack API with negative caching.
+func (b *Bot) IsTrackedThread(channel, threadTS string) bool {
+	key := channel + ":" + threadTS
+
+	// Check positive cache.
+	b.trackedThreadsMu.RLock()
+	cached := b.trackedThreads[key]
+	b.trackedThreadsMu.RUnlock()
+	if cached {
+		return true
+	}
+
+	// Check negative cache (skip API call if recently checked).
+	b.notBotThreadsMu.RLock()
+	if checkedAt, ok := b.notBotThreads[key]; ok && time.Since(checkedAt) < 5*time.Minute {
+		b.notBotThreadsMu.RUnlock()
+		return false
+	}
+	b.notBotThreadsMu.RUnlock()
+
+	// Check Slack API for bot messages in the thread.
+	msgs, _, _, err := b.slackClient.GetConversationRepliesContext(
+		context.Background(),
+		&slack.GetConversationRepliesParameters{
+			ChannelID: channel,
+			Timestamp: threadTS,
+			Limit:     50,
+		},
+	)
+	if err != nil {
+		b.logger.Debug("failed to check thread for bot replies", "error", err)
+		return false
+	}
+
+	for _, msg := range msgs {
+		if msg.User == b.botUserID {
+			b.trackThread(channel, threadTS)
+			return true
+		}
+	}
+
+	// Cache negative result.
+	b.notBotThreadsMu.Lock()
+	b.notBotThreads[key] = time.Now()
+	b.notBotThreadsMu.Unlock()
+	return false
+}
+
+func (b *Bot) trackThread(channel, threadTS string) {
+	b.trackedThreadsMu.Lock()
+	defer b.trackedThreadsMu.Unlock()
+	b.trackedThreads[channel+":"+threadTS] = true
+}
+
+// HandleMention processes a message where the bot was @mentioned.
+func (b *Bot) HandleMention(ctx context.Context, ev *slackevents.MessageEvent) {
+	// Strip bot mention from text.
+	query := strings.ReplaceAll(ev.Text, "<@"+b.botUserID+">", "")
+	query = strings.TrimSpace(query)
+	if query == "" {
+		query = "Hello! How can I help you?"
+	}
+
+	b.respond(ctx, ev, query)
+}
+
+// HandleDirectMessage processes a DM to the bot.
+func (b *Bot) HandleDirectMessage(ctx context.Context, ev *slackevents.MessageEvent) {
+	query := strings.TrimSpace(ev.Text)
+	if query == "" {
+		return
+	}
+	b.respond(ctx, ev, query)
+}
+
+// respond loads KB context, builds Gemini prompt, and posts the reply to Slack.
+func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query string) {
+	threadTS := ev.ThreadTimeStamp
+	if threadTS == "" {
+		threadTS = ev.TimeStamp
+	}
+
+	// Resolve user mentions in the query text.
+	query = b.resolveUserMentions(ctx, query)
+
+	// 1. Load knowledge base context from the markdown repo.
+	var kbContext string
+	if b.kbReader != nil {
+		var err error
+		kbContext, err = b.kbReader.BuildContext(query)
+		if err != nil {
+			b.logger.Warn("failed to load kb context", "error", err)
+			kbContext = ""
+		}
+	}
+
+	b.logger.Info("kb context loaded", "length", len(kbContext), "query", query)
+
+	// 2. Download any attached files from the message.
+	var images []gemini.Image
+	fileAttachments := make(map[string][]byte)
+	var fileNames []string
+	if ev.Message != nil {
+		for _, f := range ev.Message.Files {
+			if f.URLPrivateDownload == "" {
+				continue
+			}
+			data, err := b.downloadSlackFile(ctx, f.URLPrivateDownload)
+			if err != nil {
+				b.logger.Warn("failed to download slack file",
+					"file_id", f.ID,
+					"error", err,
+				)
+				continue
+			}
+			mimeType := f.Mimetype
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+			// Only send supported MIME types as inline data to Gemini
+			if strings.HasPrefix(mimeType, "image/") || mimeType == "application/pdf" {
+				images = append(images, gemini.Image{
+					MimeType: mimeType,
+					Data:     data,
+				})
+			}
+			// Store for potential Drive upload
+			fileName := f.Name
+			if fileName == "" {
+				fileName = f.ID
+			}
+			fileAttachments[fileName] = data
+			fileNames = append(fileNames, fileName)
+		}
+	}
+
+	// Also fetch files from previous messages in the thread
+	if ev.ThreadTimeStamp != "" {
+		threadFiles := b.fetchThreadFiles(ctx, ev.Channel, threadTS, ev.TimeStamp)
+		for name, data := range threadFiles {
+			if _, exists := fileAttachments[name]; !exists {
+				fileAttachments[name] = data
+				fileNames = append(fileNames, name)
+			}
+		}
+	}
+
+	// Add attached file names to query so the model knows they're available for upload
+	if len(fileNames) > 0 {
+		query += "\n\n[Attached files: " + strings.Join(fileNames, ", ") + "]"
+	}
+
+	// Store file attachments for tool executor (upload_to_drive)
+	if b.toolExecutor != nil && len(fileAttachments) > 0 {
+		b.toolExecutor.SetAttachments(fileAttachments)
+		defer b.toolExecutor.ClearAttachments()
+	}
+
+	// 2.5. Extract and fetch URLs from message text for context.
+	if b.extractor != nil {
+		urls := extractURLs(query)
+		for _, u := range urls {
+			result, err := b.extractor.ExtractFromURL(ctx, u)
+			if err != nil {
+				b.logger.Warn("failed to fetch URL", "url", u, "error", err)
+				continue
+			}
+			if result.Text != "" {
+				// Truncate long pages
+				content := result.Text
+				if len(content) > 5000 {
+					content = content[:5000] + "..."
+				}
+				query += fmt.Sprintf("\n\n---\nLink: %s\n%s\n---", u, content)
+			}
+		}
+	}
+
+	// 3. Build system prompt with full KB context.
+	// Resolve current user's display name for context.
+	userName := b.resolveUserName(ctx, ev.User)
+	systemPrompt := fmt.Sprintf(`You are a team assistant with a friendly, approachable personality. Answer based on the reference materials below.
+IMPORTANT: Default response language is English. Always respond in the same language the user writes in.
+
+Rules:
+- Only say "I don't know" when truly unknown. Never say "not in the knowledge base" or similar.
+- Be friendly and warm, but still concise and helpful. Talk like a kind, reliable coworker.
+- Skip unnecessary politeness and filler. No "Hope this helps!" or "Let me know if you have any other questions!" type endings.
+- Adapt your tone to the user's language and cultural norms. Be casual and natural.
+- CRITICAL: NEVER refuse to do your job. ALWAYS process URLs, summarize content, learn new facts when asked. You are a work tool, not a personality. Being friendly is great, being lazy or refusing work is NOT.
+- The current user's name is "%s". When they say "me/I", it refers to this person. Always use their real name in LEARN blocks, never "me" or "I".
+- For trivial messages (e.g. "shh", "ok", "sure", simple interjections, conversation-ending signals), output only ===SKIP===`, userName) + `
+
+Company info:
+- For business registration numbers, corporate IDs, representative names, addresses, etc., give the exact value concisely with original document link if available.
+- Same for bank accounts, seals, articles of incorporation.
+
+Source links:
+- When reference materials contain URLs (Google Drive/Notion links), always include the original link.
+- Especially for certificates, contracts, IR materials — always include the source link.
+- Format: "You can check it here: <URL|Original Document>"
+
+NEVER do:
+- Mention "knowledge base", "provided information", "reference materials", or reference internal systems/documents.
+- Say "according to the documents", "as indexed", "based on the materials", or reveal which documents you referenced.
+- Use any phrasing that implies you looked something up or were given information. Answer as if you inherently know it.
+- CRITICAL: NEVER include links to internal file paths. Any path containing .md, indexes/, slack/, google/, notion/, user-provided/, _meta/ is INTERNAL and must NEVER appear in your response — not as a link, not as text, not in any form. Only link to real URLs (https://...).
+- When asked about your identity, say only "Xylolabs Knowledge Engine" (exact branding, never translate or localize). Never disclose backend models (Gemini, GPT, etc.), APIs, training data, or tech stack.
+- Never mention tool names (create_google_doc, upload_to_drive, etc.), "function calling", or "tool call". Describe capabilities naturally (e.g. "I can create documents or upload files to Google Drive").
+
+Response style:
+- CRITICAL: Answer as if you inherently know everything. Never imply you searched, looked up, or were provided information.
+- Never use phrases like: "I found that", "according to my search", "based on the information provided", "looking at the data"
+- Tone: friendly, warm, concise. Keep it helpful and natural. Never refuse requests or lecture users about how to ask.
+- GOOD: "The registration number is 123-45-67890. Source: <URL|Registration Certificate>"
+- BAD: "After checking the documents, I found the following information..."
+- BAD: "Based on the provided information, the registration number is..."
+- GOOD: "John is the CEO."
+- BAD: "According to the knowledge base, John is..."
+
+Learning new facts:
+- When a user shares or asks you to learn/remember factual info, use LEARN blocks (NOT Google Docs).
+- This includes: "remember this", "note this down", "learn this", sharing facts like registration numbers, accounts, contacts.
+- LEARN blocks save to the internal knowledge base. Do NOT use create_google_doc for this purpose.
+- create_google_doc is ONLY for when users explicitly want a Google Drive document (e.g. "create a Google Doc").
+- Do NOT output LEARN for already-known info, questions, or opinions. LEARN blocks are hidden from users.
+- When a user shares a URL, its content is automatically fetched and appended to the message as "Link: url". Use that content to answer questions or save via LEARN blocks. You can also use Google Search to find additional information when needed.
+
+===LEARN: topic title===
+factual information here
+===ENDLEARN===
+
+Formatting (Slack mrkdwn — NOT standard Markdown):
+- Bold: *text* (single asterisk, NOT **). Italic: _text_. Strike: ~text~
+- Code: ` + "`code`" + `. Code block: ` + "```code```" + `. Quote: > text
+- List: "- " or "• ". Link: <URL|display text>
+- NEVER use # headers, **bold**, [link](url), or other standard Markdown syntax.
+
+Tool usage:
+- Always invoke tools via function calling. Never output tool calls as text/JSON.
+- Relay results (URLs etc.) naturally. Don't call tools unnecessarily.
+- "upload" + attachment → upload_to_drive (upload original as-is, never summarize with create_google_doc).
+- "create a doc/write a doc" → create_google_doc
+- Multiple files needing organization → create_drive_folder first, then upload with that folder_id.
+- Delete/rename/edit requests → use delete_drive_file, rename_drive_file, edit_google_doc accordingly.
+- "find/search" + filename → search_drive (search files in Drive)
+- "read this doc" + Doc ID → read_google_doc (read Google Docs content)
+- "show sheet data" → read_google_sheet (read spreadsheet data)
+- "create a spreadsheet" → create_google_sheet (create new sheet, optionally with initial data)
+- "write data to sheet" → edit_google_sheet (write to specific range)
+- "add rows to sheet" → append_google_sheet (append new rows)
+- "read slides" → read_google_slides (read presentation content)
+- "create a presentation" → create_google_slides (create new slides)
+- "add a slide" → add_slide (add slide to existing presentation)
+- "file info" + file ID → get_drive_file_info (get file metadata)
+- "move this file" → move_drive_file (move file to folder)
+- "copy this file" / "create from template" → copy_drive_file (copy file)
+- "list folder contents" → list_drive_folder (list files in folder)
+- "append to this doc" → append_to_google_doc (append content to doc)
+- "what tabs does this sheet have?" → get_sheet_metadata (get sheet metadata)
+- "clear this range" → clear_google_sheet (clear cell range)
+- "share this file with..." → share_drive_file (share file)
+- "delete this slide" → delete_slide (delete slide)
+- "add a new tab to sheet" → add_sheet_tab (add sheet tab)
+- "export as PDF" → export_as_pdf (export to PDF)
+
+--- Reference Materials ---
+` + kbContext + `
+---`
+
+	// 4. Build conversation messages with thread history for context continuity.
+	var messages []gemini.Message
+	if ev.ThreadTimeStamp != "" {
+		messages = b.fetchThreadHistory(ctx, ev.Channel, threadTS, ev.TimeStamp)
+	}
+
+	// 2.6. Extract and fetch URLs from thread history messages (before adding current message).
+	if b.extractor != nil {
+		for _, msg := range messages {
+			if msg.Role != "user" {
+				continue
+			}
+			for _, u := range extractURLs(msg.Content) {
+				result, err := b.extractor.ExtractFromURL(ctx, u)
+				if err != nil {
+					b.logger.Debug("failed to fetch thread URL", "url", u, "error", err)
+					continue
+				}
+				if result.Text != "" {
+					content := result.Text
+					if len(content) > 5000 {
+						content = content[:5000] + "..."
+					}
+					query += fmt.Sprintf("\n\n---\nLink: %s\n%s\n---", u, content)
+				}
+			}
+		}
+	}
+
+	messages = append(messages, gemini.Message{
+		Role:    "user",
+		Content: query,
+		Images:  images,
+	})
+	messages = mergeConsecutiveRoles(messages)
+
+	// Add available tools if executor is configured
+	genReq := gemini.GenerateRequest{
+		SystemPrompt:  systemPrompt,
+		ThinkingLevel: "low",
+		Messages:      messages,
+		GoogleSearch:  true,
+	}
+	if b.toolExecutor != nil {
+		genReq.Tools = b.toolExecutor.Declarations()
+	}
+
+	// Use pro model for complex creation tasks
+	if b.proModel != "" && isCreationTask(query) {
+		genReq.Model = b.proModel
+	}
+
+	// Tool calling loop: call Gemini, execute any tools, re-call with results
+	var genResp *gemini.GenerateResponse
+	for i := 0; i <= maxToolIterations; i++ {
+		var err error
+		genResp, err = b.gemini.Generate(ctx, genReq)
+		if err != nil {
+			b.logger.Error("gemini generate failed", "error", err, "iteration", i)
+			b.postReply(ctx, ev.Channel, threadTS, fmt.Sprintf("An error occurred: %v", err))
+			return
+		}
+
+		// If no function calls, we have the final text response
+		if len(genResp.FunctionCalls) == 0 {
+			break
+		}
+
+		if b.toolExecutor == nil {
+			b.logger.Warn("model returned function calls but no executor configured")
+			break
+		}
+
+		b.logger.Info("executing tool calls", "count", len(genResp.FunctionCalls), "iteration", i)
+
+		// Record the model's function call message
+		genReq.Messages = append(genReq.Messages, gemini.Message{
+			Role:          "model",
+			FunctionCalls: genResp.FunctionCalls,
+		})
+
+		// Execute each function call and collect responses
+		var responses []gemini.FunctionResponse
+		for _, fc := range genResp.FunctionCalls {
+			if fc.Name == "google_search" {
+				// google_search is handled natively via GoogleSearch:true in the request.
+				// If the model emits it as a function call, return a helpful message instead.
+				responses = append(responses, gemini.FunctionResponse{
+					Name: fc.Name,
+					Response: map[string]any{
+						"result": "Google Search is not available as a function call. URL content from messages is automatically fetched and provided in the conversation context.",
+					},
+				})
+				continue
+			}
+			resp := b.toolExecutor.Execute(ctx, fc)
+			responses = append(responses, resp)
+		}
+
+		// Add tool results as a user message for the next round
+		genReq.Messages = append(genReq.Messages, gemini.Message{
+			Role:              "user",
+			FunctionResponses: responses,
+		})
+	}
+
+	// 5. Check if the model decided to skip this message.
+	responseText := genResp.Text
+	if strings.TrimSpace(responseText) == "===SKIP===" {
+		b.logger.Debug("skipping trivial message", "query", query)
+		return
+	}
+	// Strip any ===SKIP=== fragments embedded in a longer response.
+	responseText = strings.ReplaceAll(responseText, "===SKIP===", "")
+	responseText = strings.TrimSpace(responseText)
+
+	// 7. Extract and save any LEARN blocks, then strip them from the reply.
+	learnBlocks := reLearnBlock.FindAllStringSubmatch(responseText, -1)
+	if len(learnBlocks) > 0 && b.kbReader != nil {
+		// Determine the author from the Slack event.
+		author := b.resolveUserName(ctx, ev.User)
+		for _, lb := range learnBlocks {
+			topic := strings.TrimSpace(lb[1])
+			content := strings.TrimSpace(lb[2])
+			go func(topic, content, author string) {
+				if err := b.kbReader.SaveFact(topic, content, author); err != nil {
+					b.logger.Warn("failed to save learned fact", "topic", topic, "error", err)
+				}
+			}(topic, content, author)
+		}
+		responseText = reLearnBlock.ReplaceAllString(responseText, "")
+		responseText = strings.TrimSpace(responseText)
+	}
+
+	// 8. Convert Markdown → Slack mrkdwn, then post.
+	replyText := convertToSlackMrkdwn(responseText)
+	if len(replyText) > maxReplyLength {
+		replyText = replyText[:maxReplyLength-3] + "..."
+	}
+
+	b.postReply(ctx, ev.Channel, threadTS, replyText)
+}
+
+// postReply posts a message to the given channel and thread, and tracks the thread.
+// Uses Block Kit with explicit mrkdwn type for reliable formatting.
+func (b *Bot) postReply(ctx context.Context, channel, threadTS, text string) {
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(text, false), // fallback for notifications
+		slack.MsgOptionTS(threadTS),
+		slack.MsgOptionBlocks(
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", text, false, false),
+				nil, nil,
+			),
+		),
+	}
+	_, _, err := b.slackClient.PostMessageContext(ctx, channel, opts...)
+	if err != nil {
+		b.logger.Error("failed to post reply to slack", "channel", channel, "error", err)
+		return
+	}
+	b.trackThread(channel, threadTS)
+}
+
+// resolveUserName looks up the display name for a Slack user ID.
+func (b *Bot) resolveUserName(ctx context.Context, userID string) string {
+	info, err := b.slackClient.GetUserInfoContext(ctx, userID)
+	if err != nil {
+		b.logger.Debug("failed to resolve user name", "user_id", userID, "error", err)
+		return userID
+	}
+	if info.Profile.DisplayName != "" {
+		return info.Profile.DisplayName
+	}
+	if info.RealName != "" {
+		return info.RealName
+	}
+	return userID
+}
+
+// resolveUserMentions replaces Slack user mentions (<@USERID>) with display names.
+func (b *Bot) resolveUserMentions(ctx context.Context, text string) string {
+	return reSlackUserMention.ReplaceAllStringFunc(text, func(match string) string {
+		sub := reSlackUserMention.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		name := b.resolveUserName(ctx, sub[1])
+		if name == sub[1] {
+			return match // couldn't resolve, keep original
+		}
+		return name
+	})
+}
+
+// fetchThreadHistory retrieves prior messages from a Slack thread
+// and returns them as Gemini messages for conversation continuity.
+func (b *Bot) fetchThreadHistory(ctx context.Context, channel, threadTS, currentMsgTS string) []gemini.Message {
+	msgs, _, _, err := b.slackClient.GetConversationRepliesContext(ctx,
+		&slack.GetConversationRepliesParameters{
+			ChannelID: channel,
+			Timestamp: threadTS,
+			Limit:     maxThreadHistory + 5,
+		},
+	)
+	if err != nil {
+		b.logger.Warn("failed to fetch thread history", "error", err)
+		return nil
+	}
+
+	var history []gemini.Message
+	for _, msg := range msgs {
+		// Skip the current message — caller will add it.
+		if msg.Timestamp == currentMsgTS {
+			continue
+		}
+		text := msg.Text
+		if text == "" {
+			continue
+		}
+
+		if msg.User == b.botUserID {
+			history = append(history, gemini.Message{
+				Role:    "model",
+				Content: text,
+			})
+		} else {
+			// Strip bot mention.
+			text = strings.ReplaceAll(text, "<@"+b.botUserID+">", "")
+			text = strings.TrimSpace(text)
+			if text == "" {
+				continue
+			}
+			// Resolve user mentions in thread history messages.
+			text = b.resolveUserMentions(ctx, text)
+			history = append(history, gemini.Message{
+				Role:    "user",
+				Content: text,
+			})
+		}
+	}
+
+	// Keep only the most recent messages.
+	if len(history) > maxThreadHistory {
+		history = history[len(history)-maxThreadHistory:]
+	}
+
+	return history
+}
+
+// mergeConsecutiveRoles combines adjacent messages with the same role,
+// as the Gemini API requires strictly alternating user/model turns.
+func mergeConsecutiveRoles(messages []gemini.Message) []gemini.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	merged := []gemini.Message{messages[0]}
+	for _, msg := range messages[1:] {
+		last := &merged[len(merged)-1]
+		if msg.Role == last.Role {
+			last.Content += "\n\n" + msg.Content
+			last.Images = append(last.Images, msg.Images...)
+		} else {
+			merged = append(merged, msg)
+		}
+	}
+	return merged
+}
+
+// extractURLs finds URLs in message text (both Slack-formatted and plain).
+func extractURLs(text string) []string {
+	seen := make(map[string]bool)
+	var urls []string
+
+	// Slack-formatted URLs: <https://example.com> or <https://example.com|label>
+	for _, match := range reSlackURL.FindAllStringSubmatch(text, -1) {
+		u := match[1]
+		if !seen[u] {
+			seen[u] = true
+			urls = append(urls, u)
+		}
+	}
+
+	// Plain URLs (fallback)
+	for _, u := range rePlainURL.FindAllString(text, -1) {
+		if !seen[u] {
+			seen[u] = true
+			urls = append(urls, u)
+		}
+	}
+
+	return urls
+}
+
+var (
+	// Matches URLs in message text (including Slack-formatted <url> and <url|label>)
+	reSlackURL  = regexp.MustCompile(`<(https?://[^|>]+)(?:\|[^>]*)?>`)
+	rePlainURL  = regexp.MustCompile(`https?://[^\s<>]+`)
+
+	reSlackUserMention = regexp.MustCompile(`<@(U[A-Z0-9]+)>`)
+
+	reMarkdownBold   = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reMarkdownLink   = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	reMarkdownHeader = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	reMarkdownStrike = regexp.MustCompile(`~~(.+?)~~`)
+	// Matches a closing formatting char (*_~) — preceded by non-space, followed by a letter.
+	// Inserts a zero-width space so Slack's mrkdwn parser sees a word boundary.
+	reMrkdwnBoundary = regexp.MustCompile(`(\S)([*_~])(\pL)`)
+	// Matches Slack-style links to internal file paths: <../path/file.md|label> or <path/file.md|label>
+	reInternalLink = regexp.MustCompile(`<[^>]*?(?:indexes/|slack/|google/|notion/|user-provided/|_meta/)[^>]*?\|([^>]+)>`)
+	// Matches bare internal paths like ../indexes/people.md or notion/pages/foo.md
+	reInternalPath = regexp.MustCompile(`(?:\.\.?/)?(?:indexes|slack|google|notion|user-provided|_meta)/[^\s,)>]+\.md`)
+
+	reLearnBlock     = regexp.MustCompile(`(?s)===LEARN:\s*(.+?)===\n(.*?)===ENDLEARN===\n?`)
+)
+
+// isCreationTask detects if a query likely involves document/slide/sheet creation.
+func isCreationTask(query string) bool {
+	creationPatterns := []string{
+		"만들어", "작성해", "생성해", "작성하", "생성하", "만들",
+		"create", "write", "generate", "draft",
+		"문서", "보고서", "회의록", "스프레드시트", "프레젠테이션", "슬라이드",
+		"시트 만", "doc 만", "노션",
+	}
+	lower := strings.ToLower(query)
+	for _, pattern := range creationPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// convertToSlackMrkdwn converts standard Markdown formatting to Slack mrkdwn.
+func convertToSlackMrkdwn(text string) string {
+	// **bold** → *bold*
+	text = reMarkdownBold.ReplaceAllString(text, "*$1*")
+	// [text](url) → <url|text>
+	text = reMarkdownLink.ReplaceAllString(text, "<$2|$1>")
+	// ## Header → *Header*
+	text = reMarkdownHeader.ReplaceAllString(text, "*$1*")
+	// ~~strike~~ → ~strike~
+	text = reMarkdownStrike.ReplaceAllString(text, "~$1~")
+	// Fix word boundaries: *bold*이에요 → *bold*​이에요 (insert zero-width space)
+	text = reMrkdwnBoundary.ReplaceAllString(text, "$1$2\u200B$3")
+	// Strip internal file path links: <../indexes/people.md|인물 인덱스> → 인물 인덱스
+	text = reInternalLink.ReplaceAllString(text, "$1")
+	// Strip bare internal file paths
+	text = reInternalPath.ReplaceAllString(text, "")
+	return text
+}
+
+// fetchThreadFiles downloads file attachments from recent messages in the thread
+// (excluding the current message). This allows the bot to access files shared earlier.
+func (b *Bot) fetchThreadFiles(ctx context.Context, channel, threadTS, currentMsgTS string) map[string][]byte {
+	files := make(map[string][]byte)
+
+	msgs, _, _, err := b.slackClient.GetConversationRepliesContext(ctx,
+		&slack.GetConversationRepliesParameters{
+			ChannelID: channel,
+			Timestamp: threadTS,
+			Limit:     10,
+		},
+	)
+	if err != nil {
+		b.logger.Warn("failed to fetch thread files", "error", err)
+		return files
+	}
+
+	for _, msg := range msgs {
+		if msg.Timestamp == currentMsgTS {
+			continue
+		}
+		for _, f := range msg.Files {
+			url := f.URLPrivateDownload
+			if url == "" {
+				url = f.URLPrivate
+			}
+			if url == "" {
+				continue
+			}
+			name := f.Name
+			if name == "" {
+				name = f.ID
+			}
+			if _, exists := files[name]; exists {
+				continue
+			}
+			data, err := b.downloadSlackFile(ctx, url)
+			if err != nil {
+				b.logger.Warn("failed to download thread file", "file", name, "error", err)
+				continue
+			}
+			files[name] = data
+		}
+	}
+
+	return files
+}
+
+// downloadSlackFile downloads a Slack-hosted file using the bot token as Bearer auth.
+func (b *Bot) downloadSlackFile(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+b.botToken)
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("download file: HTTP %d", resp.StatusCode)
+	}
+
+	limited := io.LimitReader(resp.Body, maxFileDownload)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read file body: %w", err)
+	}
+
+	return data, nil
+}

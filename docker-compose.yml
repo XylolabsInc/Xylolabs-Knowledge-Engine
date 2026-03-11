@@ -1,0 +1,44 @@
+services:
+  xylolabs-kb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: xylolabs-kb:latest
+    container_name: xylolabs-kb
+    restart: unless-stopped
+
+    # Load environment from .env file
+    env_file:
+      - .env
+
+    # Override data paths to use container volumes
+    environment:
+      DB_PATH: /data/xylolabs-kb.db
+      ATTACHMENT_PATH: /data/attachments
+
+    ports:
+      - "${API_PORT:-8080}:8080"
+
+    volumes:
+      # Persistent data: SQLite database and attachment files
+      - kb-data:/data
+      # Optional: mount Google credentials if using OAuth2 or service account
+      # - ./credentials.json:/app/credentials.json:ro
+      # - ./token.json:/app/token.json
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  kb-data:
+    driver: local
