@@ -314,7 +314,7 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 
 	messages = append(messages, gemini.Message{
 		Role:    "user",
-		Content: query,
+		Content: "[" + userName + "] " + query,
 		Images:  images,
 	})
 	messages = mergeConsecutiveRoles(messages)
@@ -417,6 +417,14 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 		responseText = strings.TrimSpace(responseText)
 	}
 
+	// 7.5. Extract emoji reaction name, then strip REACT blocks from the reply.
+	var reactEmoji string
+	if m := reReactBlock.FindStringSubmatch(responseText); len(m) > 1 {
+		reactEmoji = strings.TrimSpace(m[1])
+	}
+	responseText = reReactBlock.ReplaceAllString(responseText, "")
+	responseText = strings.TrimSpace(responseText)
+
 	// 8. Convert Markdown → Slack mrkdwn, then post.
 	replyText := convertToSlackMrkdwn(responseText)
 	if len(replyText) > maxReplyLength {
@@ -424,6 +432,16 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	}
 
 	b.postReply(ctx, ev.Channel, threadTS, replyText)
+
+	// Add emoji reaction to the user's original message.
+	if reactEmoji != "" {
+		msgRef := slack.NewRefToMessage(ev.Channel, ev.TimeStamp)
+		go func(emoji string) {
+			if err := b.slackClient.AddReactionContext(ctx, emoji, msgRef); err != nil {
+				b.logger.Debug("failed to add reaction", "emoji", emoji, "error", err)
+			}
+		}(reactEmoji)
+	}
 }
 
 // postReply posts a message to the given channel and thread, and tracks the thread.
@@ -518,9 +536,11 @@ func (b *Bot) fetchThreadHistory(ctx context.Context, channel, threadTS, current
 			}
 			// Resolve user mentions in thread history messages.
 			text = b.resolveUserMentions(ctx, text)
+			// Prefix with sender's name so the model can distinguish between users.
+			senderName := b.resolveUserName(ctx, msg.User)
 			history = append(history, gemini.Message{
 				Role:    "user",
-				Content: text,
+				Content: "[" + senderName + "] " + text,
 			})
 		}
 	}
@@ -597,6 +617,7 @@ var (
 	reInternalPath = regexp.MustCompile(`(?:\.\.?/)?(?:indexes|slack|google|notion|user-provided|_meta)/[^\s,)>]+\.md`)
 
 	reLearnBlock     = regexp.MustCompile(`(?s)===LEARN:\s*(.+?)===\n(.*?)===ENDLEARN===\n?`)
+	reReactBlock     = regexp.MustCompile(`===REACT:\s*(\S+?)===`)
 )
 
 // isCreationTask detects if a query likely involves document/slide/sheet creation.
