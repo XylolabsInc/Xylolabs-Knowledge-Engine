@@ -245,12 +245,25 @@ PYEOF
     if [ -n "$gemini_key" ] && [ -n "$changelog" ]; then
         local translate_script
         translate_script=$(mktemp /tmp/deploy-translate-XXXXXX.py)
+        # Write changelog and key to temp files to avoid shell escaping issues
+        local changelog_file key_file
+        changelog_file=$(mktemp /tmp/deploy-changelog-XXXXXX.txt)
+        key_file=$(mktemp /tmp/deploy-key-XXXXXX.txt)
+        echo "$changelog" > "$changelog_file"
+        echo "$gemini_key" > "$key_file"
+
         cat > "$translate_script" <<'TRANSLATEEOF'
 import json, sys, os, urllib.request
 
-api_key = os.environ["GEMINI_KEY"]
+key_file = os.environ["KEY_FILE"]
+changelog_file = os.environ["CHANGELOG_FILE"]
 lang = os.environ.get("LANG_TARGET", "ko")
-raw = os.environ["RAW_CHANGELOG"]
+
+api_key = open(key_file).read().strip()
+raw = open(changelog_file).read().strip()
+
+if not raw:
+    sys.exit(0)
 
 lang_names = {"ko": "Korean", "en": "English", "ja": "Japanese"}
 lang_name = lang_names.get(lang, lang)
@@ -269,26 +282,24 @@ payload = json.dumps({
     "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
 }).encode()
 
-url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
 req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
 try:
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read())
     text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     print(text)
 except Exception as e:
     print(f"Translation failed: {e}", file=sys.stderr)
-    # Fallback: just bullet-ify the raw messages
     for line in raw.strip().split("\n"):
         if line.strip():
             print(f"• {line.strip()}")
 TRANSLATEEOF
 
-        changelog=$(GEMINI_KEY="$gemini_key" LANG_TARGET="$language" RAW_CHANGELOG="$changelog" \
-            python3 "$translate_script" 2>/dev/null || echo "$changelog")
-        rm -f "$translate_script"
+        changelog=$(KEY_FILE="$key_file" CHANGELOG_FILE="$changelog_file" LANG_TARGET="$language" \
+            python3 "$translate_script" 2>&1 || echo "$changelog")
+        rm -f "$translate_script" "$changelog_file" "$key_file"
     else
-        # No Gemini key — just bullet-ify
         changelog=$(echo "$changelog" | sed 's/^/• /')
     fi
 

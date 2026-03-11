@@ -256,6 +256,17 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 			if _, exists := fileAttachments[name]; !exists {
 				fileAttachments[name] = data
 				fileNames = append(fileNames, name)
+				// Extract text from thread files too
+				if b.extractor != nil {
+					result, err := b.extractor.ExtractFromBytes(ctx, data, "application/octet-stream", name)
+					if err == nil && result.Text != "" && !strings.HasPrefix(result.Text, "[") {
+						content := result.Text
+						if len(content) > 8000 {
+							content = content[:8000] + "\n..."
+						}
+						query += fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", name, content)
+					}
+				}
 			}
 		}
 	}
