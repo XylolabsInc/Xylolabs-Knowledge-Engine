@@ -469,12 +469,14 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 
 	// Update user-provided/README.md index.
 	readmePath := filepath.Join(r.repoDir, "user-provided", "README.md")
-	r.updateUserProvidedReadme(readmePath, topic, relPath)
+	r.updateUserProvidedReadme(readmePath, topic, relPath, content)
+	r.updateUserProvidedIndex(topic, relPath, content, author)
 
 	// Git add, commit, push.
 	cmds := [][]string{
 		{"git", "-C", r.repoDir, "add", relPath},
 		{"git", "-C", r.repoDir, "add", "user-provided/README.md"},
+		{"git", "-C", r.repoDir, "add", "indexes/user-provided.md"},
 		{"git", "-C", r.repoDir, "commit", "-m", fmt.Sprintf("fact(user): add unconfirmed fact — %s (by %s)", topic, author)},
 		{"git", "-C", r.repoDir, "push"},
 	}
@@ -493,7 +495,8 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 
 // updateUserProvidedReadme appends an entry to user-provided/README.md.
 // Creates the file with a header if it doesn't exist.
-func (r *Reader) updateUserProvidedReadme(readmePath, topic, relPath string) {
+// Includes a brief excerpt from the content for better keyword matching.
+func (r *Reader) updateUserProvidedReadme(readmePath, topic, relPath, content string) {
 	const header = "---\ntitle: \"User-Provided Knowledge\"\n---\n# User-Provided Knowledge\n\nFacts and information provided by team members via chat.\n\n"
 
 	// Create file with header if it doesn't exist.
@@ -504,7 +507,7 @@ func (r *Reader) updateUserProvidedReadme(readmePath, topic, relPath string) {
 		}
 	}
 
-	// Append entry.
+	// Append entry with excerpt.
 	f, err := os.OpenFile(readmePath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		r.logger.Warn("failed to open user-provided README", "error", err)
@@ -512,9 +515,69 @@ func (r *Reader) updateUserProvidedReadme(readmePath, topic, relPath string) {
 	}
 	defer f.Close()
 
-	entry := fmt.Sprintf("- [%s](%s)\n", topic, filepath.Base(relPath))
+	// Extract first meaningful line as excerpt (up to 100 chars).
+	excerpt := extractExcerpt(content, 100)
+	entry := fmt.Sprintf("- [%s](%s)", topic, filepath.Base(relPath))
+	if excerpt != "" {
+		entry += fmt.Sprintf(" — %s", excerpt)
+	}
+	entry += "\n"
 	if _, err := f.WriteString(entry); err != nil {
 		r.logger.Warn("failed to append to user-provided README", "error", err)
+	}
+}
+
+// extractExcerpt returns the first meaningful line of content, trimmed to maxLen.
+func extractExcerpt(content string, maxLen int) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if len(line) > maxLen {
+			// Try to break at a word boundary.
+			if idx := strings.LastIndex(line[:maxLen], " "); idx > maxLen/2 {
+				return line[:idx] + "…"
+			}
+			return line[:maxLen] + "…"
+		}
+		return line
+	}
+	return ""
+}
+
+// updateUserProvidedIndex maintains indexes/user-provided.md for cross-referencing.
+// This ensures user-provided facts appear in the primary index search path.
+func (r *Reader) updateUserProvidedIndex(topic, relPath, content, author string) {
+	indexDir := filepath.Join(r.repoDir, "indexes")
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		r.logger.Warn("failed to create indexes dir", "error", err)
+		return
+	}
+
+	indexPath := filepath.Join(indexDir, "user-provided.md")
+	const header = "---\ntitle: \"User-Provided Facts Index\"\n---\n# User-Provided Facts\n\nFacts and knowledge contributed by team members.\n\n"
+
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		if err := os.WriteFile(indexPath, []byte(header), 0o644); err != nil {
+			r.logger.Warn("failed to create user-provided index", "error", err)
+			return
+		}
+	}
+
+	f, err := os.OpenFile(indexPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		r.logger.Warn("failed to open user-provided index", "error", err)
+		return
+	}
+	defer f.Close()
+
+	// Write a section with topic, keywords from content, and file reference.
+	excerpt := extractExcerpt(content, 200)
+	date := time.Now().Format("2006-01-02")
+	entry := fmt.Sprintf("## %s\n- Date: %s | By: %s\n- %s\n- Source: [%s](../%s)\n\n", topic, date, author, excerpt, topic, relPath)
+	if _, err := f.WriteString(entry); err != nil {
+		r.logger.Warn("failed to append to user-provided index", "error", err)
 	}
 }
 
