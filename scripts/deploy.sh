@@ -152,6 +152,97 @@ verify_health() {
 }
 
 # -----------------------------------------------------------------------------
+# Slack deploy notification
+# -----------------------------------------------------------------------------
+notify_slack() {
+    # Load .env to get SLACK_BOT_TOKEN
+    local env_file="$PROJECT_DIR/.env"
+    if [ ! -f "$env_file" ]; then
+        log "No .env file, skipping Slack notification"
+        return 0
+    fi
+
+    local token
+    token=$(grep '^SLACK_BOT_TOKEN=' "$env_file" | cut -d'=' -f2-)
+    if [ -z "$token" ]; then
+        log "No SLACK_BOT_TOKEN found, skipping Slack notification"
+        return 0
+    fi
+
+    local channel_name="${DEPLOY_NOTIFY_CHANNEL:-자일로랩스-정상영업합니다}"
+
+    # Get recent commits for the changelog (last 10 commits, compact format)
+    local changelog
+    changelog=$(cd "$PROJECT_DIR" && git log --oneline -10 --no-decorate 2>/dev/null | head -10)
+
+    # Build the message
+    local message
+    message=$(cat <<SLACK_EOF
+🚀 *Xylolabs Knowledge Engine 배포 완료*
+• 서버: \`$SERVER_HOST\`
+• 시간: $(date '+%Y-%m-%d %H:%M:%S %Z')
+
+*최근 변경사항:*
+\`\`\`
+$changelog
+\`\`\`
+SLACK_EOF
+)
+
+    # Find channel ID by name
+    local channel_id
+    channel_id=$(curl -sf -H "Authorization: Bearer $token" \
+        "https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=200" \
+        | grep -o "\"id\":\"[^\"]*\",\"name\":\"${channel_name}\"" \
+        | grep -o '"id":"[^"]*"' \
+        | cut -d'"' -f4)
+
+    if [ -z "$channel_id" ]; then
+        # Try URL-encoded name for Korean characters
+        local encoded_name
+        encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$channel_name'))" 2>/dev/null || echo "")
+        if [ -n "$encoded_name" ]; then
+            channel_id=$(curl -sf -H "Authorization: Bearer $token" \
+                "https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=1000" \
+                | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for ch in data.get('channels', []):
+    if ch.get('name') == '$channel_name' or ch.get('name_normalized') == '$channel_name':
+        print(ch['id'])
+        break
+" 2>/dev/null)
+        fi
+    fi
+
+    if [ -z "$channel_id" ]; then
+        log "WARNING: Could not find Slack channel '$channel_name', skipping notification"
+        return 0
+    fi
+
+    # Post message
+    local response
+    response=$(curl -sf -X POST \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d "$(python3 -c "
+import json, sys
+msg = '''$message'''
+print(json.dumps({'channel': '$channel_id', 'text': msg, 'unfurl_links': False}))
+")" \
+        "https://slack.com/api/chat.postMessage")
+
+    local ok
+    ok=$(echo "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok', False))" 2>/dev/null || echo "False")
+
+    if [ "$ok" = "True" ]; then
+        log "Slack notification sent to #$channel_name"
+    else
+        log "WARNING: Failed to send Slack notification: $response"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Install crontab
 # -----------------------------------------------------------------------------
 install_cron() {
@@ -198,6 +289,7 @@ main() {
 
     restart
     verify_health
+    notify_slack
 
     if [ "$with_cron" = true ]; then
         install_cron
