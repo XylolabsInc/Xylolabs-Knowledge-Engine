@@ -405,6 +405,9 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 
 	// 7. Extract and save any LEARN blocks, then strip them from the reply.
 	learnBlocks := reLearnBlock.FindAllStringSubmatch(responseText, -1)
+	if strings.Contains(responseText, "===LEARN") {
+		b.logger.Info("LEARN block detection", "matched", len(learnBlocks), "kb_reader", b.kbReader != nil)
+	}
 	if len(learnBlocks) > 0 && b.kbReader != nil {
 		// Determine the author from the Slack event.
 		author := b.resolveUserName(ctx, ev.User)
@@ -623,7 +626,7 @@ var (
 	// Matches bare internal paths like ../indexes/people.md or notion/pages/foo.md
 	reInternalPath = regexp.MustCompile(`(?:\.\.?/)?(?:indexes|slack|google|notion|user-provided|_meta)/[^\s,)>]+\.md`)
 
-	reLearnBlock     = regexp.MustCompile(`(?s)===LEARN:\s*(.+?)===\n(.*?)===ENDLEARN===\n?`)
+	reLearnBlock     = regexp.MustCompile(`(?s)===LEARN:\s*(.+?)\s*===[ \t]*\r?\n(.*?)===ENDLEARN===[ \t]*\r?\n?`)
 	reReactBlock     = regexp.MustCompile(`===REACT:\s*(\S+?)===`)
 )
 
