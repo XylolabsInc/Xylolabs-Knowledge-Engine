@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
@@ -517,6 +518,291 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 					},
 					"required": []string{"file_id"},
+				},
+			},
+			// --- Calendar Tools ---
+			gemini.FunctionDeclaration{
+				Name:        "create_calendar_event",
+				Description: "Google Calendar에 새 이벤트를 생성합니다. 미팅, 회의, 약속 등을 잡을 때 사용합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"summary": map[string]any{
+							"type":        "string",
+							"description": "이벤트 제목",
+						},
+						"start_time": map[string]any{
+							"type":        "string",
+							"description": "시작 시간 (RFC3339 형식: 2024-01-15T09:00:00+09:00 또는 종일 이벤트: 2024-01-15)",
+						},
+						"end_time": map[string]any{
+							"type":        "string",
+							"description": "종료 시간 (RFC3339 형식: 2024-01-15T10:00:00+09:00 또는 종일 이벤트: 2024-01-16)",
+						},
+						"calendar_id": map[string]any{
+							"type":        "string",
+							"description": "캘린더 ID (비워두면 기본 캘린더 사용)",
+						},
+						"description": map[string]any{
+							"type":        "string",
+							"description": "이벤트 설명/메모",
+						},
+						"location": map[string]any{
+							"type":        "string",
+							"description": "장소",
+						},
+						"attendees": map[string]any{
+							"type":        "string",
+							"description": "참석자 이메일 주소 (쉼표로 구분, 예: a@co.com,b@co.com)",
+						},
+					},
+					"required": []string{"summary", "start_time", "end_time"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "edit_calendar_event",
+				Description: "기존 Google Calendar 이벤트를 수정합니다. 제목, 시간, 장소, 참석자 등을 변경할 수 있습니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"event_id": map[string]any{
+							"type":        "string",
+							"description": "수정할 이벤트 ID",
+						},
+						"calendar_id": map[string]any{
+							"type":        "string",
+							"description": "캘린더 ID (비워두면 기본 캘린더)",
+						},
+						"summary": map[string]any{
+							"type":        "string",
+							"description": "새 이벤트 제목",
+						},
+						"description": map[string]any{
+							"type":        "string",
+							"description": "새 이벤트 설명",
+						},
+						"location": map[string]any{
+							"type":        "string",
+							"description": "새 장소",
+						},
+						"start_time": map[string]any{
+							"type":        "string",
+							"description": "새 시작 시간 (RFC3339)",
+						},
+						"end_time": map[string]any{
+							"type":        "string",
+							"description": "새 종료 시간 (RFC3339)",
+						},
+						"attendees": map[string]any{
+							"type":        "string",
+							"description": "새 참석자 목록 (쉼표 구분, 기존 목록을 대체)",
+						},
+					},
+					"required": []string{"event_id"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "delete_calendar_event",
+				Description: "Google Calendar 이벤트를 삭제합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"event_id": map[string]any{
+							"type":        "string",
+							"description": "삭제할 이벤트 ID",
+						},
+						"calendar_id": map[string]any{
+							"type":        "string",
+							"description": "캘린더 ID (비워두면 기본 캘린더)",
+						},
+					},
+					"required": []string{"event_id"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "list_calendar_events",
+				Description: "Google Calendar 이벤트 목록을 조회합니다. 특정 기간의 일정을 확인할 때 사용합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"calendar_id": map[string]any{
+							"type":        "string",
+							"description": "캘린더 ID (비워두면 기본 캘린더)",
+						},
+						"time_min": map[string]any{
+							"type":        "string",
+							"description": "조회 시작 시간 (RFC3339)",
+						},
+						"time_max": map[string]any{
+							"type":        "string",
+							"description": "조회 종료 시간 (RFC3339)",
+						},
+						"max_results": map[string]any{
+							"type":        "number",
+							"description": "최대 결과 수 (기본값: 20)",
+						},
+					},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "add_event_attendees",
+				Description: "기존 캘린더 이벤트에 참석자를 추가합니다. 초대 메일이 자동 발송됩니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"event_id": map[string]any{
+							"type":        "string",
+							"description": "이벤트 ID",
+						},
+						"attendees": map[string]any{
+							"type":        "string",
+							"description": "추가할 참석자 이메일 (쉼표 구분)",
+						},
+						"calendar_id": map[string]any{
+							"type":        "string",
+							"description": "캘린더 ID (비워두면 기본 캘린더)",
+						},
+					},
+					"required": []string{"event_id", "attendees"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "list_calendars",
+				Description: "접근 가능한 Google Calendar 목록을 조회합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{},
+				},
+			},
+			// --- Tasks Tools ---
+			gemini.FunctionDeclaration{
+				Name:        "create_task",
+				Description: "Google Tasks에 새 할 일을 추가합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"title": map[string]any{
+							"type":        "string",
+							"description": "할 일 제목",
+						},
+						"task_list_id": map[string]any{
+							"type":        "string",
+							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+						},
+						"notes": map[string]any{
+							"type":        "string",
+							"description": "메모/상세 내용",
+						},
+						"due": map[string]any{
+							"type":        "string",
+							"description": "마감일 (RFC3339 또는 YYYY-MM-DD)",
+						},
+					},
+					"required": []string{"title"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "edit_task",
+				Description: "기존 Google Tasks 할 일을 수정합니다. 제목, 메모, 마감일, 완료 상태를 변경할 수 있습니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"task_id": map[string]any{
+							"type":        "string",
+							"description": "수정할 태스크 ID",
+						},
+						"task_list_id": map[string]any{
+							"type":        "string",
+							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+						},
+						"title": map[string]any{
+							"type":        "string",
+							"description": "새 제목",
+						},
+						"notes": map[string]any{
+							"type":        "string",
+							"description": "새 메모",
+						},
+						"due": map[string]any{
+							"type":        "string",
+							"description": "새 마감일",
+						},
+						"status": map[string]any{
+							"type":        "string",
+							"description": "상태 변경 (needsAction: 미완료, completed: 완료)",
+						},
+					},
+					"required": []string{"task_id"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "delete_task",
+				Description: "Google Tasks 할 일을 삭제합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"task_id": map[string]any{
+							"type":        "string",
+							"description": "삭제할 태스크 ID",
+						},
+						"task_list_id": map[string]any{
+							"type":        "string",
+							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+						},
+					},
+					"required": []string{"task_id"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "list_tasks",
+				Description: "Google Tasks 할 일 목록을 조회합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"task_list_id": map[string]any{
+							"type":        "string",
+							"description": "태스크 리스트 ID (비워두면 기본 리스트)",
+						},
+						"max_results": map[string]any{
+							"type":        "number",
+							"description": "최대 결과 수 (기본값: 20)",
+						},
+					},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "list_task_lists",
+				Description: "Google Tasks 태스크 리스트 목록을 조회합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{},
+				},
+			},
+			// --- Gmail Tool ---
+			gemini.FunctionDeclaration{
+				Name:        "send_email",
+				Description: "이메일을 발송합니다. 업무 관련 이메일, 초대, 알림 등을 보낼 때 사용합니다.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"to": map[string]any{
+							"type":        "string",
+							"description": "수신자 이메일 주소 (쉼표로 여러 명 가능)",
+						},
+						"subject": map[string]any{
+							"type":        "string",
+							"description": "이메일 제목",
+						},
+						"body": map[string]any{
+							"type":        "string",
+							"description": "이메일 본문",
+						},
+						"cc": map[string]any{
+							"type":        "string",
+							"description": "참조(CC) 이메일 주소 (쉼표로 여러 명 가능)",
+						},
+					},
+					"required": []string{"to", "subject", "body"},
 				},
 			},
 		)
@@ -1041,6 +1327,221 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return nil, err
 		}
 		return map[string]any{"url": url, "file_id": fileID}, nil
+
+	// --- Calendar ---
+	case "create_calendar_event":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Calendar is not configured")
+		}
+		summary, _ := call.Args["summary"].(string)
+		startTime, _ := call.Args["start_time"].(string)
+		endTime, _ := call.Args["end_time"].(string)
+		calendarID, _ := call.Args["calendar_id"].(string)
+		description, _ := call.Args["description"].(string)
+		location, _ := call.Args["location"].(string)
+		attendeesStr, _ := call.Args["attendees"].(string)
+		if summary == "" {
+			return nil, fmt.Errorf("summary is required")
+		}
+		if startTime == "" || endTime == "" {
+			return nil, fmt.Errorf("start_time and end_time are required")
+		}
+		var attendees []string
+		if attendeesStr != "" {
+			for _, a := range strings.Split(attendeesStr, ",") {
+				if trimmed := strings.TrimSpace(a); trimmed != "" {
+					attendees = append(attendees, trimmed)
+				}
+			}
+		}
+		url, err := e.googleWriter.CreateEvent(ctx, calendarID, summary, description, location, startTime, endTime, attendees)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"url": url, "summary": summary}, nil
+
+	case "edit_calendar_event":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Calendar is not configured")
+		}
+		eventID, _ := call.Args["event_id"].(string)
+		calendarID, _ := call.Args["calendar_id"].(string)
+		summary, _ := call.Args["summary"].(string)
+		description, _ := call.Args["description"].(string)
+		location, _ := call.Args["location"].(string)
+		startTime, _ := call.Args["start_time"].(string)
+		endTime, _ := call.Args["end_time"].(string)
+		attendeesStr, _ := call.Args["attendees"].(string)
+		if eventID == "" {
+			return nil, fmt.Errorf("event_id is required")
+		}
+		var attendees []string
+		if attendeesStr != "" {
+			for _, a := range strings.Split(attendeesStr, ",") {
+				if trimmed := strings.TrimSpace(a); trimmed != "" {
+					attendees = append(attendees, trimmed)
+				}
+			}
+		}
+		url, err := e.googleWriter.EditEvent(ctx, calendarID, eventID, summary, description, location, startTime, endTime, attendees)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"url": url, "status": "updated"}, nil
+
+	case "delete_calendar_event":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Calendar is not configured")
+		}
+		eventID, _ := call.Args["event_id"].(string)
+		calendarID, _ := call.Args["calendar_id"].(string)
+		if eventID == "" {
+			return nil, fmt.Errorf("event_id is required")
+		}
+		if err := e.googleWriter.DeleteEvent(ctx, calendarID, eventID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "deleted", "event_id": eventID}, nil
+
+	case "list_calendar_events":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Calendar is not configured")
+		}
+		calendarID, _ := call.Args["calendar_id"].(string)
+		timeMin, _ := call.Args["time_min"].(string)
+		timeMax, _ := call.Args["time_max"].(string)
+		maxResults := 20
+		if v, ok := call.Args["max_results"].(float64); ok && v > 0 {
+			maxResults = int(v)
+		}
+		events, err := e.googleWriter.ListEvents(ctx, calendarID, timeMin, timeMax, maxResults)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"events": events, "count": len(events)}, nil
+
+	case "add_event_attendees":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Calendar is not configured")
+		}
+		eventID, _ := call.Args["event_id"].(string)
+		attendeesStr, _ := call.Args["attendees"].(string)
+		calendarID, _ := call.Args["calendar_id"].(string)
+		if eventID == "" || attendeesStr == "" {
+			return nil, fmt.Errorf("event_id and attendees are required")
+		}
+		var attendees []string
+		for _, a := range strings.Split(attendeesStr, ",") {
+			if trimmed := strings.TrimSpace(a); trimmed != "" {
+				attendees = append(attendees, trimmed)
+			}
+		}
+		if err := e.googleWriter.AddAttendees(ctx, calendarID, eventID, attendees); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "attendees_added", "event_id": eventID, "added": len(attendees)}, nil
+
+	case "list_calendars":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Calendar is not configured")
+		}
+		calendars, err := e.googleWriter.ListCalendars(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"calendars": calendars, "count": len(calendars)}, nil
+
+	// --- Tasks ---
+	case "create_task":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Tasks is not configured")
+		}
+		title, _ := call.Args["title"].(string)
+		taskListID, _ := call.Args["task_list_id"].(string)
+		notes, _ := call.Args["notes"].(string)
+		due, _ := call.Args["due"].(string)
+		if title == "" {
+			return nil, fmt.Errorf("title is required")
+		}
+		id, err := e.googleWriter.CreateTask(ctx, taskListID, title, notes, due)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"task_id": id, "title": title}, nil
+
+	case "edit_task":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Tasks is not configured")
+		}
+		taskID, _ := call.Args["task_id"].(string)
+		taskListID, _ := call.Args["task_list_id"].(string)
+		title, _ := call.Args["title"].(string)
+		notes, _ := call.Args["notes"].(string)
+		due, _ := call.Args["due"].(string)
+		status, _ := call.Args["status"].(string)
+		if taskID == "" {
+			return nil, fmt.Errorf("task_id is required")
+		}
+		if err := e.googleWriter.EditTask(ctx, taskListID, taskID, title, notes, due, status); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "updated", "task_id": taskID}, nil
+
+	case "delete_task":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Tasks is not configured")
+		}
+		taskID, _ := call.Args["task_id"].(string)
+		taskListID, _ := call.Args["task_list_id"].(string)
+		if taskID == "" {
+			return nil, fmt.Errorf("task_id is required")
+		}
+		if err := e.googleWriter.DeleteTask(ctx, taskListID, taskID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "deleted", "task_id": taskID}, nil
+
+	case "list_tasks":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Tasks is not configured")
+		}
+		taskListID, _ := call.Args["task_list_id"].(string)
+		maxResults := 20
+		if v, ok := call.Args["max_results"].(float64); ok && v > 0 {
+			maxResults = int(v)
+		}
+		tasksList, err := e.googleWriter.ListTasks(ctx, taskListID, maxResults)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"tasks": tasksList, "count": len(tasksList)}, nil
+
+	case "list_task_lists":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Google Tasks is not configured")
+		}
+		lists, err := e.googleWriter.ListTaskLists(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"task_lists": lists, "count": len(lists)}, nil
+
+	// --- Gmail ---
+	case "send_email":
+		if e.googleWriter == nil {
+			return nil, fmt.Errorf("Gmail is not configured")
+		}
+		to, _ := call.Args["to"].(string)
+		subject, _ := call.Args["subject"].(string)
+		body, _ := call.Args["body"].(string)
+		cc, _ := call.Args["cc"].(string)
+		if to == "" || subject == "" || body == "" {
+			return nil, fmt.Errorf("to, subject, and body are required")
+		}
+		if err := e.googleWriter.SendEmail(ctx, to, cc, subject, body); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "sent", "to": to, "subject": subject}, nil
 
 	case "create_notion_page":
 		if e.notionWriter == nil {
