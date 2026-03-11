@@ -16,6 +16,7 @@
 
 ## Features
 
+- **Slack bot as primary interface** — @mention or DM the bot in Slack to ask questions, create documents, manage spreadsheets, build presentations, and organize files — all through natural conversation. The Slack bot is the main way users interact with the knowledge engine
 - **Unified ingestion** — pulls content from Slack (messages, threads, files), Google Workspace (Docs, Sheets, Slides, Calendar, Drive files), and Notion (pages, databases) into one store
 - **Full-text search** — SQLite FTS5 index with relevance scoring and snippet extraction across all sources
 - **Markdown knowledge repo** — curated knowledge stored as structured markdown in a Git repository; the bot reads indexes hierarchically and fetches only relevant detail files

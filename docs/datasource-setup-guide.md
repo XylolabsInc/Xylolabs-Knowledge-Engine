@@ -864,7 +864,7 @@ NOTION_ENABLED=true
 
 # Internal Integration Token — from notion.so/my-integrations
 # Starts with ntn_ (newer) or secret_ (older)
-NOTION_API_KEY=ntn_AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQr
+NOTION_API_KEY=ntn_your-notion-api-key-here
 
 # How often to poll Notion for new or updated pages
 # Valid units: s (seconds), m (minutes), h (hours)
