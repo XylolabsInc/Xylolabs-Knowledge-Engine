@@ -13,11 +13,29 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hanpama/hwp"
 )
 
 // extractHWPX extracts plain text from a HWPX file (ZIP archive with XML content).
-// HWPX is the modern Korean word processor format based on KS X 6101.
+// Uses the native Go hanpama/hwp library first, with custom XML parser as fallback.
 func extractHWPX(data []byte) (string, error) {
+	// Try native Go parser first (hanpama/hwp).
+	var buf bytes.Buffer
+	r := bytes.NewReader(data)
+	if err := hwp.ReadHWPX(r, int64(len(data)), &buf); err == nil {
+		result := strings.TrimSpace(buf.String())
+		if result != "" {
+			return result, nil
+		}
+	}
+
+	// Fall back to custom XML parser.
+	return extractHWPXFallback(data)
+}
+
+// extractHWPXFallback parses HWPX ZIP+XML directly as a fallback.
+func extractHWPXFallback(data []byte) (string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return "", fmt.Errorf("hwpx: open zip: %w", err)
@@ -135,10 +153,24 @@ func extractHWPXSectionText(xmlData []byte) (string, error) {
 	return strings.TrimSpace(sb.String()), nil
 }
 
-// extractHWP extracts plain text from a legacy HWP 5.0 file using external Python tools.
-// HWP is an OLE2 binary format too complex for pure-Go parsing.
+// extractHWP extracts plain text from a legacy HWP 5.0 file.
+// Uses the native Go hanpama/hwp library first, with Python CLI fallback.
 func extractHWP(data []byte) (string, error) {
-	// Write data to a temp file with .hwp extension.
+	// Try native Go parser first (hanpama/hwp).
+	var buf bytes.Buffer
+	if err := hwp.ReadHWP(bytes.NewReader(data), &buf); err == nil {
+		result := strings.TrimSpace(buf.String())
+		if result != "" {
+			return result, nil
+		}
+	}
+
+	// Fall back to Python CLI tools.
+	return extractHWPPython(data)
+}
+
+// extractHWPPython extracts text from HWP using Python CLI tools as a fallback.
+func extractHWPPython(data []byte) (string, error) {
 	tmp, err := os.CreateTemp("", "xylolabs-kb-hwp-*.hwp")
 	if err != nil {
 		return "", fmt.Errorf("hwp: create temp file: %w", err)
@@ -169,19 +201,6 @@ func extractHWP(data []byte) (string, error) {
 	// Try Python one-liner with gethwp.
 	pyGethwp := fmt.Sprintf("import gethwp; print(gethwp.read_hwp(%q))", tmpName)
 	if out, err := runCommand(ctx, "python3", "-c", pyGethwp); err == nil {
-		result := strings.TrimSpace(out)
-		if result != "" {
-			return result, nil
-		}
-	}
-
-	// Try pyhwp direct API.
-	pyPyhwp := fmt.Sprintf(
-		"from pyhwp.hwp5.dataio import ParseError; from pyhwp.hwp5.filestructure import Hwp5File; "+
-			"import sys; f = Hwp5File(%q); [print(p.text) for p in f.bodytext.section(0).paragraphs()]",
-		tmpName,
-	)
-	if out, err := runCommand(ctx, "python3", "-c", pyPyhwp); err == nil {
 		result := strings.TrimSpace(out)
 		if result != "" {
 			return result, nil
