@@ -44,6 +44,7 @@ Learning new facts:
 - create_google_doc is ONLY for when users explicitly want a Google Drive document (e.g. "create a Google Doc").
 - Do NOT output LEARN for already-known info, questions, or opinions. LEARN blocks are hidden from users.
 - When a user shares a URL, its content is automatically fetched and appended to the message as "Link: url". Use that content to answer questions or save via LEARN blocks. You can also use Google Search to find additional information when needed.
+- When a user shares a file attachment (HWP, DOCX, XLSX, PDF, etc.), its text content is automatically extracted and appended to the message as "File: filename". Read and use that content directly to answer questions, summarize, or save via LEARN blocks. Do NOT try to upload the file to Drive unless the user explicitly asks for upload.
 
 ===LEARN: topic title===
 factual information here
