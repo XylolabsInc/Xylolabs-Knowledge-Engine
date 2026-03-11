@@ -65,14 +65,18 @@ const (
 
 func main() {
 	var (
-		inputPath     string
-		source        string
-		kbDir         string
-		apiKey        string
-		model         string
-		thinkingLevel string
-		maxDocs       int
-		dryRun        bool
+		inputPath        string
+		source           string
+		kbDir            string
+		apiKey           string
+		model            string
+		thinkingLevel    string
+		maxDocs          int
+		dryRun           bool
+		fetchPeople      bool
+		googleCredsFile  string
+		impersonateEmail string
+		domain           string
 	)
 
 	flag.StringVar(&inputPath, "input", "", "Path to raw documents JSON file (required)")
@@ -83,6 +87,10 @@ func main() {
 	flag.StringVar(&thinkingLevel, "thinking", "", "Thinking level: none, low, medium, high (default: high, or KB_GEN_THINKING env)")
 	flag.IntVar(&maxDocs, "max-docs", 0, "Max documents to process per batch (default: 50)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print what would be written without writing files")
+	flag.BoolVar(&fetchPeople, "fetch-people", false, "Fetch Google Workspace directory and generate person knowledge files")
+	flag.StringVar(&googleCredsFile, "google-creds", "", "Path to Google service account credentials JSON (or GOOGLE_CREDS_FILE env)")
+	flag.StringVar(&impersonateEmail, "impersonate", "", "Email to impersonate for Admin SDK (or GOOGLE_IMPERSONATE_EMAIL env)")
+	flag.StringVar(&domain, "domain", "", "Google Workspace domain (or GOOGLE_DOMAIN env, e.g. xylolabs.com)")
 	flag.Parse()
 
 	// Resolve defaults from env vars
@@ -104,8 +112,37 @@ func main() {
 	if maxDocs == 0 {
 		maxDocs = defaultMaxDocs
 	}
+	if googleCredsFile == "" {
+		googleCredsFile = os.Getenv("GOOGLE_CREDS_FILE")
+	}
+	if impersonateEmail == "" {
+		impersonateEmail = os.Getenv("GOOGLE_IMPERSONATE_EMAIL")
+	}
+	if domain == "" {
+		domain = os.Getenv("GOOGLE_DOMAIN")
+	}
 
-	// Validate required flags
+	// Set up logger
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// People fetch mode — runs independently of normal document processing
+	if fetchPeople {
+		if googleCredsFile == "" || domain == "" {
+			fmt.Fprintf(os.Stderr, "Error: --google-creds and --domain are required for --fetch-people\n")
+			os.Exit(1)
+		}
+		if kbDir == "" {
+			fmt.Fprintf(os.Stderr, "Error: --kb-dir is required\n")
+			os.Exit(1)
+		}
+		if err := fetchAndWritePeople(googleCredsFile, impersonateEmail, domain, kbDir, dryRun, logger); err != nil {
+			logger.Error("failed to fetch people", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Validate required flags for normal document processing
 	if inputPath == "" || source == "" || kbDir == "" {
 		fmt.Fprintf(os.Stderr, "Usage: kb-gen --input raw.json --source slack --kb-dir /opt/knowledge [options]\n\n")
 		flag.PrintDefaults()
@@ -115,9 +152,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: Gemini API key required (--api-key or GEMINI_API_KEY env var)\n")
 		os.Exit(1)
 	}
-
-	// Set up logger
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	logger.Info("kb-gen starting",
 		"input", inputPath,

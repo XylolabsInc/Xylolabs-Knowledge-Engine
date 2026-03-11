@@ -136,6 +136,23 @@ func main() {
 				}
 			}()
 			logger.Info("google connector enabled")
+
+			// Verify calendar write access for default calendar
+			if cfg.GoogleDefaultCalendarID != "" {
+				role, err := googleConn.VerifyCalendarAccess(cfg.GoogleDefaultCalendarID)
+				if err != nil {
+					logger.Warn("cannot verify calendar access", "calendar_id", cfg.GoogleDefaultCalendarID, "error", err)
+				} else {
+					logger.Info("default calendar access", "calendar_id", cfg.GoogleDefaultCalendarID, "access_role", role)
+					if role != "writer" && role != "owner" {
+						logger.Warn("impersonated user lacks write access to default calendar — event creation will fail. Grant 'Make changes to events' permission to the impersonated user.",
+							"calendar_id", cfg.GoogleDefaultCalendarID,
+							"access_role", role,
+							"impersonate_email", cfg.GoogleImpersonateEmail,
+						)
+					}
+				}
+			}
 		}
 	} else {
 		logger.Info("google connector disabled (missing credentials)")

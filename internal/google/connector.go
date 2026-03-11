@@ -338,6 +338,16 @@ func (c *Connector) buildImpersonatedHTTPClient(ctx context.Context, credBytes [
 	return jwtConfig.Client(ctx), nil
 }
 
+// VerifyCalendarAccess checks and logs the access role for a given calendar.
+// Returns the access role string ("reader", "writer", "owner", etc.) or error.
+func (c *Connector) VerifyCalendarAccess(calendarID string) (string, error) {
+	entry, err := c.calendarService.CalendarList.Get(calendarID).Do()
+	if err != nil {
+		return "", fmt.Errorf("get calendar %s: %w", calendarID, err)
+	}
+	return entry.AccessRole, nil
+}
+
 func (c *Connector) loadToken() (*oauth2.Token, error) {
 	data, err := os.ReadFile(c.tokenFile)
 	if err != nil {

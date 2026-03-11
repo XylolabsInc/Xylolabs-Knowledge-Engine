@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"regexp"
 	"strings"
 	"time"
@@ -932,7 +933,7 @@ func (w *GoogleWriter) CreateEvent(ctx context.Context, calendarID, summary, des
 	}
 	created, err := w.calendarService.Events.Insert(calendarID, event).Context(ctx).SendUpdates("all").Do()
 	if err != nil {
-		return "", fmt.Errorf("create calendar event: %w", err)
+		return "", fmt.Errorf("create calendar event on %s: %w", calendarID, err)
 	}
 	w.logger.Info("created calendar event", "summary", summary, "id", created.Id, "url", created.HtmlLink)
 	return created.HtmlLink, nil
@@ -979,7 +980,7 @@ func (w *GoogleWriter) EditEvent(ctx context.Context, calendarID, eventID, summa
 	}
 	updated, err := w.calendarService.Events.Update(calendarID, eventID, existing).Context(ctx).SendUpdates("all").Do()
 	if err != nil {
-		return "", fmt.Errorf("update calendar event: %w", err)
+		return "", fmt.Errorf("update calendar event on %s: %w", calendarID, err)
 	}
 	w.logger.Info("updated calendar event", "id", eventID, "url", updated.HtmlLink)
 	return updated.HtmlLink, nil
@@ -991,7 +992,7 @@ func (w *GoogleWriter) DeleteEvent(ctx context.Context, calendarID, eventID stri
 		calendarID = "primary"
 	}
 	if err := w.calendarService.Events.Delete(calendarID, eventID).Context(ctx).SendUpdates("all").Do(); err != nil {
-		return fmt.Errorf("delete calendar event: %w", err)
+		return fmt.Errorf("delete calendar event on %s: %w", calendarID, err)
 	}
 	w.logger.Info("deleted calendar event", "id", eventID)
 	return nil
@@ -1017,7 +1018,7 @@ func (w *GoogleWriter) ListEvents(ctx context.Context, calendarID, timeMin, time
 	}
 	events, err := req.Do()
 	if err != nil {
-		return nil, fmt.Errorf("list calendar events: %w", err)
+		return nil, fmt.Errorf("list calendar events on %s: %w", calendarID, err)
 	}
 	var results []map[string]any
 	for _, ev := range events.Items {
@@ -1062,7 +1063,7 @@ func (w *GoogleWriter) AddAttendees(ctx context.Context, calendarID, eventID str
 		existing.Attendees = append(existing.Attendees, &calendar.EventAttendee{Email: email})
 	}
 	if _, err := w.calendarService.Events.Update(calendarID, eventID, existing).Context(ctx).SendUpdates("all").Do(); err != nil {
-		return fmt.Errorf("add attendees: %w", err)
+		return fmt.Errorf("add attendees on %s: %w", calendarID, err)
 	}
 	w.logger.Info("added attendees to event", "id", eventID, "added", len(attendees))
 	return nil
@@ -1200,27 +1201,48 @@ func (w *GoogleWriter) ListTaskLists(ctx context.Context) ([]map[string]any, err
 }
 
 // SendEmail sends an email via Gmail API.
+// Only internal domain recipients are allowed (domain derived from senderEmail).
 func (w *GoogleWriter) SendEmail(ctx context.Context, to, cc, subject, body string) error {
-	header := make(map[string]string)
+	// Extract allowed domain from sender email
+	allowedDomain := ""
+	if w.senderEmail != "" {
+		if idx := strings.LastIndex(w.senderEmail, "@"); idx >= 0 {
+			allowedDomain = strings.ToLower(w.senderEmail[idx+1:])
+		}
+	}
+
+	// Validate all recipients are internal
+	if allowedDomain != "" {
+		allRecipients := parseEmailAddresses(to)
+		if cc != "" {
+			allRecipients = append(allRecipients, parseEmailAddresses(cc)...)
+		}
+		for _, addr := range allRecipients {
+			idx := strings.LastIndex(addr, "@")
+			if idx < 0 || strings.ToLower(addr[idx+1:]) != allowedDomain {
+				return fmt.Errorf("cannot send email to external address %q — only @%s recipients are allowed", addr, allowedDomain)
+			}
+		}
+	}
+
 	from := w.senderEmail
 	if from == "" {
 		from = "me"
 	}
-	header["From"] = from
-	header["To"] = to
-	if cc != "" {
-		header["Cc"] = cc
-	}
-	header["Subject"] = subject
-	header["MIME-Version"] = "1.0"
-	header["Content-Type"] = "text/plain; charset=\"utf-8\""
 
+	// Build MIME message with proper RFC 2047 encoding for non-ASCII headers
 	var msg strings.Builder
-	for k, v := range header {
-		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	msg.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	if cc != "" {
+		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", cc))
 	}
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.BEncoding.Encode("utf-8", subject)))
+	msg.WriteString("MIME-Version: 1.0\r\n")
+	msg.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
 	msg.WriteString("\r\n")
-	msg.WriteString(body)
+	msg.WriteString(base64.StdEncoding.EncodeToString([]byte(body)))
 
 	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
 	gmailMsg := &gmail.Message{Raw: raw}
@@ -1230,4 +1252,15 @@ func (w *GoogleWriter) SendEmail(ctx context.Context, to, cc, subject, body stri
 	}
 	w.logger.Info("sent email", "to", to, "subject", subject)
 	return nil
+}
+
+// parseEmailAddresses splits a comma-separated list of email addresses and trims whitespace.
+func parseEmailAddresses(s string) []string {
+	var addrs []string
+	for _, a := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(a); trimmed != "" {
+			addrs = append(addrs, trimmed)
+		}
+	}
+	return addrs
 }

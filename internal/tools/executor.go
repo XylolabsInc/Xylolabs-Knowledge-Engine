@@ -543,7 +543,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "Calendar ID (defaults to primary calendar if empty)",
+							"description": "Calendar ID (uses the team shared calendar by default — only specify to override)",
 						},
 						"description": map[string]any{
 							"type":        "string",
@@ -573,7 +573,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "Calendar ID (defaults to primary)",
+							"description": "Calendar ID (uses the team shared calendar by default — only specify to override)",
 						},
 						"summary": map[string]any{
 							"type":        "string",
@@ -615,7 +615,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "Calendar ID (defaults to primary)",
+							"description": "Calendar ID (uses the team shared calendar by default — only specify to override)",
 						},
 					},
 					"required": []string{"event_id"},
@@ -629,7 +629,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 					"properties": map[string]any{
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "Calendar ID (defaults to primary)",
+							"description": "Calendar ID (uses the team shared calendar by default — only specify to override)",
 						},
 						"time_min": map[string]any{
 							"type":        "string",
@@ -662,7 +662,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 						"calendar_id": map[string]any{
 							"type":        "string",
-							"description": "Calendar ID (defaults to primary)",
+							"description": "Calendar ID (uses the team shared calendar by default — only specify to override)",
 						},
 					},
 					"required": []string{"event_id", "attendees"},
@@ -783,7 +783,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 			// --- Gmail Tool ---
 			gemini.FunctionDeclaration{
 				Name:        "send_email",
-				Description: "Send an email. Use for work-related emails, invitations, and notifications.",
+				Description: "Send an email to internal team members only (@xylolabs.com). External addresses are blocked. Use for work-related emails, invitations, and notifications.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{

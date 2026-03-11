@@ -285,6 +285,37 @@ main() {
         fi
     done
 
+    # --- People Directory ---
+    log "Generating people knowledge from Google Workspace directory..."
+    local kb_gen_bin=""
+    for candidate in \
+        "${PROJECT_DIR:-}/bin/kb-gen" \
+        "${REMOTE_DIR:-/opt/xylolabs-kb}/bin/kb-gen"; do
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            kb_gen_bin="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "${kb_gen_bin:-}" ]; then
+        log "WARNING: kb-gen binary not found, skipping people generation"
+    elif [ -z "${GOOGLE_CREDS_FILE:-}" ]; then
+        log "WARNING: GOOGLE_CREDS_FILE not set, skipping people generation"
+    else
+        if "$kb_gen_bin" \
+            --fetch-people \
+            --google-creds "$GOOGLE_CREDS_FILE" \
+            --impersonate "${GOOGLE_IMPERSONATE_EMAIL:-}" \
+            --domain "${GOOGLE_DOMAIN:-xylolabs.com}" \
+            --kb-dir "$KB_REPO_DIR" \
+            ${DRY_RUN:+--dry-run} 2>&1; then
+            log "People knowledge generation complete"
+            any_processed=true
+        else
+            log "WARNING: People knowledge generation failed"
+        fi
+    fi
+
     if [ "$any_processed" = true ]; then
         git_commit_push
     else
