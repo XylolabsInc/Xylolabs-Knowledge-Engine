@@ -171,10 +171,6 @@ notify_slack() {
 
     local channel_name="${DEPLOY_NOTIFY_CHANNEL:-자일로랩스-정상영업합니다}"
 
-    # Get recent commits for the changelog
-    local changelog
-    changelog=$(cd "$PROJECT_DIR" && git log --oneline -10 --no-decorate 2>/dev/null || echo "(no commits)")
-
     # Use python3 for all JSON/Slack work to avoid shell escaping issues
     local tmpscript
     tmpscript=$(mktemp /tmp/deploy-notify-XXXXXX.py)
@@ -183,8 +179,6 @@ import json, sys, urllib.request, os
 
 token = os.environ["SLACK_TOKEN"]
 channel_name = os.environ["SLACK_CHANNEL"]
-server = os.environ["DEPLOY_SERVER"]
-changelog = os.environ["DEPLOY_CHANGELOG"]
 deploy_time = os.environ["DEPLOY_TIME"]
 
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -213,24 +207,8 @@ if not channel_id:
     print(f"Channel '{channel_name}' not found", file=sys.stderr)
     sys.exit(0)  # non-fatal
 
-# Format commits as a cleaner list
-lines = changelog.strip().split("\n")
-formatted = []
-for line in lines:
-    # Remove commit hash prefix, keep gitmoji + message
-    parts = line.split(" ", 1)
-    if len(parts) == 2:
-        formatted.append(f"• {parts[1]}")
-    else:
-        formatted.append(f"• {line}")
-commit_list = "\n".join(formatted[:10])
-
-# Build message
-msg = (
-    f":rocket: *Xylolabs Knowledge Engine 배포 완료*\n"
-    f"• 시간: {deploy_time}\n\n"
-    f"*최근 변경사항:*\n{commit_list}"
-)
+# Build message (minimal — detailed changelog is posted separately in Korean)
+msg = f":rocket: *Xylolabs Knowledge Engine* 배포 완료 ({deploy_time})"
 
 payload = json.dumps({"channel": channel_id, "text": msg, "unfurl_links": False}).encode()
 req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=payload, headers=headers, method="POST")
@@ -245,8 +223,6 @@ PYEOF
 
     SLACK_TOKEN="$token" \
     SLACK_CHANNEL="$channel_name" \
-    DEPLOY_SERVER="$SERVER_HOST" \
-    DEPLOY_CHANGELOG="$changelog" \
     DEPLOY_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')" \
     python3 "$tmpscript" && log "Slack notification sent" || log "WARNING: Slack notification failed"
 
