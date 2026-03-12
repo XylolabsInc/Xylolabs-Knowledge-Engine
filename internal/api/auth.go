@@ -13,7 +13,7 @@ import (
 
 const (
 	sessionCookieName = "xke_session"
-	sessionTTL        = 24 * time.Hour
+	sessionTTL        = 14 * 24 * time.Hour // 2 weeks
 	cleanupInterval   = 15 * time.Minute
 )
 
