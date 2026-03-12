@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -182,6 +183,12 @@ func (am *authMiddleware) handleAuthCheck(w http.ResponseWriter, r *http.Request
 func (am *authMiddleware) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !am.enabled {
+			next(w, r)
+			return
+		}
+		// Allow localhost access without auth (internal scripts)
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if host == "127.0.0.1" || host == "::1" {
 			next(w, r)
 			return
 		}

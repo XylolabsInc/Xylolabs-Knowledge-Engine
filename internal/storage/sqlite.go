@@ -284,7 +284,7 @@ func (s *SQLiteStore) ListDocuments(query kb.ListDocumentsQuery) (*kb.ListDocume
 	}
 	defer rows.Close()
 
-	var docs []kb.Document
+	docs := make([]kb.Document, 0)
 	for rows.Next() {
 		doc, err := scanDocument(rows)
 		if err != nil {
