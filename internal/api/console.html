@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Xylolabs Knowledge Engine</title>
 <style>
 :root {
@@ -47,7 +47,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); line
 .logout-btn { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; color: var(--text-secondary); border: none; background: none; width: 100%; text-align: left; font-family: var(--font); transition: all var(--transition); }
 .logout-btn:hover { background: var(--danger-light); color: var(--danger); }
 .main { margin-left: var(--sidebar-width); flex: 1; padding: 32px; min-width: 0; }
-.mobile-toggle { display: none; position: fixed; top: 12px; left: 12px; z-index: 200; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; font-size: 1.25rem; box-shadow: var(--shadow); }
+.mobile-toggle { display: none; position: fixed; top: 10px; left: 10px; z-index: 999; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 9px; cursor: pointer; font-size: 1.125rem; line-height: 1; box-shadow: var(--shadow); }
 
 .tab-content { display: none; }
 .tab-content.active { display: block; }
@@ -118,17 +118,21 @@ tr:hover td { background: var(--bg-secondary); }
 .source-error { margin-top: 12px; padding: 10px 12px; background: var(--danger-light); color: var(--danger); border-radius: var(--radius-sm); font-size: 0.8125rem; word-break: break-word; }
 .sync-feedback { font-size: 0.8125rem; color: var(--success); font-weight: 500; margin-top: 8px; min-height: 1.2em; }
 
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 500; backdrop-filter: blur(4px); }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 500; backdrop-filter: blur(4px); overflow: hidden; }
 .modal-overlay.hidden { display: none; }
-.modal { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow-lg); width: 100%; max-width: 700px; max-height: 80vh; overflow-y: auto; padding: 28px; }
+.modal { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow-lg); width: 100%; max-width: 700px; max-height: 80vh; overflow-y: auto; overflow-x: hidden; padding: 28px; word-wrap: break-word; overflow-wrap: break-word; }
 .modal-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
-.modal-header h3 { font-size: 1.125rem; font-weight: 700; flex: 1; margin-right: 16px; word-break: break-word; }
+.modal-header h3 { font-size: 1.125rem; font-weight: 700; flex: 1; margin-right: 16px; word-break: break-word; overflow-wrap: break-word; }
 .modal-close { background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted); padding: 4px 8px; border-radius: var(--radius-sm); flex-shrink: 0; }
 .modal-close:hover { background: var(--bg-secondary); color: var(--text); }
 .modal-field { margin-bottom: 14px; }
 .modal-field-label { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; margin-bottom: 2px; }
-.modal-field-value { font-size: 0.875rem; word-break: break-word; }
-.modal-content-body { background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 16px; font-size: 0.8125rem; line-height: 1.7; white-space: pre-line; word-break: break-word; max-height: 500px; overflow-y: auto; }
+.modal-field-value { font-size: 0.875rem; word-break: break-word; overflow-wrap: break-word; }
+.modal-field-value pre { white-space: pre-wrap; word-break: break-all; overflow-x: hidden; }
+.modal-field-value code { word-break: break-all; }
+.modal-content-body { background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 16px; font-size: 0.8125rem; line-height: 1.7; white-space: pre-line; word-break: break-word; overflow-wrap: break-word; max-height: 500px; overflow-y: auto; overflow-x: hidden; }
+.modal-content-body pre { white-space: pre-wrap; word-break: break-all; }
+.modal-content-body code { word-break: break-all; }
 
 .empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
 .empty-state-icon { font-size: 2.5rem; margin-bottom: 12px; }
@@ -137,10 +141,10 @@ tr:hover td { background: var(--bg-secondary); }
 tr.clickable { cursor: pointer; }
 
 @media (max-width: 768px) {
-  .sidebar { transform: translateX(-100%); }
-  .sidebar.open { transform: translateX(0); }
+  .sidebar { transform: translateX(-100%); box-shadow: none; }
+  .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
   .mobile-toggle { display: block; }
-  .main { margin-left: 0; padding: 16px; padding-top: 56px; }
+  .main { margin-left: 0; padding: 16px; padding-top: 52px; }
   .stats-grid { grid-template-columns: 1fr; }
   .sources-grid { grid-template-columns: 1fr; }
   .filter-bar { flex-direction: column; }
@@ -244,12 +248,12 @@ tr.clickable { cursor: pointer; }
 <!-- Login Overlay -->
 <div id="loginOverlay" class="login-overlay hidden">
   <div class="login-card">
-    <h2>Xylolabs Knowledge Engine</h2>
-    <div class="subtitle">Sign in to continue</div>
-    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
-    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+    <h2 data-i18n="loginTitle">Admin Login</h2>
+    <div class="subtitle" data-i18n="loginSubtitle">Enter your credentials to continue</div>
+    <input type="text" id="loginUsername" placeholder="Username" data-i18n="username" autocomplete="username">
+    <input type="password" id="loginPassword" placeholder="Password" data-i18n="password" autocomplete="current-password">
     <div id="loginError" class="login-error"></div>
-    <button onclick="doLogin()">Sign In</button>
+    <button onclick="doLogin()" data-i18n="login">Sign In</button>
   </div>
 </div>
 
@@ -272,39 +276,44 @@ tr.clickable { cursor: pointer; }
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <h1>Xylolabs Knowledge Engine</h1>
-      <div class="tagline">Admin Console</div>
+      <h1 data-i18n="title">Xylolabs Knowledge Engine</h1>
+      <div class="tagline" data-i18n="subtitle">Admin Console</div>
     </div>
     <nav class="sidebar-nav">
-      <button class="nav-item active" onclick="showTab('dashboard')" data-tab="dashboard">
+      <button class="nav-item active" onclick="showTab('dashboard')" data-tab="dashboard" data-i18n="dashboard">
         <span class="icon">&#9635;</span> Dashboard
       </button>
-      <button class="nav-item" onclick="showTab('documents')" data-tab="documents">
+      <button class="nav-item" onclick="showTab('documents')" data-tab="documents" data-i18n="documents">
         <span class="icon">&#9776;</span> Documents
       </button>
-      <button class="nav-item" onclick="showTab('search')" data-tab="search">
+      <button class="nav-item" onclick="showTab('search')" data-tab="search" data-i18n="search">
         <span class="icon">&#9906;</span> Search
       </button>
-      <button class="nav-item" onclick="showTab('sources')" data-tab="sources">
+      <button class="nav-item" onclick="showTab('sources')" data-tab="sources" data-i18n="sources">
         <span class="icon">&#8635;</span> Sources
       </button>
-      <button class="nav-item" onclick="showTab('jobs')" data-tab="jobs">
+      <button class="nav-item" onclick="showTab('jobs')" data-tab="jobs" data-i18n="jobs">
         <span class="icon">&#9675;</span> Jobs
       </button>
-      <button class="nav-item" onclick="showTab('index')" data-tab="index">
+      <button class="nav-item" onclick="showTab('index')" data-tab="index" data-i18n="index">
         <span class="icon">&#8801;</span> Index
       </button>
-      <button class="nav-item" onclick="showTab('kb')" data-tab="kb">
+      <button class="nav-item" onclick="showTab('kb')" data-tab="kb" data-i18n="kb">
         <span class="icon">&#9674;</span> KB
       </button>
-      <button class="nav-item" onclick="showTab('graph')" data-tab="graph">
+      <button class="nav-item" onclick="showTab('graph')" data-tab="graph" data-i18n="graph">
         <span class="icon">&#9678;</span> Graph
       </button>
     </nav>
     <div class="sidebar-footer" id="logoutSection" style="display:none">
-      <button class="logout-btn" onclick="doLogout()">
+      <button class="logout-btn" onclick="doLogout()" data-i18n="logout">
         <span class="icon">&#10140;</span> Logout
       </button>
+    </div>
+    <div class="sidebar-footer">
+      <div id="langToggle" style="text-align:center;padding:8px;font-size:0.8125rem;cursor:pointer;user-select:none" onclick="setLanguage(currentLang==='en'?'ko':'en')">
+        <span style="font-weight:700;color:var(--primary)">EN</span> <span style="color:var(--text-muted)">|</span> <span style="color:var(--text-muted)">KO</span>
+      </div>
     </div>
   </aside>
 
@@ -313,32 +322,32 @@ tr.clickable { cursor: pointer; }
 
     <!-- Dashboard Tab -->
     <div id="tab-dashboard" class="tab-content active">
-      <h2 class="tab-title">Dashboard</h2>
+      <h2 class="tab-title" data-i18n="dashboard">Dashboard</h2>
       <div class="stats-grid" id="statsGrid">
         <div class="card">
-          <div class="card-title">Total Documents</div>
+          <div class="card-title" data-i18n="totalDocs">Total Documents</div>
           <div class="card-value" id="statDocs">-</div>
         </div>
         <div class="card">
-          <div class="card-title">Total Attachments</div>
+          <div class="card-title" data-i18n="totalAttachments">Total Attachments</div>
           <div class="card-value" id="statAttach">-</div>
         </div>
         <div class="card">
-          <div class="card-title">Attachment Size</div>
+          <div class="card-title" data-i18n="attachmentSize">Attachment Size</div>
           <div class="card-value" id="statSize">-</div>
         </div>
       </div>
 
       <div class="section-card">
-        <div class="section-title">Documents by Source</div>
+        <div class="section-title" data-i18n="docsBySource">Documents by Source</div>
         <div class="bar-chart" id="sourceChart"></div>
       </div>
 
       <div class="section-card">
-        <div class="section-title">Last Sync Times</div>
+        <div class="section-title" data-i18n="lastSyncTimes">Last Sync Times</div>
         <table>
           <thead>
-            <tr><th>Source</th><th>Last Sync</th><th>Status</th></tr>
+            <tr><th data-i18n="source">Source</th><th data-i18n="lastSync">Last Sync</th><th data-i18n="status">Status</th></tr>
           </thead>
           <tbody id="syncTable"></tbody>
         </table>
@@ -347,65 +356,65 @@ tr.clickable { cursor: pointer; }
 
     <!-- Documents Tab -->
     <div id="tab-documents" class="tab-content">
-      <h2 class="tab-title">Documents</h2>
+      <h2 class="tab-title" data-i18n="documents">Documents</h2>
       <div id="docBreadcrumb" class="breadcrumb"></div>
       <div id="docBrowser"></div>
       <div class="pagination" id="docPagination" style="display:none">
         <span id="docPaginationInfo"></span>
         <div class="pagination-buttons">
-          <button class="btn btn-outline" id="docPrev" onclick="docPagePrev()" disabled>Previous</button>
-          <button class="btn btn-outline" id="docNext" onclick="docPageNext()" disabled>Next</button>
+          <button class="btn btn-outline" id="docPrev" onclick="docPagePrev()" disabled data-i18n="previous">Previous</button>
+          <button class="btn btn-outline" id="docNext" onclick="docPageNext()" disabled data-i18n="next">Next</button>
         </div>
       </div>
     </div>
 
     <!-- Search Tab -->
     <div id="tab-search" class="tab-content">
-      <h2 class="tab-title">Search</h2>
+      <h2 class="tab-title" data-i18n="search">Search</h2>
       <div class="filter-bar">
-        <input type="text" id="searchQuery" placeholder="Search documents..." onkeydown="if(event.key==='Enter')doSearch()">
-        <button class="btn btn-primary" onclick="doSearch()">Search</button>
+        <input type="text" id="searchQuery" placeholder="Search documents..." data-i18n="searchPlaceholder" onkeydown="if(event.key==='Enter')doSearch()">
+        <button class="btn btn-primary" onclick="doSearch()" data-i18n="searchBtn">Search</button>
       </div>
       <div class="filter-bar" style="margin-top:-8px">
         <select id="searchSource">
-          <option value="">All Sources</option>
+          <option value="" data-i18n="allSources">All Sources</option>
           <option value="slack">Slack</option>
           <option value="google">Google</option>
           <option value="notion">Notion</option>
         </select>
-        <input type="text" id="searchChannel" placeholder="Channel" style="min-width:120px;flex:0 1 auto">
-        <input type="text" id="searchAuthor" placeholder="Author" style="min-width:120px;flex:0 1 auto">
+        <input type="text" id="searchChannel" placeholder="Channel" data-i18n="channel" style="min-width:120px;flex:0 1 auto">
+        <input type="text" id="searchAuthor" placeholder="Author" data-i18n="author" style="min-width:120px;flex:0 1 auto">
       </div>
       <div id="searchResults">
         <div class="empty-state">
           <div class="empty-state-icon">-</div>
-          <div class="empty-state-text">Enter a query to search documents</div>
+          <div class="empty-state-text" data-i18n="searchEmpty">Enter a query to search documents</div>
         </div>
       </div>
     </div>
 
     <!-- Sources Tab -->
     <div id="tab-sources" class="tab-content">
-      <h2 class="tab-title">Sources</h2>
+      <h2 class="tab-title" data-i18n="sources">Sources</h2>
       <div class="sources-grid" id="sourcesGrid">
-        <div class="loading">Loading sources...</div>
+        <div class="loading" data-i18n="loadingSources">Loading sources...</div>
       </div>
     </div>
 
     <!-- Jobs Tab -->
     <div id="tab-jobs" class="tab-content">
-      <h2 class="tab-title">Jobs</h2>
+      <h2 class="tab-title" data-i18n="jobs">Jobs</h2>
       <div id="jobsTableWrap">
-        <div class="loading">Loading jobs...</div>
+        <div class="loading" data-i18n="loadingJobs">Loading jobs...</div>
       </div>
     </div>
 
     <!-- Index Tab -->
     <div id="tab-index" class="tab-content">
-      <h2 class="tab-title">Index</h2>
+      <h2 class="tab-title" data-i18n="index">Index</h2>
       <div class="filter-bar">
         <select id="indexSource" onchange="loadIndex()">
-          <option value="">All Sources</option>
+          <option value="" data-i18n="allSources">All Sources</option>
           <option value="slack">Slack</option>
           <option value="google">Google</option>
           <option value="notion">Notion</option>
@@ -413,31 +422,31 @@ tr.clickable { cursor: pointer; }
         <span id="indexStats" style="font-size:0.8125rem;color:var(--text-secondary)"></span>
       </div>
       <div id="indexTree" class="index-tree">
-        <div class="loading">Loading index...</div>
+        <div class="loading" data-i18n="loadingIndex">Loading index...</div>
       </div>
     </div>
 
     <!-- KB Tab -->
     <div id="tab-kb" class="tab-content">
-      <h2 class="tab-title">Knowledge Base</h2>
+      <h2 class="tab-title" data-i18n="knowledgeBase">Knowledge Base</h2>
       <div id="kbBreadcrumb" class="breadcrumb"></div>
       <div id="kbContent" class="kb-content">
-        <div class="loading">Loading...</div>
+        <div class="loading" data-i18n="loading">Loading...</div>
       </div>
     </div>
 
     <!-- Graph Tab -->
     <div id="tab-graph" class="tab-content">
-      <h2 class="tab-title">Knowledge Graph</h2>
+      <h2 class="tab-title" data-i18n="knowledgeGraph">Knowledge Graph</h2>
       <div class="graph-controls">
         <select id="graphSource" onchange="loadGraph()">
-          <option value="">All Sources</option>
+          <option value="" data-i18n="allSources">All Sources</option>
           <option value="slack">Slack</option>
           <option value="google">Google</option>
           <option value="notion">Notion</option>
         </select>
         <label style="font-size:0.8125rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px">
-          <input type="checkbox" id="graphShowDocs" checked onchange="loadGraph()"> Show documents
+          <input type="checkbox" id="graphShowDocs" checked onchange="loadGraph()"> <span data-i18n="showDocs">Show documents</span>
         </label>
         <span id="graphStats" style="font-size:0.8125rem;color:var(--text-secondary)"></span>
       </div>
@@ -452,6 +461,179 @@ tr.clickable { cursor: pointer; }
 </div>
 
 <script>
+/* ---- Translations ---- */
+const translations = {
+  en: {
+    title: 'Xylolabs Knowledge Engine',
+    subtitle: 'Admin Console',
+    dashboard: 'Dashboard',
+    documents: 'Documents',
+    search: 'Search',
+    sources: 'Sources',
+    jobs: 'Jobs',
+    index: 'Index',
+    kb: 'KB',
+    graph: 'Graph',
+    logout: 'Logout',
+    login: 'Sign In',
+    loginTitle: 'Admin Login',
+    loginSubtitle: 'Enter your credentials to continue',
+    username: 'Username',
+    password: 'Password',
+    totalDocs: 'Total Documents',
+    totalAttachments: 'Total Attachments',
+    attachmentSize: 'Attachment Size',
+    docsBySource: 'Documents by Source',
+    lastSyncTimes: 'Last Sync Times',
+    source: 'Source',
+    lastSync: 'Last Sync',
+    status: 'Status',
+    searchPlaceholder: 'Search documents...',
+    searchBtn: 'Search',
+    allSources: 'All Sources',
+    channel: 'Channel',
+    author: 'Author',
+    searchEmpty: 'Enter a query to search documents',
+    loadingSources: 'Loading sources...',
+    loadingJobs: 'Loading jobs...',
+    loadingIndex: 'Loading index...',
+    loading: 'Loading...',
+    syncNow: 'Sync Now',
+    syncing: 'Syncing...',
+    noDocsFound: 'No documents found',
+    failedLoad: 'Failed to load',
+    previous: 'Previous',
+    next: 'Next',
+    root: 'Root',
+    showDocs: 'Show documents',
+    knowledgeGraph: 'Knowledge Graph',
+    knowledgeBase: 'Knowledge Base',
+    docs: 'docs',
+    channels: 'channels',
+    nodes: 'nodes',
+    edges: 'edges',
+    interval: 'Interval',
+    runs: 'Runs',
+    errors: 'Errors',
+    lastError: 'Last error',
+    type: 'Type',
+    message: 'Message',
+    schedule: 'Schedule',
+    nextRun: 'Next Run',
+    createdBy: 'Created By',
+    recurring: 'recurring',
+    once: 'once',
+    noJobs: 'No scheduled jobs',
+  },
+  ko: {
+    title: '\uc790\uc77c\ub85c\ub7a9\uc2a4 \uc9c0\uc2dd \uc5d4\uc9c4',
+    subtitle: '\uad00\ub9ac \ucf58\uc194',
+    dashboard: '\ub300\uc2dc\ubcf4\ub4dc',
+    documents: '\ubb38\uc11c',
+    search: '\uac80\uc0c9',
+    sources: '\uc18c\uc2a4',
+    jobs: '\uc791\uc5c5',
+    index: '\uc778\ub371\uc2a4',
+    kb: 'KB',
+    graph: '\uadf8\ub798\ud504',
+    logout: '\ub85c\uadf8\uc544\uc6c3',
+    login: '\ub85c\uadf8\uc778',
+    loginTitle: '\uad00\ub9ac\uc790 \ub85c\uadf8\uc778',
+    loginSubtitle: '\uacc4\uc18d\ud558\ub824\uba74 \uc790\uaca9 \uc99d\uba85\uc744 \uc785\ub825\ud558\uc138\uc694',
+    username: '\uc0ac\uc6a9\uc790\uba85',
+    password: '\ube44\ubc00\ubc88\ud638',
+    totalDocs: '\ucd1d \ubb38\uc11c \uc218',
+    totalAttachments: '\ucd1d \ucca8\ubd80\ud30c\uc77c',
+    attachmentSize: '\ucca8\ubd80\ud30c\uc77c \ud06c\uae30',
+    docsBySource: '\uc18c\uc2a4\ubcc4 \ubb38\uc11c',
+    lastSyncTimes: '\ucd5c\uadfc \ub3d9\uae30\ud654 \uc2dc\uac04',
+    source: '\uc18c\uc2a4',
+    lastSync: '\ucd5c\uadfc \ub3d9\uae30\ud654',
+    status: '\uc0c1\ud0dc',
+    searchPlaceholder: '\ubb38\uc11c \uac80\uc0c9...',
+    searchBtn: '\uac80\uc0c9',
+    allSources: '\ubaa8\ub4e0 \uc18c\uc2a4',
+    channel: '\ucc44\ub110',
+    author: '\uc791\uc131\uc790',
+    searchEmpty: '\uac80\uc0c9\uc5b4\ub97c \uc785\ub825\ud558\uc138\uc694',
+    loadingSources: '\uc18c\uc2a4 \ub85c\ub529 \uc911...',
+    loadingJobs: '\uc791\uc5c5 \ub85c\ub529 \uc911...',
+    loadingIndex: '\uc778\ub371\uc2a4 \ub85c\ub529 \uc911...',
+    loading: '\ub85c\ub529 \uc911...',
+    syncNow: '\ub3d9\uae30\ud654',
+    syncing: '\ub3d9\uae30\ud654 \uc911...',
+    noDocsFound: '\ubb38\uc11c\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4',
+    failedLoad: '\ub85c\ub4dc \uc2e4\ud328',
+    previous: '\uc774\uc804',
+    next: '\ub2e4\uc74c',
+    root: '\ub8e8\ud2b8',
+    showDocs: '\ubb38\uc11c \ud45c\uc2dc',
+    knowledgeGraph: '\uc9c0\uc2dd \uadf8\ub798\ud504',
+    knowledgeBase: '\uc9c0\uc2dd \ubca0\uc774\uc2a4',
+    docs: '\ubb38\uc11c',
+    channels: '\ucc44\ub110',
+    nodes: '\ub178\ub4dc',
+    edges: '\uc5e3\uc9c0',
+    interval: '\uac04\uaca9',
+    runs: '\uc2e4\ud589',
+    errors: '\uc624\ub958',
+    lastError: '\ub9c8\uc9c0\ub9c9 \uc624\ub958',
+    type: '\uc720\ud615',
+    message: '\uba54\uc2dc\uc9c0',
+    schedule: '\uc2a4\ucf00\uc904',
+    nextRun: '\ub2e4\uc74c \uc2e4\ud589',
+    createdBy: '\uc0dd\uc131\uc790',
+    recurring: '\ubc18\ubcf5',
+    once: '1\ud68c',
+    noJobs: '\uc608\uc57d\ub41c \uc791\uc5c5 \uc5c6\uc74c',
+  }
+};
+
+let currentLang = localStorage.getItem('xke_lang') || ((navigator.language || 'en').startsWith('ko') ? 'ko' : 'en');
+
+function t(key) {
+  return (translations[currentLang] || translations.en)[key] || translations.en[key] || key;
+}
+
+function setLanguage(lang) {
+  currentLang = lang;
+  localStorage.setItem('xke_lang', lang);
+  updateStaticTranslations();
+  // Re-render current tab to update dynamic content
+  showTab(currentTab);
+}
+
+function updateStaticTranslations() {
+  // Update sidebar nav items
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    const key = el.getAttribute('data-i18n');
+    if (el.tagName === 'INPUT') {
+      el.placeholder = t(key);
+    } else if (el.tagName === 'OPTION') {
+      el.textContent = t(key);
+    } else {
+      // For nav buttons, preserve the icon span
+      const icon = el.querySelector('.icon');
+      if (icon) {
+        el.innerHTML = '';
+        el.appendChild(icon);
+        el.appendChild(document.createTextNode(' ' + t(key)));
+      } else {
+        el.textContent = t(key);
+      }
+    }
+  });
+  // Update language toggle highlight
+  var langToggle = document.getElementById('langToggle');
+  if (langToggle) {
+    langToggle.innerHTML = '<span style="' + (currentLang === 'en' ? 'font-weight:700;color:var(--primary)' : 'color:var(--text-muted)') + '">EN</span>'
+      + ' <span style="color:var(--text-muted)">|</span> '
+      + '<span style="' + (currentLang === 'ko' ? 'font-weight:700;color:var(--primary)' : 'color:var(--text-muted)') + '">KO</span>';
+  }
+  // Update page title
+  document.title = t('title');
+}
+
 /* ---- State ---- */
 let authRequired = false;
 let currentTab = 'dashboard';
@@ -690,7 +872,7 @@ function navigateDocs(path) {
 
 function renderBreadcrumb() {
   const el = document.getElementById('docBreadcrumb');
-  let html = '<a href="#" onclick="event.preventDefault();navigateDocs([])">Sources</a>';
+  let html = '<a href="#" onclick="event.preventDefault();navigateDocs([])">' + t('sources') + '</a>';
   for (let i = 0; i < docBrowsePath.length; i++) {
     html += '<span class="sep">/</span>';
     if (i < docBrowsePath.length - 1) {
@@ -711,12 +893,12 @@ async function renderDocBrowser() {
 
   if (docBrowsePath.length === 0) {
     // Root: show sources as folders
-    browser.innerHTML = '<div class="loading">Loading...</div>';
+    browser.innerHTML = '<div class="loading">' + t('loading') + '</div>';
     try {
       const data = await api('GET', '/api/v1/stats');
       const bySource = data.documents_by_source || {};
       if (Object.keys(bySource).length === 0) {
-        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents yet</div></div>';
+        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('noDocsFound') + '</div></div>';
         return;
       }
       let html = '<div class="dir-grid">';
@@ -725,18 +907,18 @@ async function renderDocBrowser() {
           + '<div class="dir-icon" style="color:' + sourceColor(src) + '">&#9632;</div>'
           + '<div>'
           + '<div class="dir-label" style="text-transform:capitalize">' + escapeHtml(src) + '</div>'
-          + '<div class="dir-count">' + count + ' documents</div>'
+          + '<div class="dir-count">' + count + ' ' + t('docs') + '</div>'
           + '</div></div>';
       }
       html += '</div>';
       browser.innerHTML = html;
     } catch (e) {
-      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load sources</div></div>';
+      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
     }
   } else if (docBrowsePath.length === 1) {
     // Source level: show channels as folders
     const source = docBrowsePath[0];
-    browser.innerHTML = '<div class="loading">Loading...</div>';
+    browser.innerHTML = '<div class="loading">' + t('loading') + '</div>';
     try {
       const data = await api('GET', '/api/v1/documents?source=' + encodeURIComponent(source) + '&limit=1000');
       const docs = data.documents || [];
@@ -751,7 +933,7 @@ async function renderDocBrowser() {
 
       const sorted = Object.entries(channels).sort(function(a, b) { return b[1] - a[1]; });
       if (sorted.length === 0) {
-        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents in this source</div></div>';
+        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('noDocsFound') + '</div></div>';
         return;
       }
 
@@ -761,20 +943,20 @@ async function renderDocBrowser() {
           + '<div class="dir-icon">&#9783;</div>'
           + '<div>'
           + '<div class="dir-label">' + escapeHtml(ch) + '</div>'
-          + '<div class="dir-count">' + count + ' documents</div>'
+          + '<div class="dir-count">' + count + ' ' + t('docs') + '</div>'
           + '</div></div>';
       }
       html += '</div>';
       browser.innerHTML = html;
     } catch (e) {
-      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load channels</div></div>';
+      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
     }
   } else if (docBrowsePath.length === 2) {
     // Channel level: show documents as list
     const source = docBrowsePath[0];
     const channel = docBrowsePath[1];
     const limit = 50;
-    browser.innerHTML = '<div class="loading">Loading...</div>';
+    browser.innerHTML = '<div class="loading">' + t('loading') + '</div>';
     try {
       const data = await api('GET', '/api/v1/documents?source=' + encodeURIComponent(source) + '&limit=1000');
       const allDocs = data.documents || [];
@@ -791,7 +973,7 @@ async function renderDocBrowser() {
       docTotal = filtered.length;
 
       if (pageDocs.length === 0) {
-        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents in this channel</div></div>';
+        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('noDocsFound') + '</div></div>';
         return;
       }
 
@@ -803,7 +985,7 @@ async function renderDocBrowser() {
       html += '<span style="color:var(--text-muted)">&#8594;</span>';
       html += '<span style="padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg-tertiary);font-weight:500">' + escapeHtml(channel) + '</span>';
       html += '<span style="color:var(--text-muted)">&#8594;</span>';
-      html += '<span style="color:var(--text-secondary)">' + filtered.length + ' documents</span>';
+      html += '<span style="color:var(--text-secondary)">' + filtered.length + ' ' + t('docs') + '</span>';
       html += '</div>';
 
       // For Slack, show thread breakdown
@@ -839,7 +1021,7 @@ async function renderDocBrowser() {
         document.getElementById('docNext').disabled = docPageOffset + limit >= filtered.length;
       }
     } catch (e) {
-      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load documents</div></div>';
+      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
     }
   }
 }
@@ -879,9 +1061,9 @@ async function showDocument(id) {
     const hasPrev = currentDocIndex > 0;
     const hasNext = currentDocIndex >= 0 && currentDocIndex < docList.length - 1;
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border-light)">';
-    html += `<button class="btn btn-outline" onclick="navDoc(-1)" ${hasPrev ? '' : 'disabled'}>&#8592; Previous</button>`;
+    html += `<button class="btn btn-outline" onclick="navDoc(-1)" ${hasPrev ? '' : 'disabled'}>&#8592; ${t('previous')}</button>`;
     html += `<span style="font-size:0.8125rem;color:var(--text-muted)">${currentDocIndex >= 0 ? (currentDocIndex + 1) + ' / ' + docList.length : ''}</span>`;
-    html += `<button class="btn btn-outline" onclick="navDoc(1)" ${hasNext ? '' : 'disabled'}>Next &#8594;</button>`;
+    html += `<button class="btn btn-outline" onclick="navDoc(1)" ${hasNext ? '' : 'disabled'}>${t('next')} &#8594;</button>`;
     html += '</div>';
 
     for (const [label, value] of fields) {
@@ -966,14 +1148,14 @@ async function doSearch() {
   if (author) path += `&author=${encodeURIComponent(author)}`;
 
   const container = document.getElementById('searchResults');
-  container.innerHTML = '<div class="loading">Searching...</div>';
+  container.innerHTML = '<div class="loading">' + t('loading') + '</div>';
 
   try {
     const data = await api('GET', path);
     const results = data.results || [];
 
     if (results.length === 0) {
-      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No results found</div></div>';
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">' + t('noDocsFound') + '</div></div>';
       return;
     }
 
@@ -999,7 +1181,7 @@ async function doSearch() {
     }
     container.innerHTML = html;
   } catch (e) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Search failed. Please try again.</div></div>';
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
   }
 }
 
@@ -1034,15 +1216,15 @@ async function loadSources() {
         <div class="source-card" id="${cardId}">
           <div class="source-card-header">
             <div class="source-name">${escapeHtml(s.name)}</div>
-            <button class="btn btn-primary" onclick="triggerSync('${escapeHtml(s.name)}','${cardId}')">Sync Now</button>
+            <button class="btn btn-primary" onclick="triggerSync('${escapeHtml(s.name)}','${cardId}')">${t('syncNow')}</button>
           </div>
-          <div class="source-stat"><span class="source-stat-label">Interval</span><span class="source-stat-value">${escapeHtml(s.interval || '-')}</span></div>
-          <div class="source-stat"><span class="source-stat-label">Last Run</span><span class="source-stat-value">${timeAgo(s.last_run)}</span></div>
-          <div class="source-stat"><span class="source-stat-label">Run Count</span><span class="source-stat-value">${s.run_count || 0}</span></div>
-          <div class="source-stat"><span class="source-stat-label">Error Count</span><span class="source-stat-value">${s.err_count || 0}</span></div>`;
+          <div class="source-stat"><span class="source-stat-label">${t('interval')}</span><span class="source-stat-value">${escapeHtml(s.interval || '-')}</span></div>
+          <div class="source-stat"><span class="source-stat-label">${t('lastSync')}</span><span class="source-stat-value">${timeAgo(s.last_run)}</span></div>
+          <div class="source-stat"><span class="source-stat-label">${t('runs')}</span><span class="source-stat-value">${s.run_count || 0}</span></div>
+          <div class="source-stat"><span class="source-stat-label">${t('errors')}</span><span class="source-stat-value">${s.err_count || 0}</span></div>`;
 
       if (s.last_sync) {
-        html += `<div class="source-stat"><span class="source-stat-label">Last Sync</span><span class="source-stat-value">${timeAgo(s.last_sync)}</span></div>`;
+        html += `<div class="source-stat"><span class="source-stat-label">${t('lastSync')}</span><span class="source-stat-value">${timeAgo(s.last_sync)}</span></div>`;
       }
       if (s.cursor) {
         html += `<div class="source-stat"><span class="source-stat-label">Cursor</span><span class="source-stat-value" style="font-size:0.75rem;word-break:break-all">${escapeHtml(truncate(s.cursor, 50))}</span></div>`;
@@ -1054,7 +1236,7 @@ async function loadSources() {
       grid.innerHTML += html;
     }
   } catch (e) {
-    document.getElementById('sourcesGrid').innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load sources</div></div>';
+    document.getElementById('sourcesGrid').innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
   }
 }
 
@@ -1083,7 +1265,7 @@ async function loadJobs() {
     const container = document.getElementById('jobsTableWrap');
 
     if (jobs.length === 0) {
-      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No scheduled jobs</div></div>';
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">' + t('noJobs') + '</div></div>';
       return;
     }
 
@@ -1091,20 +1273,20 @@ async function loadJobs() {
       <thead>
         <tr>
           <th>ID</th>
-          <th>Type</th>
-          <th>Channel</th>
-          <th>Message</th>
-          <th>Cron</th>
-          <th>Next Run</th>
-          <th>Created By</th>
+          <th>${t('type')}</th>
+          <th>${t('channel')}</th>
+          <th>${t('message')}</th>
+          <th>${t('schedule')}</th>
+          <th>${t('nextRun')}</th>
+          <th>${t('createdBy')}</th>
         </tr>
       </thead>
       <tbody>`;
 
     for (const j of jobs) {
       const typeBadge = j.type === 'recurring'
-        ? '<span class="badge badge-green">recurring</span>'
-        : '<span class="badge badge-blue">once</span>';
+        ? '<span class="badge badge-green">' + t('recurring') + '</span>'
+        : '<span class="badge badge-blue">' + t('once') + '</span>';
       const nextRun = j.next_run ? timeAgo(j.next_run) : (j.run_at ? timeAgo(j.run_at) : '-');
 
       html += `
@@ -1121,7 +1303,7 @@ async function loadJobs() {
     html += '</tbody></table>';
     container.innerHTML = html;
   } catch (e) {
-    document.getElementById('jobsTableWrap').innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load jobs</div></div>';
+    document.getElementById('jobsTableWrap').innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
   }
 }
 
@@ -1129,7 +1311,7 @@ async function loadJobs() {
 async function loadIndex() {
   const source = document.getElementById('indexSource').value;
   const tree = document.getElementById('indexTree');
-  tree.innerHTML = '<div class="loading">Loading index...</div>';
+  tree.innerHTML = '<div class="loading">' + t('loadingIndex') + '</div>';
 
   try {
     // Fetch all documents (up to 1000)
@@ -1141,10 +1323,10 @@ async function loadIndex() {
     // Update docList for navigation
     docList = docs.map(d => ({ id: d.id, title: d.title || truncate(d.content, 60) || '(Untitled)' }));
 
-    document.getElementById('indexStats').textContent = docs.length + ' documents';
+    document.getElementById('indexStats').textContent = docs.length + ' ' + t('docs');
 
     if (docs.length === 0) {
-      tree.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No documents found</div></div>';
+      tree.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">' + t('noDocsFound') + '</div></div>';
       return;
     }
 
@@ -1175,7 +1357,7 @@ async function loadIndex() {
       html += '<div class="tree-source-header" onclick="toggleTree(\'' + srcId + '\')">';
       html += '<span class="tree-toggle open" id="toggle-' + srcId + '">&#9656;</span>';
       html += sourceBadge(src) + ' <span class="tree-source-name">' + escapeHtml(src) + '</span>';
-      html += '<span class="tree-source-count">' + totalDocs + ' docs / ' + channelNames.length + ' channels</span>';
+      html += '<span class="tree-source-count">' + totalDocs + ' ' + t('docs') + ' / ' + channelNames.length + ' ' + t('channels') + '</span>';
       html += '</div>';
       html += '<div class="tree-children" id="children-' + srcId + '">';
 
@@ -1274,7 +1456,7 @@ async function loadIndex() {
 
     tree.innerHTML = html;
   } catch (e) {
-    tree.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load index</div></div>';
+    tree.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
     console.error('Index load failed:', e);
   }
 }
@@ -1314,10 +1496,10 @@ function navigateKB(path) {
 function renderKBBreadcrumb() {
   const el = document.getElementById('kbBreadcrumb');
   if (!kbCurrentPath) {
-    el.innerHTML = '<span class="current">Root</span>';
+    el.innerHTML = '<span class="current">' + t('root') + '</span>';
     return;
   }
-  let html = '<a href="#" onclick="event.preventDefault();navigateKB(\'\')">Root</a>';
+  let html = '<a href="#" onclick="event.preventDefault();navigateKB(\'\')\">' + t('root') + '</a>';
   const parts = kbCurrentPath.split('/');
   for (let i = 0; i < parts.length; i++) {
     html += '<span class="sep">/</span>';
@@ -1338,6 +1520,12 @@ async function renderKB() {
 
   if (!kbCurrentPath) {
     // Show root directory
+    if (!tree || tree.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div>'
+        + '<div class="empty-state-text">Knowledge Base directory is not configured or empty.<br>'
+        + 'Set <code>KB_REPO_DIR</code> environment variable to point to a directory containing .md files.</div></div>';
+      return;
+    }
     renderKBDirectory(container, tree);
     return;
   }
@@ -1394,7 +1582,7 @@ function renderKBDirectory(container, items) {
 }
 
 async function renderKBFile(container, path) {
-  container.innerHTML = '<div class="loading">Loading...</div>';
+  container.innerHTML = '<div class="loading">' + t('loading') + '</div>';
   try {
     const data = await api('GET', '/api/v1/kb/file?path=' + encodeURIComponent(path));
     const rendered = renderMarkdown(data.content || '');
@@ -1426,7 +1614,7 @@ async function renderKBFile(container, path) {
       }
     });
   } catch (e) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load file</div></div>';
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
   }
 }
 
@@ -1667,7 +1855,7 @@ function buildGraph(docs, showDocs) {
     }
   }
 
-  document.getElementById('graphStats').textContent = graphNodes.length + ' nodes, ' + graphEdges.length + ' edges';
+  document.getElementById('graphStats').textContent = graphNodes.length + ' ' + t('nodes') + ', ' + graphEdges.length + ' ' + t('edges');
 }
 
 function buildGraphLegend(docs) {
@@ -1713,11 +1901,11 @@ function startGraphSimulation() {
     }
 
     const n = simNodes.length;
-    const repulsionK = 800;
+    const repulsionK = 400;
     const springK = 0.05;
     const springLen = 80;
     const centerK = 0.01;
-    const damping = 0.88;
+    const damping = 0.85;
     const cx = graphCanvasW / 2;
     const cy = graphCanvasH / 2;
 
@@ -1783,7 +1971,7 @@ function startGraphSimulation() {
       }
     }
 
-    graphAlpha *= 0.995;
+    graphAlpha *= 0.965;
     renderGraph();
     graphAnimId = requestAnimationFrame(tick);
   }
@@ -2046,6 +2234,7 @@ function handleRoute() {
 
 /* ---- Init ---- */
 async function init() {
+  updateStaticTranslations();
   const ok = await checkAuth();
   if (ok) {
     const hash = window.location.hash;

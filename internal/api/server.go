@@ -83,12 +83,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /api/v1/search", s.handleSearch)
-	mux.HandleFunc("GET /api/v1/documents", s.handleListDocuments)
-	mux.HandleFunc("GET /api/v1/documents/{id}", s.handleGetDocument)
-	mux.HandleFunc("GET /api/v1/stats", s.handleGetStats)
-	mux.HandleFunc("GET /api/v1/sources", s.handleListSources)
-	mux.HandleFunc("POST /api/v1/sync/{source}", s.handleTriggerSync)
+	mux.HandleFunc("GET /api/v1/search", s.auth.requireAuth(s.handleSearch))
+	mux.HandleFunc("GET /api/v1/documents", s.auth.requireAuth(s.handleListDocuments))
+	mux.HandleFunc("GET /api/v1/documents/{id}", s.auth.requireAuth(s.handleGetDocument))
+	mux.HandleFunc("GET /api/v1/stats", s.auth.requireAuth(s.handleGetStats))
+	mux.HandleFunc("GET /api/v1/sources", s.auth.requireAuth(s.handleListSources))
+	mux.HandleFunc("POST /api/v1/sync/{source}", s.auth.requireAuth(s.handleTriggerSync))
 
 	// Root redirect to console
 	mux.HandleFunc("GET /", s.handleRootRedirect)
