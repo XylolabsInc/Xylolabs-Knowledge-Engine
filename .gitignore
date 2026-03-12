@@ -32,6 +32,7 @@ google.json
 *.key.json
 service-account*.json
 key.pem
+git-xylolabs-kb.pem
 system-prompt.txt
 
 # IDE
