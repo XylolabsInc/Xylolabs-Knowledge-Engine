@@ -114,6 +114,48 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(next_ru
 CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_enabled ON scheduled_jobs(enabled);
 `,
 	},
+	{
+		version: 4,
+		sql: `
+-- Recreate FTS table without content_id (which doesn't exist in documents table).
+-- The content-sync FTS5 reads columns by name from the content table,
+-- so all FTS columns must match columns in the documents table.
+DROP TRIGGER IF EXISTS documents_ai;
+DROP TRIGGER IF EXISTS documents_ad;
+DROP TRIGGER IF EXISTS documents_au;
+DROP TABLE IF EXISTS fts_documents;
+
+CREATE VIRTUAL TABLE fts_documents USING fts5(
+	title,
+	content,
+	author,
+	channel,
+	content='documents',
+	content_rowid='rowid',
+	tokenize='porter unicode61'
+);
+
+CREATE TRIGGER documents_ai AFTER INSERT ON documents BEGIN
+	INSERT INTO fts_documents(rowid, title, content, author, channel)
+	VALUES (new.rowid, new.title, new.content, new.author, new.channel);
+END;
+
+CREATE TRIGGER documents_ad AFTER DELETE ON documents BEGIN
+	INSERT INTO fts_documents(fts_documents, rowid, title, content, author, channel)
+	VALUES ('delete', old.rowid, old.title, old.content, old.author, old.channel);
+END;
+
+CREATE TRIGGER documents_au AFTER UPDATE ON documents BEGIN
+	INSERT INTO fts_documents(fts_documents, rowid, title, content, author, channel)
+	VALUES ('delete', old.rowid, old.title, old.content, old.author, old.channel);
+	INSERT INTO fts_documents(rowid, title, content, author, channel)
+	VALUES (new.rowid, new.title, new.content, new.author, new.channel);
+END;
+
+-- Rebuild FTS index from existing documents.
+INSERT INTO fts_documents(fts_documents) VALUES('rebuild');
+`,
+	},
 }
 
 // runMigrations applies all pending migrations.
