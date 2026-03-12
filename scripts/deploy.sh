@@ -331,21 +331,42 @@ CRON"
     log "Crontab installed"
 }
 
+# -----------------------------------------------------------------------------
+# Upload nginx config
+# -----------------------------------------------------------------------------
+upload_nginx_config() {
+    local nginx_conf="$PROJECT_DIR/configs/nginx-xylolabs-kb.conf"
+    if [ ! -f "$nginx_conf" ]; then
+        die "Nginx config not found: $nginx_conf"
+    fi
+
+    log "Uploading nginx config..."
+    scp_cmd "$nginx_conf" "${SERVER_USER}@${SERVER_HOST}:/tmp/nginx-xylolabs-kb.conf"
+    ssh_cmd "sudo mv /tmp/nginx-xylolabs-kb.conf /etc/nginx/sites-available/xylolabs-kb.conf && \
+             sudo ln -sf /etc/nginx/sites-available/xylolabs-kb.conf /etc/nginx/sites-enabled/xylolabs-kb.conf && \
+             sudo nginx -t && \
+             sudo systemctl reload nginx"
+    log "Nginx config uploaded and reloaded"
+}
+
 # =============================================================================
 # Main
 # =============================================================================
 main() {
     local with_env=false
     local with_cron=false
+    local with_nginx=false
 
     for arg in "$@"; do
         case "$arg" in
-            --with-env)  with_env=true ;;
-            --with-cron) with_cron=true ;;
+            --with-env)   with_env=true ;;
+            --with-cron)  with_cron=true ;;
+            --with-nginx) with_nginx=true ;;
             --help)
-                echo "Usage: $0 [--with-env] [--with-cron]"
-                echo "  --with-env   Also upload .env file"
-                echo "  --with-cron  Also install crontab"
+                echo "Usage: $0 [--with-env] [--with-cron] [--with-nginx]"
+                echo "  --with-env    Also upload .env file"
+                echo "  --with-cron   Also install crontab"
+                echo "  --with-nginx  Also upload nginx config"
                 exit 0
                 ;;
         esac
@@ -367,6 +388,10 @@ main() {
 
     if [ "$with_cron" = true ]; then
         install_cron
+    fi
+
+    if [ "$with_nginx" = true ]; then
+        upload_nginx_config
     fi
 
     log "Deployment complete!"
