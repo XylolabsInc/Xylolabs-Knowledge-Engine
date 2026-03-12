@@ -95,6 +95,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		version: 2,
 		sql:     `ALTER TABLE documents ADD COLUMN metadata TEXT DEFAULT '{}';`,
 	},
+	{
+		version: 3,
+		sql: `
+CREATE TABLE IF NOT EXISTS scheduled_jobs (
+	id TEXT PRIMARY KEY,
+	type TEXT NOT NULL,
+	channel_id TEXT NOT NULL,
+	message TEXT NOT NULL,
+	cron_expr TEXT DEFAULT '',
+	run_at DATETIME,
+	next_run DATETIME,
+	created_by TEXT DEFAULT '',
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(next_run);
+CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_enabled ON scheduled_jobs(enabled);
+`,
+	},
 }
 
 // runMigrations applies all pending migrations.

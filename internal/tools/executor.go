@@ -17,6 +17,7 @@ type ToolExecutor struct {
 	screenshotter     *Screenshotter
 	logger            *slog.Logger
 	defaultCalendarID string
+	schedulerManager  *SchedulerManager
 
 	mu          sync.Mutex
 	attachments map[string][]byte // file name → data, from Slack file downloads
@@ -24,12 +25,13 @@ type ToolExecutor struct {
 
 // NewToolExecutor creates a ToolExecutor.
 // Either writer can be nil if not configured.
-func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, ss *Screenshotter, logger *slog.Logger) *ToolExecutor {
+func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, ss *Screenshotter, sm *SchedulerManager, logger *slog.Logger) *ToolExecutor {
 	return &ToolExecutor{
 		googleWriter:      gw,
 		notionWriter:      nw,
 		screenshotter:     ss,
 		defaultCalendarID: defaultCalendarID,
+		schedulerManager:  sm,
 		logger:            logger.With("component", "tool-executor"),
 		attachments:       make(map[string][]byte),
 	}
@@ -892,6 +894,82 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		)
 	}
 
+	// --- Scheduler Tools ---
+	if e.schedulerManager != nil {
+		decls = append(decls,
+			gemini.FunctionDeclaration{
+				Name:        "schedule_message",
+				Description: "Schedule a one-time message to be sent to a Slack channel at a specific time. Use for reminders and delayed messages.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"channel": map[string]any{
+							"type":        "string",
+							"description": "Channel name (e.g. #general) or channel ID",
+						},
+						"message": map[string]any{
+							"type":        "string",
+							"description": "Message text to send",
+						},
+						"send_at": map[string]any{
+							"type":        "string",
+							"description": "When to send (RFC3339 e.g. 2025-03-11T15:00:00+09:00, or relative e.g. 'in 30 minutes', 'in 2 hours')",
+						},
+					},
+					"required": []string{"channel", "message", "send_at"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "create_recurring_job",
+				Description: "Create a recurring scheduled job that sends a message to a Slack channel on a cron schedule. Use for daily standups, weekly reminders, etc.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"channel": map[string]any{
+							"type":        "string",
+							"description": "Channel name (e.g. #general) or channel ID",
+						},
+						"message": map[string]any{
+							"type":        "string",
+							"description": "Message text to send each time",
+						},
+						"cron_expression": map[string]any{
+							"type":        "string",
+							"description": "Standard 5-field cron expression (minute hour day-of-month month day-of-week). Examples: '0 9 * * 1-5' (weekdays 9am), '0 9 * * *' (daily 9am), '*/30 * * * *' (every 30 min)",
+						},
+						"description": map[string]any{
+							"type":        "string",
+							"description": "Human-readable description of the job (optional)",
+						},
+					},
+					"required": []string{"channel", "message", "cron_expression"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "list_scheduled_jobs",
+				Description: "List all active scheduled jobs (one-time and recurring).",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "cancel_scheduled_job",
+				Description: "Cancel a scheduled job by its ID.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"job_id": map[string]any{
+							"type":        "string",
+							"description": "ID of the scheduled job to cancel",
+						},
+					},
+					"required": []string{"job_id"},
+				},
+			},
+		)
+	}
+
 	return decls
 }
 
@@ -1671,6 +1749,48 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			"size_bytes": len(pngBytes),
 			"message":    "Screenshot captured. The image has been attached and will be sent with the response.",
 		}, nil
+
+	// --- Scheduler ---
+	case "schedule_message":
+		if e.schedulerManager == nil {
+			return nil, fmt.Errorf("scheduler is not configured")
+		}
+		channel, _ := call.Args["channel"].(string)
+		message, _ := call.Args["message"].(string)
+		sendAt, _ := call.Args["send_at"].(string)
+		if channel == "" || message == "" || sendAt == "" {
+			return nil, fmt.Errorf("channel, message, and send_at are required")
+		}
+		return e.schedulerManager.ScheduleMessage(channel, message, sendAt, "")
+
+	case "create_recurring_job":
+		if e.schedulerManager == nil {
+			return nil, fmt.Errorf("scheduler is not configured")
+		}
+		channel, _ := call.Args["channel"].(string)
+		message, _ := call.Args["message"].(string)
+		cronExpr, _ := call.Args["cron_expression"].(string)
+		description, _ := call.Args["description"].(string)
+		if channel == "" || message == "" || cronExpr == "" {
+			return nil, fmt.Errorf("channel, message, and cron_expression are required")
+		}
+		return e.schedulerManager.CreateRecurringJob(channel, message, cronExpr, description, "")
+
+	case "list_scheduled_jobs":
+		if e.schedulerManager == nil {
+			return nil, fmt.Errorf("scheduler is not configured")
+		}
+		return e.schedulerManager.ListJobs()
+
+	case "cancel_scheduled_job":
+		if e.schedulerManager == nil {
+			return nil, fmt.Errorf("scheduler is not configured")
+		}
+		jobID, _ := call.Args["job_id"].(string)
+		if jobID == "" {
+			return nil, fmt.Errorf("job_id is required")
+		}
+		return e.schedulerManager.CancelJob(jobID)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)

@@ -275,7 +275,7 @@ func (s *SQLiteStore) ListDocuments(query kb.ListDocumentsQuery) (*kb.ListDocume
 	// Fetch documents
 	selectQuery := `SELECT id, source, source_id, parent_id, title, content, content_type,
 		author, author_email, channel, workspace, url, timestamp, updated_at, indexed_at, metadata
-		FROM documents ` + where + ` ORDER BY indexed_at ASC LIMIT ? OFFSET ?`
+		FROM documents ` + where + ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, query.Offset)
 
 	rows, err := s.db.Query(selectQuery, args...)
@@ -421,6 +421,158 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 	syncRows.Close()
 
 	return stats, nil
+}
+
+// ScheduledJob represents a scheduled or recurring message job.
+type ScheduledJob struct {
+	ID        string
+	Type      string // "once" or "recurring"
+	ChannelID string
+	Message   string
+	CronExpr  string
+	RunAt     time.Time
+	NextRun   time.Time
+	CreatedBy string
+	CreatedAt time.Time
+	Enabled   bool
+}
+
+// CreateScheduledJob inserts a new scheduled job.
+func (s *SQLiteStore) CreateScheduledJob(job ScheduledJob) error {
+	enabled := 0
+	if job.Enabled {
+		enabled = 1
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO scheduled_jobs (id, type, channel_id, message, cron_expr, run_at, next_run, created_by, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.Type, job.ChannelID, job.Message, job.CronExpr,
+		nullTime(job.RunAt), nullTime(job.NextRun), job.CreatedBy, enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("create scheduled job %s: %w", job.ID, err)
+	}
+	return nil
+}
+
+// GetScheduledJob retrieves a scheduled job by ID.
+func (s *SQLiteStore) GetScheduledJob(id string) (*ScheduledJob, error) {
+	var job ScheduledJob
+	var runAt, nextRun, createdAt sql.NullTime
+	var enabled int
+	err := s.db.QueryRow(`
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		FROM scheduled_jobs WHERE id = ?`, id).Scan(
+		&job.ID, &job.Type, &job.ChannelID, &job.Message, &job.CronExpr,
+		&runAt, &nextRun, &job.CreatedBy, &createdAt, &enabled,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get scheduled job %s: %w", id, err)
+	}
+	if runAt.Valid {
+		job.RunAt = runAt.Time
+	}
+	if nextRun.Valid {
+		job.NextRun = nextRun.Time
+	}
+	if createdAt.Valid {
+		job.CreatedAt = createdAt.Time
+	}
+	job.Enabled = enabled == 1
+	return &job, nil
+}
+
+// ListScheduledJobs returns all enabled scheduled jobs.
+func (s *SQLiteStore) ListScheduledJobs() ([]ScheduledJob, error) {
+	rows, err := s.db.Query(`
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		FROM scheduled_jobs WHERE enabled = 1 ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list scheduled jobs: %w", err)
+	}
+	defer rows.Close()
+	return scanScheduledJobs(rows)
+}
+
+// ListScheduledJobsByCreator returns all enabled jobs created by a specific user.
+func (s *SQLiteStore) ListScheduledJobsByCreator(userID string) ([]ScheduledJob, error) {
+	rows, err := s.db.Query(`
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		FROM scheduled_jobs WHERE enabled = 1 AND created_by = ? ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list scheduled jobs by creator %s: %w", userID, err)
+	}
+	defer rows.Close()
+	return scanScheduledJobs(rows)
+}
+
+// DeleteScheduledJob removes a scheduled job by ID.
+func (s *SQLiteStore) DeleteScheduledJob(id string) error {
+	_, err := s.db.Exec("DELETE FROM scheduled_jobs WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete scheduled job %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateNextRun updates the next_run time for a recurring job.
+func (s *SQLiteStore) UpdateNextRun(id string, nextRun time.Time) error {
+	_, err := s.db.Exec("UPDATE scheduled_jobs SET next_run = ? WHERE id = ?", nextRun.UTC(), id)
+	if err != nil {
+		return fmt.Errorf("update next run for %s: %w", id, err)
+	}
+	return nil
+}
+
+// DisableScheduledJob sets enabled=0 for a job.
+func (s *SQLiteStore) DisableScheduledJob(id string) error {
+	_, err := s.db.Exec("UPDATE scheduled_jobs SET enabled = 0 WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("disable scheduled job %s: %w", id, err)
+	}
+	return nil
+}
+
+// GetDueJobs returns all enabled jobs whose next_run is at or before the given time.
+func (s *SQLiteStore) GetDueJobs(now time.Time) ([]ScheduledJob, error) {
+	rows, err := s.db.Query(`
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		FROM scheduled_jobs WHERE enabled = 1 AND next_run <= ? ORDER BY next_run ASC`, now.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("get due jobs: %w", err)
+	}
+	defer rows.Close()
+	return scanScheduledJobs(rows)
+}
+
+func scanScheduledJobs(rows *sql.Rows) ([]ScheduledJob, error) {
+	var jobs []ScheduledJob
+	for rows.Next() {
+		var job ScheduledJob
+		var runAt, nextRun, createdAt sql.NullTime
+		var enabled int
+		if err := rows.Scan(
+			&job.ID, &job.Type, &job.ChannelID, &job.Message, &job.CronExpr,
+			&runAt, &nextRun, &job.CreatedBy, &createdAt, &enabled,
+		); err != nil {
+			return nil, fmt.Errorf("scan scheduled job: %w", err)
+		}
+		if runAt.Valid {
+			job.RunAt = runAt.Time
+		}
+		if nextRun.Valid {
+			job.NextRun = nextRun.Time
+		}
+		if createdAt.Valid {
+			job.CreatedAt = createdAt.Time
+		}
+		job.Enabled = enabled == 1
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
 }
 
 // scanner abstracts sql.Row and sql.Rows for shared scanning logic.
