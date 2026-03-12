@@ -38,6 +38,8 @@ func (s *Screenshotter) Capture(ctx context.Context, url string, width, height i
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-software-rasterizer", true),
+		chromedp.Flag("lang", "ko-KR,ko,en-US,en"),
+		chromedp.Flag("font-render-hinting", "none"),
 	)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
