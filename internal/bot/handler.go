@@ -419,7 +419,7 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	if b.toolExecutor != nil {
 		if screenshotData, ok := b.toolExecutor.PopScreenshot(); ok {
 			go func(data []byte, channel, ts string) {
-				uploadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				uploadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 				defer cancel()
 				_, err := b.slackClient.UploadFileContext(uploadCtx, slack.UploadFileParameters{
 					Channel:         channel,
@@ -430,7 +430,13 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 					ThreadTimestamp: ts,
 				})
 				if err != nil {
-					b.logger.Warn("failed to upload screenshot", "error", err)
+					if strings.Contains(err.Error(), "missing_scope") {
+						b.logger.Error("screenshot upload failed: Slack app missing 'files:write' scope — add it at https://api.slack.com/apps", "error", err)
+					} else {
+						b.logger.Warn("failed to upload screenshot", "error", err, "size_bytes", len(data))
+					}
+				} else {
+					b.logger.Info("screenshot uploaded to Slack", "channel", channel, "size_bytes", len(data))
 				}
 			}(screenshotData, ev.Channel, threadTS)
 		}

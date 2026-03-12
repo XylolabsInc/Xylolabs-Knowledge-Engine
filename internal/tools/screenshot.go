@@ -54,7 +54,7 @@ func (s *Screenshotter) Capture(ctx context.Context, url string, width, height i
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 	defer taskCancel()
 
-	taskCtx, timeoutCancel := context.WithTimeout(taskCtx, 30*time.Second)
+	taskCtx, timeoutCancel := context.WithTimeout(taskCtx, 60*time.Second)
 	defer timeoutCancel()
 
 	var buf []byte

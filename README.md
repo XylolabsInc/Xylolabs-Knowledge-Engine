@@ -511,6 +511,7 @@ The bot:
 | `app_mentions:read` | Detect when users @mention the bot |
 | `chat:write` | Post replies to channels |
 | `files:read` | Read file attachments sent to the bot |
+| `files:write` | Upload screenshots and files to channels |
 | `im:history` | Read DM messages |
 | `im:read` | Access DM channels |
 | `im:write` | Send DM replies |
@@ -545,6 +546,7 @@ When files are shared in Slack channels or uploaded to Google Drive, the system 
 | `groups:history` | Read private channel messages (if invited) |
 | `groups:read` | List private channels |
 | `files:read` | Download shared files |
+| `files:write` | Upload screenshots and files to channels |
 | `users:read` | Resolve user display names |
 | `users:read.email` | Resolve user emails |
 
