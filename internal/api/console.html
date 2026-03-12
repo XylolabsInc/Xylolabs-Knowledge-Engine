@@ -281,30 +281,30 @@ tr.clickable { cursor: pointer; }
     </div>
     <nav class="sidebar-nav">
       <button class="nav-item active" onclick="showTab('dashboard')" data-tab="dashboard" data-i18n="dashboard">
-        <span class="icon">&#9635;</span> Dashboard
+        <span class="icon">&#9632;</span> Dashboard
       </button>
       <button class="nav-item" onclick="showTab('documents')" data-tab="documents" data-i18n="documents">
         <span class="icon">&#9776;</span> Documents
       </button>
       <button class="nav-item" onclick="showTab('search')" data-tab="search" data-i18n="search">
-        <span class="icon">&#9906;</span> Search
+        <span class="icon">&#8981;</span> Search
       </button>
       <button class="nav-item" onclick="showTab('jobs')" data-tab="jobs" data-i18n="jobs">
-        <span class="icon">&#9675;</span> Jobs
+        <span class="icon">&#8634;</span> Jobs
       </button>
       <button class="nav-item" onclick="showTab('index')" data-tab="index" data-i18n="index">
-        <span class="icon">&#8801;</span> Raw Data
+        <span class="icon">&#9638;</span> Raw Data
       </button>
       <button class="nav-item" onclick="showTab('kb')" data-tab="kb" data-i18n="kb">
-        <span class="icon">&#9674;</span> KB
+        <span class="icon">&#9733;</span> KB
       </button>
       <button class="nav-item" onclick="showTab('graph')" data-tab="graph" data-i18n="graph">
-        <span class="icon">&#9678;</span> Graph
+        <span class="icon">&#9672;</span> Graph
       </button>
     </nav>
     <div class="sidebar-footer" id="logoutSection" style="display:none">
       <button class="logout-btn" onclick="doLogout()" data-i18n="logout">
-        <span class="icon">&#10140;</span> Logout
+        <span class="icon">&#8594;</span> Logout
       </button>
     </div>
     <div class="sidebar-footer">
@@ -798,7 +798,7 @@ function showTab(name) {
   else if (name === 'documents') { renderDocBrowser(); }
   else if (name === 'jobs') loadJobs();
   else if (name === 'index') loadIndex();
-  else if (name === 'kb') renderKB();
+  else if (name === 'kb') { kbTree = null; renderKB(); }
   else if (name === 'graph') loadGraph();
 }
 
@@ -1470,11 +1470,11 @@ function toggleTree(id) {
 let kbTree = null;
 let kbCurrentPath = ''; // empty = root, or a directory/file path
 
-async function loadKBTree() {
-  if (kbTree) return kbTree;
+async function loadKBTree(forceRefresh) {
+  if (kbTree && !forceRefresh) return kbTree;
   try {
     const [fsData, dbData] = await Promise.all([
-      api('GET', '/api/v1/kb/tree'),
+      api('GET', '/api/v1/kb/tree').catch(() => ({ tree: [] })),
       api('GET', '/api/v1/kb/docs/tree').catch(() => ({ tree: [] }))
     ]);
     const fsTree = fsData.tree || [];
