@@ -1,0 +1,2080 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xylolabs Knowledge Engine</title>
+<style>
+:root {
+  --bg: #ffffff; --bg-secondary: #f8f9fa; --bg-tertiary: #f1f3f5;
+  --text: #212529; --text-secondary: #6c757d; --text-muted: #adb5bd;
+  --border: #dee2e6; --border-light: #e9ecef;
+  --primary: #2563eb; --primary-hover: #1d4ed8; --primary-light: #dbeafe;
+  --danger: #dc3545; --danger-light: #f8d7da;
+  --success: #28a745; --success-light: #d4edda;
+  --warning: #ffc107; --warning-light: #fff3cd;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-lg: 0 10px 15px rgba(0,0,0,0.1), 0 4px 6px rgba(0,0,0,0.05);
+  --radius: 8px; --radius-sm: 4px; --sidebar-width: 220px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --transition: 150ms ease;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+
+.login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+.login-overlay.hidden { display: none; }
+.login-card { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 40px; width: 100%; max-width: 380px; text-align: center; }
+.login-card h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 4px; }
+.login-card .subtitle { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 24px; }
+.login-card input { display: block; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.875rem; font-family: var(--font); margin-bottom: 12px; outline: none; transition: border-color var(--transition); }
+.login-card input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+.login-error { color: var(--danger); font-size: 0.8125rem; margin-bottom: 12px; min-height: 1.2em; }
+.login-card button { width: 100%; padding: 10px; background: var(--primary); color: #fff; border: none; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; font-family: var(--font); cursor: pointer; transition: background var(--transition); }
+.login-card button:hover { background: var(--primary-hover); }
+
+.app { display: flex; min-height: 100vh; }
+.sidebar { width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border-light); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; transition: transform 0.2s ease; }
+.sidebar-header { padding: 20px 16px 16px; border-bottom: 1px solid var(--border-light); }
+.sidebar-header h1 { font-size: 1rem; font-weight: 700; color: var(--text); letter-spacing: -0.01em; }
+.sidebar-header .tagline { font-size: 0.6875rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+.sidebar-nav { flex: 1; padding: 8px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 450; color: var(--text-secondary); transition: all var(--transition); border: none; background: none; width: 100%; text-align: left; font-family: var(--font); }
+.nav-item:hover { background: var(--bg-tertiary); color: var(--text); }
+.nav-item.active { background: var(--primary-light); color: var(--primary); font-weight: 550; }
+.nav-item .icon { font-size: 1.125rem; width: 22px; text-align: center; flex-shrink: 0; }
+.sidebar-footer { padding: 8px; border-top: 1px solid var(--border-light); }
+.logout-btn { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; color: var(--text-secondary); border: none; background: none; width: 100%; text-align: left; font-family: var(--font); transition: all var(--transition); }
+.logout-btn:hover { background: var(--danger-light); color: var(--danger); }
+.main { margin-left: var(--sidebar-width); flex: 1; padding: 32px; min-width: 0; }
+.mobile-toggle { display: none; position: fixed; top: 12px; left: 12px; z-index: 200; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; font-size: 1.25rem; box-shadow: var(--shadow); }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.tab-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 24px; letter-spacing: -0.02em; }
+
+.card { background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
+.card-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: 8px; font-weight: 600; }
+.card-value { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
+
+.section-card { background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; margin-bottom: 24px; }
+.section-title { font-size: 0.9375rem; font-weight: 600; margin-bottom: 16px; }
+
+.bar-chart { display: flex; flex-direction: column; gap: 10px; }
+.bar-row { display: flex; align-items: center; gap: 12px; }
+.bar-label { font-size: 0.8125rem; font-weight: 500; width: 80px; text-align: right; flex-shrink: 0; text-transform: capitalize; }
+.bar-track { flex: 1; height: 28px; background: var(--bg-tertiary); border-radius: var(--radius-sm); overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: var(--radius-sm); display: flex; align-items: center; padding-left: 10px; font-size: 0.75rem; font-weight: 600; color: #fff; min-width: fit-content; transition: width 0.5s ease; }
+.bar-count { font-size: 0.8125rem; font-weight: 600; width: 50px; flex-shrink: 0; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); font-weight: 600; padding: 10px 12px; border-bottom: 2px solid var(--border-light); }
+td { padding: 10px 12px; font-size: 0.875rem; border-bottom: 1px solid var(--border-light); vertical-align: middle; }
+tr:hover td { background: var(--bg-secondary); }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.badge-slack { background: #4A154B; color: #fff; }
+.badge-google { background: #4285F4; color: #fff; }
+.badge-notion { background: #000000; color: #fff; }
+.badge-blue { background: var(--primary-light); color: var(--primary); }
+.badge-green { background: var(--success-light); color: var(--success); }
+.badge-default { background: var(--bg-tertiary); color: var(--text-secondary); }
+
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-green { background: var(--success); }
+.status-yellow { background: var(--warning); }
+.status-red { background: var(--danger); }
+
+.filter-bar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+.filter-bar select, .filter-bar input { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.875rem; font-family: var(--font); background: var(--bg); outline: none; transition: border-color var(--transition); }
+.filter-bar select:focus, .filter-bar input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+.filter-bar input { flex: 1; min-width: 200px; }
+
+.btn { padding: 8px 16px; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; font-family: var(--font); cursor: pointer; border: 1px solid transparent; transition: all var(--transition); display: inline-flex; align-items: center; gap: 6px; }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn-outline { background: var(--bg); color: var(--text-secondary); border-color: var(--border); }
+.btn-outline:hover { background: var(--bg-secondary); color: var(--text); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 0.875rem; color: var(--text-secondary); }
+.pagination-buttons { display: flex; gap: 8px; }
+
+.search-result { padding: 16px 0; border-bottom: 1px solid var(--border-light); }
+.search-result:last-child { border-bottom: none; }
+.search-result-title { font-weight: 600; font-size: 0.9375rem; margin-bottom: 4px; color: var(--primary); }
+.search-result-snippet { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.6; }
+.search-result-snippet mark { background: var(--warning-light); padding: 1px 2px; border-radius: 2px; }
+.search-result-meta { display: flex; gap: 12px; align-items: center; font-size: 0.75rem; color: var(--text-muted); flex-wrap: wrap; }
+
+.sources-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.source-card { background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; }
+.source-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.source-name { font-size: 1.125rem; font-weight: 700; text-transform: capitalize; }
+.source-stat { display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.8125rem; }
+.source-stat-label { color: var(--text-secondary); }
+.source-stat-value { font-weight: 600; }
+.source-error { margin-top: 12px; padding: 10px 12px; background: var(--danger-light); color: var(--danger); border-radius: var(--radius-sm); font-size: 0.8125rem; word-break: break-word; }
+.sync-feedback { font-size: 0.8125rem; color: var(--success); font-weight: 500; margin-top: 8px; min-height: 1.2em; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 500; backdrop-filter: blur(4px); }
+.modal-overlay.hidden { display: none; }
+.modal { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow-lg); width: 100%; max-width: 700px; max-height: 80vh; overflow-y: auto; padding: 28px; }
+.modal-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+.modal-header h3 { font-size: 1.125rem; font-weight: 700; flex: 1; margin-right: 16px; word-break: break-word; }
+.modal-close { background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted); padding: 4px 8px; border-radius: var(--radius-sm); flex-shrink: 0; }
+.modal-close:hover { background: var(--bg-secondary); color: var(--text); }
+.modal-field { margin-bottom: 14px; }
+.modal-field-label { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; margin-bottom: 2px; }
+.modal-field-value { font-size: 0.875rem; word-break: break-word; }
+.modal-content-body { background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 16px; font-size: 0.8125rem; line-height: 1.7; white-space: pre-line; word-break: break-word; max-height: 500px; overflow-y: auto; }
+
+.empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
+.empty-state-icon { font-size: 2.5rem; margin-bottom: 12px; }
+.empty-state-text { font-size: 0.9375rem; }
+.loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 0.875rem; }
+tr.clickable { cursor: pointer; }
+
+@media (max-width: 768px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .mobile-toggle { display: block; }
+  .main { margin-left: 0; padding: 16px; padding-top: 56px; }
+  .stats-grid { grid-template-columns: 1fr; }
+  .sources-grid { grid-template-columns: 1fr; }
+  .filter-bar { flex-direction: column; }
+  .filter-bar input { min-width: unset; width: 100%; }
+  .modal { margin: 16px; }
+}
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.index-tree { margin-top: 8px; }
+.tree-source { margin-bottom: 20px; }
+.tree-source-header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius); cursor: pointer; user-select: none; margin-bottom: 2px; }
+.tree-source-header:hover { background: var(--bg-tertiary); }
+.tree-source-header .tree-toggle { font-size: 0.75rem; color: var(--text-muted); transition: transform 0.15s ease; width: 16px; text-align: center; }
+.tree-source-header .tree-toggle.open { transform: rotate(90deg); }
+.tree-source-name { font-weight: 600; font-size: 0.9375rem; text-transform: capitalize; }
+.tree-source-count { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; }
+.tree-children { padding-left: 16px; border-left: 2px solid var(--border-light); margin-left: 20px; }
+.tree-children.collapsed { display: none; }
+.tree-channel { margin-top: 2px; }
+.tree-channel-header { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; border-radius: var(--radius-sm); user-select: none; }
+.tree-channel-header:hover { background: var(--bg-secondary); }
+.tree-channel-name { font-weight: 500; font-size: 0.875rem; color: var(--text); }
+.tree-channel-count { font-size: 0.75rem; color: var(--text-muted); }
+.tree-docs { padding-left: 16px; border-left: 2px solid var(--border-light); margin-left: 14px; }
+.tree-docs.collapsed { display: none; }
+.tree-doc { display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 0.8125rem; cursor: pointer; border-radius: var(--radius-sm); color: var(--text-secondary); }
+.tree-doc:hover { background: var(--bg-secondary); color: var(--primary); }
+.tree-doc-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-doc-time { font-size: 0.6875rem; color: var(--text-muted); flex-shrink: 0; }
+.tree-doc-type { font-size: 0.625rem; color: var(--text-muted); background: var(--bg-tertiary); padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
+.breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 0.875rem; margin-bottom: 16px; flex-wrap: wrap; }
+.breadcrumb a { color: var(--primary); text-decoration: none; font-weight: 500; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { color: var(--text-muted); margin: 0 2px; }
+.breadcrumb .current { color: var(--text); font-weight: 600; }
+.dir-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.dir-item { display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); cursor: pointer; transition: all var(--transition); }
+.dir-item:hover { border-color: var(--primary); background: var(--primary-light); }
+.dir-icon { font-size: 1.5rem; color: var(--text-muted); flex-shrink: 0; }
+.dir-item:hover .dir-icon { color: var(--primary); }
+.dir-label { font-weight: 500; font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-count { font-size: 0.75rem; color: var(--text-muted); }
+.doc-list-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-light); cursor: pointer; transition: background var(--transition); }
+.doc-list-item:hover { background: var(--bg-secondary); }
+.doc-list-item:first-child { border-top: 1px solid var(--border-light); }
+.doc-list-icon { color: var(--text-muted); flex-shrink: 0; font-size: 1rem; }
+.doc-list-title { flex: 1; font-size: 0.875rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-list-meta { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.doc-list-meta span { font-size: 0.75rem; color: var(--text-muted); }
+.kb-content { min-height: 200px; }
+.kb-file-tree { display: flex; flex-direction: column; gap: 2px; }
+.kb-tree-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--transition); border: 1px solid transparent; }
+.kb-tree-item:hover { background: var(--bg-secondary); border-color: var(--border-light); }
+.kb-tree-icon { font-size: 1.25rem; color: var(--text-muted); width: 24px; text-align: center; flex-shrink: 0; }
+.kb-tree-item:hover .kb-tree-icon { color: var(--primary); }
+.kb-tree-name { font-size: 0.875rem; font-weight: 500; }
+.kb-tree-size { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; }
+.kb-tree-dir .kb-tree-name { font-weight: 600; }
+.kb-markdown { background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 28px 32px; line-height: 1.8; font-size: 0.9rem; max-width: 900px; }
+.kb-markdown h1 { font-size: 1.5rem; font-weight: 700; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border-light); }
+.kb-markdown h1:first-child { margin-top: 0; }
+.kb-markdown h2 { font-size: 1.25rem; font-weight: 600; margin: 20px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border-light); }
+.kb-markdown h3 { font-size: 1.1rem; font-weight: 600; margin: 16px 0 8px; }
+.kb-markdown p { margin: 8px 0; }
+.kb-markdown ul, .kb-markdown ol { margin: 8px 0; padding-left: 24px; }
+.kb-markdown li { margin: 4px 0; }
+.kb-markdown a { color: var(--primary); text-decoration: none; }
+.kb-markdown a:hover { text-decoration: underline; }
+.kb-markdown code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px; font-size: 0.85em; font-family: "SF Mono", Consolas, monospace; }
+.kb-markdown pre { background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 16px; overflow-x: auto; margin: 12px 0; }
+.kb-markdown pre code { background: none; padding: 0; }
+.kb-markdown blockquote { border-left: 3px solid var(--primary); padding-left: 16px; margin: 12px 0; color: var(--text-secondary); }
+.kb-markdown hr { border: none; border-top: 1px solid var(--border-light); margin: 16px 0; }
+.kb-markdown table { border-collapse: collapse; margin: 12px 0; }
+.kb-markdown table th, .kb-markdown table td { border: 1px solid var(--border-light); padding: 8px 12px; text-align: left; }
+.kb-markdown table th { background: var(--bg-secondary); font-weight: 600; }
+.kb-markdown strong { font-weight: 600; }
+.kb-markdown em { font-style: italic; }
+.kb-markdown .frontmatter { background: var(--bg-tertiary); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 12px 16px; margin-bottom: 16px; font-size: 0.8125rem; color: var(--text-secondary); }
+.kb-markdown .frontmatter-key { font-weight: 600; color: var(--text); }
+.kb-internal-link { cursor: pointer; color: var(--primary); text-decoration: underline; text-decoration-style: dotted; }
+.kb-internal-link:hover { text-decoration-style: solid; }
+
+/* Graph */
+.graph-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.graph-container { position: relative; width: 100%; height: calc(100vh - 180px); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; cursor: grab; }
+.graph-container:active { cursor: grabbing; }
+.graph-container canvas { display: block; width: 100%; height: 100%; }
+.graph-tooltip { position: fixed; display: none; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 0.8125rem; box-shadow: var(--shadow-lg); pointer-events: none; z-index: 100; max-width: 300px; }
+.graph-tooltip .tt-title { font-weight: 600; margin-bottom: 2px; }
+.graph-tooltip .tt-meta { color: var(--text-secondary); font-size: 0.75rem; }
+.graph-legend { display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap; font-size: 0.75rem; color: var(--text-secondary); }
+.graph-legend-item { display: flex; align-items: center; gap: 4px; }
+.graph-legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+
+<!-- Login Overlay -->
+<div id="loginOverlay" class="login-overlay hidden">
+  <div class="login-card">
+    <h2>Xylolabs Knowledge Engine</h2>
+    <div class="subtitle">Sign in to continue</div>
+    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
+    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+    <div id="loginError" class="login-error"></div>
+    <button onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+<!-- Document Detail Modal -->
+<div id="docModal" class="modal-overlay hidden" onclick="if(event.target===this)closeDocModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="docModalTitle"></h3>
+      <button class="modal-close" onclick="closeDocModal()">&times;</button>
+    </div>
+    <div id="docModalBody"></div>
+  </div>
+</div>
+
+<!-- Mobile Toggle -->
+<button class="mobile-toggle" onclick="toggleSidebar()">&#9776;</button>
+
+<!-- App -->
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1>Xylolabs Knowledge Engine</h1>
+      <div class="tagline">Admin Console</div>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" onclick="showTab('dashboard')" data-tab="dashboard">
+        <span class="icon">&#9635;</span> Dashboard
+      </button>
+      <button class="nav-item" onclick="showTab('documents')" data-tab="documents">
+        <span class="icon">&#9776;</span> Documents
+      </button>
+      <button class="nav-item" onclick="showTab('search')" data-tab="search">
+        <span class="icon">&#9906;</span> Search
+      </button>
+      <button class="nav-item" onclick="showTab('sources')" data-tab="sources">
+        <span class="icon">&#8635;</span> Sources
+      </button>
+      <button class="nav-item" onclick="showTab('jobs')" data-tab="jobs">
+        <span class="icon">&#9675;</span> Jobs
+      </button>
+      <button class="nav-item" onclick="showTab('index')" data-tab="index">
+        <span class="icon">&#8801;</span> Index
+      </button>
+      <button class="nav-item" onclick="showTab('kb')" data-tab="kb">
+        <span class="icon">&#9674;</span> KB
+      </button>
+      <button class="nav-item" onclick="showTab('graph')" data-tab="graph">
+        <span class="icon">&#9678;</span> Graph
+      </button>
+    </nav>
+    <div class="sidebar-footer" id="logoutSection" style="display:none">
+      <button class="logout-btn" onclick="doLogout()">
+        <span class="icon">&#10140;</span> Logout
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+
+    <!-- Dashboard Tab -->
+    <div id="tab-dashboard" class="tab-content active">
+      <h2 class="tab-title">Dashboard</h2>
+      <div class="stats-grid" id="statsGrid">
+        <div class="card">
+          <div class="card-title">Total Documents</div>
+          <div class="card-value" id="statDocs">-</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Total Attachments</div>
+          <div class="card-value" id="statAttach">-</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Attachment Size</div>
+          <div class="card-value" id="statSize">-</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Documents by Source</div>
+        <div class="bar-chart" id="sourceChart"></div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Last Sync Times</div>
+        <table>
+          <thead>
+            <tr><th>Source</th><th>Last Sync</th><th>Status</th></tr>
+          </thead>
+          <tbody id="syncTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Documents Tab -->
+    <div id="tab-documents" class="tab-content">
+      <h2 class="tab-title">Documents</h2>
+      <div id="docBreadcrumb" class="breadcrumb"></div>
+      <div id="docBrowser"></div>
+      <div class="pagination" id="docPagination" style="display:none">
+        <span id="docPaginationInfo"></span>
+        <div class="pagination-buttons">
+          <button class="btn btn-outline" id="docPrev" onclick="docPagePrev()" disabled>Previous</button>
+          <button class="btn btn-outline" id="docNext" onclick="docPageNext()" disabled>Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Search Tab -->
+    <div id="tab-search" class="tab-content">
+      <h2 class="tab-title">Search</h2>
+      <div class="filter-bar">
+        <input type="text" id="searchQuery" placeholder="Search documents..." onkeydown="if(event.key==='Enter')doSearch()">
+        <button class="btn btn-primary" onclick="doSearch()">Search</button>
+      </div>
+      <div class="filter-bar" style="margin-top:-8px">
+        <select id="searchSource">
+          <option value="">All Sources</option>
+          <option value="slack">Slack</option>
+          <option value="google">Google</option>
+          <option value="notion">Notion</option>
+        </select>
+        <input type="text" id="searchChannel" placeholder="Channel" style="min-width:120px;flex:0 1 auto">
+        <input type="text" id="searchAuthor" placeholder="Author" style="min-width:120px;flex:0 1 auto">
+      </div>
+      <div id="searchResults">
+        <div class="empty-state">
+          <div class="empty-state-icon">-</div>
+          <div class="empty-state-text">Enter a query to search documents</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sources Tab -->
+    <div id="tab-sources" class="tab-content">
+      <h2 class="tab-title">Sources</h2>
+      <div class="sources-grid" id="sourcesGrid">
+        <div class="loading">Loading sources...</div>
+      </div>
+    </div>
+
+    <!-- Jobs Tab -->
+    <div id="tab-jobs" class="tab-content">
+      <h2 class="tab-title">Jobs</h2>
+      <div id="jobsTableWrap">
+        <div class="loading">Loading jobs...</div>
+      </div>
+    </div>
+
+    <!-- Index Tab -->
+    <div id="tab-index" class="tab-content">
+      <h2 class="tab-title">Index</h2>
+      <div class="filter-bar">
+        <select id="indexSource" onchange="loadIndex()">
+          <option value="">All Sources</option>
+          <option value="slack">Slack</option>
+          <option value="google">Google</option>
+          <option value="notion">Notion</option>
+        </select>
+        <span id="indexStats" style="font-size:0.8125rem;color:var(--text-secondary)"></span>
+      </div>
+      <div id="indexTree" class="index-tree">
+        <div class="loading">Loading index...</div>
+      </div>
+    </div>
+
+    <!-- KB Tab -->
+    <div id="tab-kb" class="tab-content">
+      <h2 class="tab-title">Knowledge Base</h2>
+      <div id="kbBreadcrumb" class="breadcrumb"></div>
+      <div id="kbContent" class="kb-content">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Graph Tab -->
+    <div id="tab-graph" class="tab-content">
+      <h2 class="tab-title">Knowledge Graph</h2>
+      <div class="graph-controls">
+        <select id="graphSource" onchange="loadGraph()">
+          <option value="">All Sources</option>
+          <option value="slack">Slack</option>
+          <option value="google">Google</option>
+          <option value="notion">Notion</option>
+        </select>
+        <label style="font-size:0.8125rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="graphShowDocs" checked onchange="loadGraph()"> Show documents
+        </label>
+        <span id="graphStats" style="font-size:0.8125rem;color:var(--text-secondary)"></span>
+      </div>
+      <div class="graph-container" id="graphContainer">
+        <canvas id="graphCanvas"></canvas>
+      </div>
+      <div class="graph-tooltip" id="graphTooltip"></div>
+      <div class="graph-legend" id="graphLegend"></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ---- State ---- */
+let authRequired = false;
+let currentTab = 'dashboard';
+let docTotal = 0;
+let refreshTimer = null;
+let docList = [];
+let currentDocIndex = -1;
+let docBrowsePath = []; // e.g. [] = root, ['slack'] = source, ['slack','general'] = channel
+let docPageOffset = 0;
+
+/* ---- API Wrapper ---- */
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (res.status === 401) {
+    showLoginOverlay();
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/* ---- Helpers ---- */
+function formatBytes(n) {
+  if (n == null || isNaN(n)) return '0 B';
+  if (n === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(n) / Math.log(1024));
+  const val = n / Math.pow(1024, i);
+  return val.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function timeAgo(dateString) {
+  if (!dateString) return '-';
+  const d = new Date(dateString);
+  if (isNaN(d.getTime())) return '-';
+  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (seconds < 0) return 'just now';
+  if (seconds < 60) return seconds + 's ago';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + 'm ago';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + 'h ago';
+  const days = Math.floor(hours / 24);
+  if (days < 30) return days + 'd ago';
+  return d.toLocaleDateString();
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function truncate(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function sourceBadge(source) {
+  const s = (source || '').toLowerCase();
+  const cls = s === 'slack' ? 'badge-slack' : s === 'google' ? 'badge-google' : s === 'notion' ? 'badge-notion' : 'badge-default';
+  return `<span class="badge ${cls}">${escapeHtml(source || 'unknown')}</span>`;
+}
+
+function sourceColor(source) {
+  const s = (source || '').toLowerCase();
+  if (s === 'slack') return '#4A154B';
+  if (s === 'google') return '#4285F4';
+  if (s === 'notion') return '#000000';
+  return '#6c757d';
+}
+
+function syncStatusDot(dateString) {
+  if (!dateString) return '<span class="status-dot status-red"></span>';
+  const diff = Date.now() - new Date(dateString).getTime();
+  const hours = diff / (1000 * 60 * 60);
+  if (hours < 1) return '<span class="status-dot status-green"></span>';
+  if (hours < 24) return '<span class="status-dot status-yellow"></span>';
+  return '<span class="status-dot status-red"></span>';
+}
+
+/* ---- Auth ---- */
+function showLoginOverlay() {
+  document.getElementById('loginOverlay').classList.remove('hidden');
+  document.getElementById('loginError').textContent = '';
+  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginUsername').focus();
+}
+
+function hideLoginOverlay() {
+  document.getElementById('loginOverlay').classList.add('hidden');
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!username || !password) {
+    document.getElementById('loginError').textContent = 'Please enter both fields.';
+    return;
+  }
+  try {
+    await api('POST', '/console/login', { username, password });
+    hideLoginOverlay();
+    loadDashboard();
+  } catch (e) {
+    document.getElementById('loginError').textContent = 'Invalid credentials. Please try again.';
+  }
+}
+
+async function doLogout() {
+  try { await api('POST', '/console/logout'); } catch (e) { /* ignore */ }
+  showLoginOverlay();
+}
+
+async function checkAuth() {
+  try {
+    const data = await api('GET', '/console/auth/check');
+    authRequired = data.auth_required;
+    if (authRequired) {
+      document.getElementById('logoutSection').style.display = '';
+    }
+    if (data.auth_required && !data.authenticated) {
+      showLoginOverlay();
+      return false;
+    }
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
+/* ---- Login key handler ---- */
+document.getElementById('loginPassword').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('loginUsername').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('loginPassword').focus();
+});
+
+/* ---- Navigation ---- */
+function showTab(name) {
+  currentTab = name;
+  history.pushState({ tab: name }, '', '/console#tab/' + name);
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const tab = document.getElementById('tab-' + name);
+  if (tab) tab.classList.add('active');
+  const nav = document.querySelector(`.nav-item[data-tab="${name}"]`);
+  if (nav) nav.classList.add('active');
+
+  // Close sidebar on mobile
+  document.getElementById('sidebar').classList.remove('open');
+
+  // Stop graph simulation when leaving graph tab
+  if (name !== 'graph') stopGraphSimulation();
+
+  // Load data for the tab
+  if (name === 'dashboard') loadDashboard();
+  else if (name === 'documents') { renderDocBrowser(); }
+  else if (name === 'sources') loadSources();
+  else if (name === 'jobs') loadJobs();
+  else if (name === 'index') loadIndex();
+  else if (name === 'kb') renderKB();
+  else if (name === 'graph') loadGraph();
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+/* ---- Dashboard ---- */
+async function loadDashboard() {
+  try {
+    const data = await api('GET', '/api/v1/stats');
+    document.getElementById('statDocs').textContent = (data.total_documents || 0).toLocaleString();
+    document.getElementById('statAttach').textContent = (data.total_attachments || 0).toLocaleString();
+    document.getElementById('statSize').textContent = formatBytes(data.attachment_size || 0);
+
+    // Source bar chart
+    const bySource = data.documents_by_source || {};
+    const total = Object.values(bySource).reduce((a, b) => a + b, 0) || 1;
+    const chartEl = document.getElementById('sourceChart');
+    chartEl.innerHTML = '';
+    for (const [src, count] of Object.entries(bySource)) {
+      const pct = Math.max((count / total) * 100, 2);
+      chartEl.innerHTML += `
+        <div class="bar-row">
+          <div class="bar-label">${escapeHtml(src)}</div>
+          <div class="bar-track">
+            <div class="bar-fill" style="width:${pct}%;background:${sourceColor(src)}">${count}</div>
+          </div>
+          <div class="bar-count">${Math.round((count/total)*100)}%</div>
+        </div>`;
+    }
+    if (Object.keys(bySource).length === 0) {
+      chartEl.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents yet</div></div>';
+    }
+
+    // Sync table
+    const syncTimes = data.last_sync_times || {};
+    const syncEl = document.getElementById('syncTable');
+    syncEl.innerHTML = '';
+    for (const [src, ts] of Object.entries(syncTimes)) {
+      syncEl.innerHTML += `
+        <tr>
+          <td style="text-transform:capitalize;font-weight:500">${escapeHtml(src)}</td>
+          <td>${timeAgo(ts)}</td>
+          <td>${syncStatusDot(ts)}</td>
+        </tr>`;
+    }
+    if (Object.keys(syncTimes).length === 0) {
+      syncEl.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No sync data</td></tr>';
+    }
+  } catch (e) {
+    console.error('Dashboard load failed:', e);
+  }
+}
+
+/* ---- Documents (Directory Browser) ---- */
+function navigateDocs(path) {
+  docBrowsePath = path || [];
+  docPageOffset = 0;
+  const hash = docBrowsePath.length > 0
+    ? '#docs/' + docBrowsePath.map(encodeURIComponent).join('/')
+    : '#tab/documents';
+  history.pushState({ docs: docBrowsePath }, '', '/console' + hash);
+  renderDocBrowser();
+}
+
+function renderBreadcrumb() {
+  const el = document.getElementById('docBreadcrumb');
+  let html = '<a href="#" onclick="event.preventDefault();navigateDocs([])">Sources</a>';
+  for (let i = 0; i < docBrowsePath.length; i++) {
+    html += '<span class="sep">/</span>';
+    if (i < docBrowsePath.length - 1) {
+      const subpath = docBrowsePath.slice(0, i + 1);
+      html += '<a href="#" onclick="event.preventDefault();navigateDocs(' + JSON.stringify(subpath) + ')">' + escapeHtml(docBrowsePath[i]) + '</a>';
+    } else {
+      html += '<span class="current">' + escapeHtml(docBrowsePath[i]) + '</span>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+async function renderDocBrowser() {
+  renderBreadcrumb();
+  const browser = document.getElementById('docBrowser');
+  const pagination = document.getElementById('docPagination');
+  pagination.style.display = 'none';
+
+  if (docBrowsePath.length === 0) {
+    // Root: show sources as folders
+    browser.innerHTML = '<div class="loading">Loading...</div>';
+    try {
+      const data = await api('GET', '/api/v1/stats');
+      const bySource = data.documents_by_source || {};
+      if (Object.keys(bySource).length === 0) {
+        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents yet</div></div>';
+        return;
+      }
+      let html = '<div class="dir-grid">';
+      for (const [src, count] of Object.entries(bySource)) {
+        html += '<div class="dir-item" onclick="navigateDocs([\'' + escapeHtml(src) + '\'])">'
+          + '<div class="dir-icon" style="color:' + sourceColor(src) + '">&#9632;</div>'
+          + '<div>'
+          + '<div class="dir-label" style="text-transform:capitalize">' + escapeHtml(src) + '</div>'
+          + '<div class="dir-count">' + count + ' documents</div>'
+          + '</div></div>';
+      }
+      html += '</div>';
+      browser.innerHTML = html;
+    } catch (e) {
+      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load sources</div></div>';
+    }
+  } else if (docBrowsePath.length === 1) {
+    // Source level: show channels as folders
+    const source = docBrowsePath[0];
+    browser.innerHTML = '<div class="loading">Loading...</div>';
+    try {
+      const data = await api('GET', '/api/v1/documents?source=' + encodeURIComponent(source) + '&limit=1000');
+      const docs = data.documents || [];
+
+      // Group by channel
+      const channels = {};
+      for (const doc of docs) {
+        const ch = doc.channel || doc.content_type || '(uncategorized)';
+        if (!channels[ch]) channels[ch] = 0;
+        channels[ch]++;
+      }
+
+      const sorted = Object.entries(channels).sort(function(a, b) { return b[1] - a[1]; });
+      if (sorted.length === 0) {
+        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents in this source</div></div>';
+        return;
+      }
+
+      let html = '<div class="dir-grid">';
+      for (const [ch, count] of sorted) {
+        html += '<div class="dir-item" onclick="navigateDocs([\'' + escapeHtml(source) + '\',\'' + escapeHtml(ch) + '\'])">'
+          + '<div class="dir-icon">&#9783;</div>'
+          + '<div>'
+          + '<div class="dir-label">' + escapeHtml(ch) + '</div>'
+          + '<div class="dir-count">' + count + ' documents</div>'
+          + '</div></div>';
+      }
+      html += '</div>';
+      browser.innerHTML = html;
+    } catch (e) {
+      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load channels</div></div>';
+    }
+  } else if (docBrowsePath.length === 2) {
+    // Channel level: show documents as list
+    const source = docBrowsePath[0];
+    const channel = docBrowsePath[1];
+    const limit = 50;
+    browser.innerHTML = '<div class="loading">Loading...</div>';
+    try {
+      const data = await api('GET', '/api/v1/documents?source=' + encodeURIComponent(source) + '&limit=1000');
+      const allDocs = data.documents || [];
+      const filtered = allDocs.filter(function(d) { return (d.channel || d.content_type || '(uncategorized)') === channel; });
+
+      // Sort by timestamp descending
+      filtered.sort(function(a, b) { return new Date(b.timestamp) - new Date(a.timestamp); });
+
+      // Update docList for modal navigation
+      docList = filtered.map(function(d) { return { id: d.id, title: d.title || truncate(d.content, 60) || '(Untitled)' }; });
+
+      // Paginate
+      const pageDocs = filtered.slice(docPageOffset, docPageOffset + limit);
+      docTotal = filtered.length;
+
+      if (pageDocs.length === 0) {
+        browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">No documents in this channel</div></div>';
+        return;
+      }
+
+      // Hierarchy context panel
+      let html = '<div class="section-card" style="margin-bottom:16px;padding:16px">';
+      html += '<div class="section-title" style="font-size:0.8125rem;margin-bottom:12px">Hierarchy</div>';
+      html += '<div style="display:flex;align-items:center;gap:8px;font-size:0.8125rem">';
+      html += '<span style="padding:4px 10px;border-radius:var(--radius-sm);background:' + sourceColor(source) + ';color:#fff;font-weight:600;text-transform:capitalize">' + escapeHtml(source) + '</span>';
+      html += '<span style="color:var(--text-muted)">&#8594;</span>';
+      html += '<span style="padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg-tertiary);font-weight:500">' + escapeHtml(channel) + '</span>';
+      html += '<span style="color:var(--text-muted)">&#8594;</span>';
+      html += '<span style="color:var(--text-secondary)">' + filtered.length + ' documents</span>';
+      html += '</div>';
+
+      // For Slack, show thread breakdown
+      if (source === 'slack') {
+        const threadCount = new Set(filtered.filter(d => d.parent_id && d.parent_id !== d.id).map(d => d.parent_id)).size;
+        const standaloneCount = filtered.filter(d => !d.parent_id || d.parent_id === d.id).length - threadCount;
+        if (threadCount > 0) {
+          html += '<div style="margin-top:8px;font-size:0.75rem;color:var(--text-muted)">' + threadCount + ' threads, ' + Math.max(0, standaloneCount) + ' standalone messages</div>';
+        }
+      }
+      html += '</div>';
+
+      for (const doc of pageDocs) {
+        const title = doc.title || truncate(doc.content, 80) || '(Untitled)';
+        html += '<div class="doc-list-item" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">'
+          + '<div class="doc-list-icon">&#9633;</div>'
+          + '<div class="doc-list-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 80)) + '</div>'
+          + '<div class="doc-list-meta">'
+          + sourceBadge(doc.source)
+          + '<span>' + escapeHtml(doc.author || '') + '</span>'
+          + '<span>' + timeAgo(doc.timestamp) + '</span>'
+          + '</div></div>';
+      }
+      browser.innerHTML = html;
+
+      // Show pagination if needed
+      if (filtered.length > limit) {
+        pagination.style.display = 'flex';
+        const start = docPageOffset + 1;
+        const end = Math.min(docPageOffset + limit, filtered.length);
+        document.getElementById('docPaginationInfo').textContent = 'Showing ' + start + '-' + end + ' of ' + filtered.length;
+        document.getElementById('docPrev').disabled = docPageOffset === 0;
+        document.getElementById('docNext').disabled = docPageOffset + limit >= filtered.length;
+      }
+    } catch (e) {
+      browser.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load documents</div></div>';
+    }
+  }
+}
+
+function docPagePrev() {
+  docPageOffset = Math.max(0, docPageOffset - 50);
+  renderDocBrowser();
+}
+
+function docPageNext() {
+  if (docPageOffset + 50 < docTotal) {
+    docPageOffset += 50;
+    renderDocBrowser();
+  }
+}
+
+async function showDocument(id) {
+  try {
+    const doc = await api('GET', `/api/v1/documents/${id}`);
+    currentDocIndex = docList.findIndex(d => d.id === id);
+
+    document.getElementById('docModalTitle').textContent = doc.title || '(Untitled)';
+
+    const fields = [
+      ['ID', doc.id],
+      ['Source', doc.source],
+      ['Content Type', doc.content_type],
+      ['Author', doc.author],
+      ['Channel', doc.channel],
+      ['URL', doc.url],
+      ['Timestamp', doc.timestamp ? new Date(doc.timestamp).toLocaleString() + ' (' + timeAgo(doc.timestamp) + ')' : '-'],
+    ];
+
+    let html = '';
+
+    // Navigation buttons
+    const hasPrev = currentDocIndex > 0;
+    const hasNext = currentDocIndex >= 0 && currentDocIndex < docList.length - 1;
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border-light)">';
+    html += `<button class="btn btn-outline" onclick="navDoc(-1)" ${hasPrev ? '' : 'disabled'}>&#8592; Previous</button>`;
+    html += `<span style="font-size:0.8125rem;color:var(--text-muted)">${currentDocIndex >= 0 ? (currentDocIndex + 1) + ' / ' + docList.length : ''}</span>`;
+    html += `<button class="btn btn-outline" onclick="navDoc(1)" ${hasNext ? '' : 'disabled'}>Next &#8594;</button>`;
+    html += '</div>';
+
+    for (const [label, value] of fields) {
+      if (!value) continue;
+      let display;
+      if (label === 'URL') {
+        display = `<a href="${escapeHtml(value)}" target="_blank" rel="noopener" style="color:var(--primary)">${escapeHtml(value)}</a>`;
+      } else if (label === 'Source') {
+        display = sourceBadge(value);
+      } else if (label === 'Channel') {
+        display = `<a href="#" onclick="event.preventDefault();closeDocModal();filterByChannel('${escapeHtml(value)}')" style="color:var(--primary)">${escapeHtml(value)}</a>`;
+      } else if (label === 'Author') {
+        display = `<a href="#" onclick="event.preventDefault();closeDocModal();filterByAuthor('${escapeHtml(value)}')" style="color:var(--primary)">${escapeHtml(value)}</a>`;
+      } else {
+        display = escapeHtml(value);
+      }
+      html += `<div class="modal-field"><div class="modal-field-label">${label}</div><div class="modal-field-value">${display}</div></div>`;
+    }
+
+    // Parent document link
+    if (doc.parent_id) {
+      html += `<div class="modal-field"><div class="modal-field-label">Parent Document</div><div class="modal-field-value"><a href="#" onclick="event.preventDefault();showDocument('${escapeHtml(doc.parent_id)}')" style="color:var(--primary)">${escapeHtml(doc.parent_id)}</a></div></div>`;
+    }
+
+    if (doc.metadata && Object.keys(doc.metadata).length > 0) {
+      html += `<div class="modal-field"><div class="modal-field-label">Metadata</div><div class="modal-field-value"><pre style="font-size:0.8125rem;margin:0">${escapeHtml(JSON.stringify(doc.metadata, null, 2))}</pre></div></div>`;
+    }
+
+    html += `<div class="modal-field"><div class="modal-field-label">Content</div><div class="modal-content-body">${escapeHtml(doc.content || '')}</div></div>`;
+
+    document.getElementById('docModalBody').innerHTML = html;
+    document.getElementById('docModal').classList.remove('hidden');
+    history.pushState({ doc: id }, '', '/console#doc/' + id);
+  } catch (e) {
+    console.error('Document load failed:', e);
+  }
+}
+
+function closeDocModal() {
+  document.getElementById('docModal').classList.add('hidden');
+  if (currentTab === 'documents' && docBrowsePath.length > 0) {
+    const hash = '#docs/' + docBrowsePath.map(encodeURIComponent).join('/');
+    history.pushState({ docs: docBrowsePath }, '', '/console' + hash);
+  } else {
+    history.pushState({ tab: currentTab }, '', '/console#tab/' + currentTab);
+  }
+}
+
+function navDoc(direction) {
+  const newIndex = currentDocIndex + direction;
+  if (newIndex >= 0 && newIndex < docList.length) {
+    showDocument(docList[newIndex].id);
+  }
+}
+
+function filterByChannel(channel) {
+  showTab('search');
+  document.getElementById('searchChannel').value = channel;
+  document.getElementById('searchQuery').value = '*';
+  doSearch();
+}
+
+function filterByAuthor(author) {
+  showTab('search');
+  document.getElementById('searchAuthor').value = author;
+  document.getElementById('searchQuery').value = '*';
+  doSearch();
+}
+
+/* ---- Search ---- */
+async function doSearch() {
+  const query = document.getElementById('searchQuery').value.trim();
+  if (!query) return;
+
+  const source = document.getElementById('searchSource').value;
+  const channel = document.getElementById('searchChannel').value.trim();
+  const author = document.getElementById('searchAuthor').value.trim();
+
+  let path = `/api/v1/search?q=${encodeURIComponent(query)}&limit=50`;
+  if (source) path += `&source=${encodeURIComponent(source)}`;
+  if (channel) path += `&channel=${encodeURIComponent(channel)}`;
+  if (author) path += `&author=${encodeURIComponent(author)}`;
+
+  const container = document.getElementById('searchResults');
+  container.innerHTML = '<div class="loading">Searching...</div>';
+
+  try {
+    const data = await api('GET', path);
+    const results = data.results || [];
+
+    if (results.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No results found</div></div>';
+      return;
+    }
+
+    let html = `<div style="font-size:0.8125rem;color:var(--text-secondary);margin-bottom:12px">${data.total || results.length} result${results.length !== 1 ? 's' : ''} found</div>`;
+
+    for (const r of results) {
+      const title = r.title || truncate(r.snippet, 60) || '(Untitled)';
+      const snippet = highlightQuery(r.snippet || '', query);
+      const score = r.score != null ? r.score.toFixed(3) : '';
+
+      html += `
+        <div class="search-result">
+          <div class="search-result-title" style="cursor:pointer" onclick="showDocument('${escapeHtml(r.id)}')">${escapeHtml(title)}</div>
+          <div class="search-result-snippet">${snippet}</div>
+          <div class="search-result-meta">
+            ${sourceBadge(r.source)}
+            ${r.author ? '<span>' + escapeHtml(r.author) + '</span>' : ''}
+            ${r.channel ? '<span>#' + escapeHtml(r.channel) + '</span>' : ''}
+            ${score ? '<span>Score: ' + score + '</span>' : ''}
+            <span>${timeAgo(r.timestamp)}</span>
+          </div>
+        </div>`;
+    }
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Search failed. Please try again.</div></div>';
+  }
+}
+
+function highlightQuery(text, query) {
+  if (!text || !query) return escapeHtml(text);
+  const escaped = escapeHtml(text);
+  const words = query.split(/\s+/).filter(w => w.length > 0);
+  let result = escaped;
+  for (const word of words) {
+    const re = new RegExp('(' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    result = result.replace(re, '<mark>$1</mark>');
+  }
+  return result;
+}
+
+/* ---- Sources ---- */
+async function loadSources() {
+  try {
+    const data = await api('GET', '/api/v1/sources');
+    const sources = data.sources || [];
+    const grid = document.getElementById('sourcesGrid');
+
+    if (sources.length === 0) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No sources configured</div></div>';
+      return;
+    }
+
+    grid.innerHTML = '';
+    for (const s of sources) {
+      const cardId = 'source-' + s.name;
+      let html = `
+        <div class="source-card" id="${cardId}">
+          <div class="source-card-header">
+            <div class="source-name">${escapeHtml(s.name)}</div>
+            <button class="btn btn-primary" onclick="triggerSync('${escapeHtml(s.name)}','${cardId}')">Sync Now</button>
+          </div>
+          <div class="source-stat"><span class="source-stat-label">Interval</span><span class="source-stat-value">${escapeHtml(s.interval || '-')}</span></div>
+          <div class="source-stat"><span class="source-stat-label">Last Run</span><span class="source-stat-value">${timeAgo(s.last_run)}</span></div>
+          <div class="source-stat"><span class="source-stat-label">Run Count</span><span class="source-stat-value">${s.run_count || 0}</span></div>
+          <div class="source-stat"><span class="source-stat-label">Error Count</span><span class="source-stat-value">${s.err_count || 0}</span></div>`;
+
+      if (s.last_sync) {
+        html += `<div class="source-stat"><span class="source-stat-label">Last Sync</span><span class="source-stat-value">${timeAgo(s.last_sync)}</span></div>`;
+      }
+      if (s.cursor) {
+        html += `<div class="source-stat"><span class="source-stat-label">Cursor</span><span class="source-stat-value" style="font-size:0.75rem;word-break:break-all">${escapeHtml(truncate(s.cursor, 50))}</span></div>`;
+      }
+      if (s.last_error) {
+        html += `<div class="source-error">${escapeHtml(s.last_error)}</div>`;
+      }
+      html += `<div class="sync-feedback" id="feedback-${cardId}"></div></div>`;
+      grid.innerHTML += html;
+    }
+  } catch (e) {
+    document.getElementById('sourcesGrid').innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load sources</div></div>';
+  }
+}
+
+async function triggerSync(source, cardId) {
+  const feedbackEl = document.getElementById('feedback-' + cardId);
+  try {
+    await api('POST', `/api/v1/sync/${encodeURIComponent(source)}`);
+    if (feedbackEl) {
+      feedbackEl.textContent = 'Sync triggered!';
+      setTimeout(() => { feedbackEl.textContent = ''; }, 3000);
+    }
+  } catch (e) {
+    if (feedbackEl) {
+      feedbackEl.textContent = 'Failed to trigger sync.';
+      feedbackEl.style.color = 'var(--danger)';
+      setTimeout(() => { feedbackEl.textContent = ''; feedbackEl.style.color = ''; }, 3000);
+    }
+  }
+}
+
+/* ---- Jobs ---- */
+async function loadJobs() {
+  try {
+    const data = await api('GET', '/api/v1/jobs');
+    const jobs = data.jobs || [];
+    const container = document.getElementById('jobsTableWrap');
+
+    if (jobs.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No scheduled jobs</div></div>';
+      return;
+    }
+
+    let html = `<table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Type</th>
+          <th>Channel</th>
+          <th>Message</th>
+          <th>Cron</th>
+          <th>Next Run</th>
+          <th>Created By</th>
+        </tr>
+      </thead>
+      <tbody>`;
+
+    for (const j of jobs) {
+      const typeBadge = j.type === 'recurring'
+        ? '<span class="badge badge-green">recurring</span>'
+        : '<span class="badge badge-blue">once</span>';
+      const nextRun = j.next_run ? timeAgo(j.next_run) : (j.run_at ? timeAgo(j.run_at) : '-');
+
+      html += `
+        <tr>
+          <td style="font-family:monospace;font-size:0.8125rem">${escapeHtml((j.id || '').substring(0, 8))}</td>
+          <td>${typeBadge}</td>
+          <td>${escapeHtml(j.channel_id || '-')}</td>
+          <td>${escapeHtml(truncate(j.message, 80))}</td>
+          <td style="font-family:monospace;font-size:0.8125rem">${escapeHtml(j.cron_expr || '-')}</td>
+          <td>${nextRun}</td>
+          <td>${escapeHtml(j.created_by || '-')}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    document.getElementById('jobsTableWrap').innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load jobs</div></div>';
+  }
+}
+
+/* ---- Index ---- */
+async function loadIndex() {
+  const source = document.getElementById('indexSource').value;
+  const tree = document.getElementById('indexTree');
+  tree.innerHTML = '<div class="loading">Loading index...</div>';
+
+  try {
+    // Fetch all documents (up to 1000)
+    let path = '/api/v1/documents?limit=1000';
+    if (source) path += '&source=' + encodeURIComponent(source);
+    const data = await api('GET', path);
+    const docs = data.documents || [];
+
+    // Update docList for navigation
+    docList = docs.map(d => ({ id: d.id, title: d.title || truncate(d.content, 60) || '(Untitled)' }));
+
+    document.getElementById('indexStats').textContent = docs.length + ' documents';
+
+    if (docs.length === 0) {
+      tree.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div><div class="empty-state-text">No documents found</div></div>';
+      return;
+    }
+
+    // Group by source -> channel
+    const grouped = {};
+    for (const doc of docs) {
+      const src = doc.source || 'unknown';
+      const ch = doc.channel || doc.content_type || '(uncategorized)';
+      if (!grouped[src]) grouped[src] = {};
+      if (!grouped[src][ch]) grouped[src][ch] = [];
+      grouped[src][ch].push(doc);
+    }
+
+    let html = '';
+    const sourceOrder = ['slack', 'google', 'notion'];
+    const sources = Object.keys(grouped).sort((a, b) => {
+      const ai = sourceOrder.indexOf(a), bi = sourceOrder.indexOf(b);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    for (const src of sources) {
+      const channels = grouped[src];
+      const channelNames = Object.keys(channels).sort();
+      const totalDocs = channelNames.reduce((sum, ch) => sum + channels[ch].length, 0);
+      const srcId = 'src-' + src.replace(/[^a-z0-9]/g, '');
+
+      html += '<div class="tree-source">';
+      html += '<div class="tree-source-header" onclick="toggleTree(\'' + srcId + '\')">';
+      html += '<span class="tree-toggle open" id="toggle-' + srcId + '">&#9656;</span>';
+      html += sourceBadge(src) + ' <span class="tree-source-name">' + escapeHtml(src) + '</span>';
+      html += '<span class="tree-source-count">' + totalDocs + ' docs / ' + channelNames.length + ' channels</span>';
+      html += '</div>';
+      html += '<div class="tree-children" id="children-' + srcId + '">';
+
+      for (const ch of channelNames) {
+        const chDocs = channels[ch];
+        const chId = srcId + '-ch-' + ch.replace(/[^a-z0-9]/g, '_');
+
+        html += '<div class="tree-channel">';
+        html += '<div class="tree-channel-header" onclick="toggleTree(\'' + chId + '\')">';
+        html += '<span class="tree-toggle open" id="toggle-' + chId + '" style="font-size:0.625rem">&#9656;</span>';
+        html += '<span class="tree-channel-name">' + escapeHtml(ch) + '</span>';
+        html += '<span class="tree-channel-count">' + chDocs.length + '</span>';
+        html += '</div>';
+        html += '<div class="tree-docs" id="children-' + chId + '">';
+
+        // Sort docs by timestamp descending
+        chDocs.sort(function(a, b) { return new Date(b.timestamp) - new Date(a.timestamp); });
+
+        if (src === 'slack') {
+          // Group by thread (parent_id)
+          const threads = {};
+          const standalone = [];
+          for (const doc of chDocs) {
+            if (doc.parent_id && doc.parent_id !== doc.id) {
+              if (!threads[doc.parent_id]) threads[doc.parent_id] = [];
+              threads[doc.parent_id].push(doc);
+            } else {
+              standalone.push(doc);
+            }
+          }
+
+          // Render threads first
+          for (const [parentId, replies] of Object.entries(threads)) {
+            const threadId = chId + '-t-' + parentId.substring(0, 8);
+            // Find parent doc
+            const parent = chDocs.find(d => d.id === parentId) || standalone.find(d => d.id === parentId);
+            const parentTitle = parent ? (parent.title || truncate(parent.content, 50) || '(Thread)') : '(Thread)';
+
+            html += '<div class="tree-channel" style="margin-left:8px">';
+            html += '<div class="tree-channel-header" onclick="toggleTree(\'' + threadId + '\')">';
+            html += '<span class="tree-toggle" id="toggle-' + threadId + '" style="font-size:0.625rem">&#9656;</span>';
+            html += '<span class="tree-channel-name" style="font-size:0.8125rem;color:var(--text-secondary)">Thread: ' + escapeHtml(truncate(parentTitle, 40)) + '</span>';
+            html += '<span class="tree-channel-count">' + (replies.length + (parent ? 1 : 0)) + '</span>';
+            html += '</div>';
+            html += '<div class="tree-docs collapsed" id="children-' + threadId + '">';
+
+            // Show parent first if found
+            if (parent) {
+              html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(parent.id) + '\')">';
+              html += '<span class="tree-doc-title" title="' + escapeHtml(parentTitle) + '" style="font-weight:600">' + escapeHtml(truncate(parentTitle, 60)) + '</span>';
+              html += '<span class="tree-doc-time">' + timeAgo(parent.timestamp) + '</span>';
+              html += '</div>';
+            }
+
+            replies.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            for (const doc of replies) {
+              const title = doc.title || truncate(doc.content, 50) || '(Reply)';
+              html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">';
+              html += '<span class="tree-doc-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 60)) + '</span>';
+              html += '<span class="tree-doc-time">' + timeAgo(doc.timestamp) + '</span>';
+              html += '</div>';
+            }
+            html += '</div></div>';
+
+            // Remove parent from standalone since it's shown in thread
+            const idx = standalone.findIndex(d => d.id === parentId);
+            if (idx !== -1) standalone.splice(idx, 1);
+          }
+
+          // Render standalone messages
+          for (const doc of standalone) {
+            const title = doc.title || truncate(doc.content, 50) || '(Untitled)';
+            html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">';
+            html += '<span class="tree-doc-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 60)) + '</span>';
+            html += '<span class="tree-doc-type">' + escapeHtml(doc.content_type || '') + '</span>';
+            html += '<span class="tree-doc-time">' + timeAgo(doc.timestamp) + '</span>';
+            html += '</div>';
+          }
+        } else {
+          // Non-slack: flat document list (existing behavior)
+          for (const doc of chDocs) {
+            const title = doc.title || truncate(doc.content, 50) || '(Untitled)';
+            html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">';
+            html += '<span class="tree-doc-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 60)) + '</span>';
+            html += '<span class="tree-doc-type">' + escapeHtml(doc.content_type || '') + '</span>';
+            html += '<span class="tree-doc-time">' + timeAgo(doc.timestamp) + '</span>';
+            html += '</div>';
+          }
+        }
+
+        html += '</div></div>';
+      }
+
+      html += '</div></div>';
+    }
+
+    tree.innerHTML = html;
+  } catch (e) {
+    tree.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load index</div></div>';
+    console.error('Index load failed:', e);
+  }
+}
+
+function toggleTree(id) {
+  const children = document.getElementById('children-' + id);
+  const toggle = document.getElementById('toggle-' + id);
+  if (children && toggle) {
+    children.classList.toggle('collapsed');
+    toggle.classList.toggle('open');
+  }
+}
+
+/* ---- KB (Knowledge Base Markdown Browser) ---- */
+let kbTree = null;
+let kbCurrentPath = ''; // empty = root, or a directory/file path
+
+async function loadKBTree() {
+  if (kbTree) return kbTree;
+  try {
+    const data = await api('GET', '/api/v1/kb/tree');
+    kbTree = data.tree || [];
+    return kbTree;
+  } catch (e) {
+    console.error('KB tree load failed:', e);
+    return [];
+  }
+}
+
+function navigateKB(path) {
+  kbCurrentPath = path || '';
+  const hash = kbCurrentPath ? '#kb/' + encodeURIComponent(kbCurrentPath) : '#tab/kb';
+  history.pushState({ kb: kbCurrentPath }, '', '/console' + hash);
+  renderKB();
+}
+
+function renderKBBreadcrumb() {
+  const el = document.getElementById('kbBreadcrumb');
+  if (!kbCurrentPath) {
+    el.innerHTML = '<span class="current">Root</span>';
+    return;
+  }
+  let html = '<a href="#" onclick="event.preventDefault();navigateKB(\'\')">Root</a>';
+  const parts = kbCurrentPath.split('/');
+  for (let i = 0; i < parts.length; i++) {
+    html += '<span class="sep">/</span>';
+    const subpath = parts.slice(0, i + 1).join('/');
+    if (i < parts.length - 1) {
+      html += '<a href="#" onclick="event.preventDefault();navigateKB(\'' + escapeHtml(subpath) + '\')">' + escapeHtml(parts[i]) + '</a>';
+    } else {
+      html += '<span class="current">' + escapeHtml(parts[i]) + '</span>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+async function renderKB() {
+  renderKBBreadcrumb();
+  const container = document.getElementById('kbContent');
+  const tree = await loadKBTree();
+
+  if (!kbCurrentPath) {
+    // Show root directory
+    renderKBDirectory(container, tree);
+    return;
+  }
+
+  // Check if it's a directory or file
+  const node = findKBNode(tree, kbCurrentPath);
+  if (node && node.is_dir) {
+    renderKBDirectory(container, node.children || []);
+  } else if (kbCurrentPath.endsWith('.md')) {
+    // It's a file - load and render
+    await renderKBFile(container, kbCurrentPath);
+  } else {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Not found</div></div>';
+  }
+}
+
+function findKBNode(nodes, path) {
+  if (!nodes) return null;
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    if (node.is_dir && path.startsWith(node.path + '/')) {
+      const found = findKBNode(node.children, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function renderKBDirectory(container, items) {
+  if (!items || items.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Empty directory</div></div>';
+    return;
+  }
+
+  // Sort: directories first, then files, both alphabetically
+  const sorted = [...items].sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  let html = '<div class="kb-file-tree">';
+  for (const item of sorted) {
+    const icon = item.is_dir ? '&#9783;' : '&#9633;';
+    const size = item.is_dir ? '' : formatBytes(item.size || 0);
+    const cls = item.is_dir ? 'kb-tree-dir' : '';
+    html += '<div class="kb-tree-item ' + cls + '" onclick="navigateKB(\'' + escapeHtml(item.path) + '\')">';
+    html += '<span class="kb-tree-icon">' + icon + '</span>';
+    html += '<span class="kb-tree-name">' + escapeHtml(item.name) + '</span>';
+    if (size) html += '<span class="kb-tree-size">' + size + '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+async function renderKBFile(container, path) {
+  container.innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    const data = await api('GET', '/api/v1/kb/file?path=' + encodeURIComponent(path));
+    const rendered = renderMarkdown(data.content || '');
+    container.innerHTML = '<div class="kb-markdown">' + rendered + '</div>';
+
+    // Make internal .md links clickable within KB
+    container.querySelectorAll('a[href$=".md"]').forEach(a => {
+      const href = a.getAttribute('href');
+      if (href && !href.startsWith('http')) {
+        a.classList.add('kb-internal-link');
+        a.addEventListener('click', function(e) {
+          e.preventDefault();
+          // Resolve relative path
+          const dir = path.substring(0, path.lastIndexOf('/'));
+          let resolved = href;
+          if (href.startsWith('../')) {
+            const parts = dir.split('/');
+            let rel = href;
+            while (rel.startsWith('../')) {
+              parts.pop();
+              rel = rel.substring(3);
+            }
+            resolved = parts.length > 0 ? parts.join('/') + '/' + rel : rel;
+          } else if (!href.includes('/')) {
+            resolved = dir ? dir + '/' + href : href;
+          }
+          navigateKB(resolved);
+        });
+      }
+    });
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load file</div></div>';
+  }
+}
+
+function renderMarkdown(md) {
+  // Extract and render frontmatter
+  let content = md;
+  let frontmatterHtml = '';
+  if (content.startsWith('---')) {
+    const end = content.indexOf('---', 3);
+    if (end > 0) {
+      const fm = content.substring(3, end).trim();
+      const lines = fm.split('\n').filter(l => l.trim());
+      if (lines.length > 0) {
+        frontmatterHtml = '<div class="frontmatter">';
+        for (const line of lines) {
+          const colon = line.indexOf(':');
+          if (colon > 0) {
+            const key = line.substring(0, colon).trim();
+            const val = line.substring(colon + 1).trim().replace(/^["']|["']$/g, '');
+            frontmatterHtml += '<div><span class="frontmatter-key">' + escapeHtml(key) + ':</span> ' + escapeHtml(val) + '</div>';
+          }
+        }
+        frontmatterHtml += '</div>';
+      }
+      content = content.substring(end + 3).trim();
+    }
+  }
+
+  // Simple markdown to HTML conversion
+  let html = content;
+
+  // Code blocks (must be before other processing)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code) {
+    return '<pre><code>' + escapeHtml(code.trim()) + '</code></pre>';
+  });
+
+  // Inline code (before other inline processing)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Horizontal rules
+  html = html.replace(/^---+$/gm, '<hr>');
+
+  // Bold and italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Links: [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+  // Blockquotes
+  html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // Tables (basic support)
+  html = html.replace(/^\|(.+)\|$/gm, function(match, content) {
+    const cells = content.split('|').map(c => c.trim());
+    if (cells.every(c => /^[-:]+$/.test(c))) return ''; // separator row
+    const tag = 'td';
+    return '<tr>' + cells.map(c => '<' + tag + '>' + c + '</' + tag + '>').join('') + '</tr>';
+  });
+  html = html.replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>');
+
+  // Paragraphs: wrap remaining text lines
+  html = html.split('\n\n').map(block => {
+    block = block.trim();
+    if (!block) return '';
+    if (block.startsWith('<')) return block; // already HTML
+    return '<p>' + block.replace(/\n/g, '<br>') + '</p>';
+  }).join('\n');
+
+  return frontmatterHtml + html;
+}
+
+/* ---- Graph ---- */
+let graphNodes = [];
+let graphEdges = [];
+let graphAnimId = null;
+let graphTransform = { x: 0, y: 0, scale: 1 };
+let graphDrag = null;
+let graphHovered = null;
+let graphDragNode = null;
+let graphAlpha = 1.0;
+let graphCanvasW = 0;
+let graphCanvasH = 0;
+
+function graphNodeColor(source, type) {
+  const base = sourceColor(source);
+  // Parse hex to RGB
+  const r = parseInt(base.slice(1,3), 16);
+  const g = parseInt(base.slice(3,5), 16);
+  const b = parseInt(base.slice(5,7), 16);
+  if (type === 'source') return base;
+  if (type === 'channel') return 'rgba(' + r + ',' + g + ',' + b + ',0.65)';
+  if (type === 'thread') return 'rgba(' + r + ',' + g + ',' + b + ',0.4)';
+  return 'rgba(' + r + ',' + g + ',' + b + ',0.2)';
+}
+
+function graphNodeRadius(type) {
+  if (type === 'source') return 20;
+  if (type === 'channel') return 10;
+  if (type === 'thread') return 6;
+  return 3;
+}
+
+async function loadGraph() {
+  const source = document.getElementById('graphSource').value;
+  const showDocs = document.getElementById('graphShowDocs').checked;
+
+  let path = '/api/v1/documents?limit=1000';
+  if (source) path += '&source=' + encodeURIComponent(source);
+
+  try {
+    const data = await api('GET', path);
+    const docs = data.documents || [];
+    buildGraph(docs, showDocs);
+
+    // Size canvas
+    const canvas = document.getElementById('graphCanvas');
+    const container = document.getElementById('graphContainer');
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
+    graphCanvasW = canvas.width;
+    graphCanvasH = canvas.height;
+
+    // Init positions randomly around center
+    const cx = graphCanvasW / 2, cy = graphCanvasH / 2;
+    for (const node of graphNodes) {
+      node.x = cx + (Math.random() - 0.5) * graphCanvasW * 0.4;
+      node.y = cy + (Math.random() - 0.5) * graphCanvasH * 0.4;
+      node.vx = 0;
+      node.vy = 0;
+    }
+
+    graphTransform = { x: 0, y: 0, scale: 1 };
+    graphAlpha = 1.0;
+
+    // Build legend
+    buildGraphLegend(docs);
+
+    // Setup interaction
+    setupGraphInteraction();
+
+    // Start simulation
+    startGraphSimulation();
+  } catch (e) {
+    console.error('Graph load failed:', e);
+  }
+}
+
+function buildGraph(docs, showDocs) {
+  graphNodes = [];
+  graphEdges = [];
+  const nodeMap = {};
+
+  // Group by source -> channel
+  const grouped = {};
+  for (const doc of docs) {
+    const src = doc.source || 'unknown';
+    const ch = doc.channel || doc.content_type || '(uncategorized)';
+    if (!grouped[src]) grouped[src] = {};
+    if (!grouped[src][ch]) grouped[src][ch] = [];
+    grouped[src][ch].push(doc);
+  }
+
+  for (const src of Object.keys(grouped)) {
+    const srcNode = { id: 'src:' + src, label: src, type: 'source', source: src, count: 0 };
+    graphNodes.push(srcNode);
+    nodeMap[srcNode.id] = srcNode;
+
+    for (const ch of Object.keys(grouped[src])) {
+      const chDocs = grouped[src][ch];
+      srcNode.count += chDocs.length;
+      const chNode = { id: 'ch:' + src + ':' + ch, label: ch, type: 'channel', source: src, count: chDocs.length };
+      graphNodes.push(chNode);
+      nodeMap[chNode.id] = chNode;
+      graphEdges.push({ source: srcNode.id, target: chNode.id });
+
+      if (showDocs) {
+        if (src === 'slack') {
+          const threads = {};
+          const standalone = [];
+          for (const doc of chDocs) {
+            if (doc.parent_id && doc.parent_id !== doc.id) {
+              if (!threads[doc.parent_id]) threads[doc.parent_id] = [];
+              threads[doc.parent_id].push(doc);
+            } else {
+              standalone.push(doc);
+            }
+          }
+
+          for (const parentId of Object.keys(threads)) {
+            const replies = threads[parentId];
+            const tNode = { id: 'thread:' + parentId, label: 'Thread (' + (replies.length + 1) + ')', type: 'thread', source: src, count: replies.length + 1 };
+            graphNodes.push(tNode);
+            nodeMap[tNode.id] = tNode;
+            graphEdges.push({ source: chNode.id, target: tNode.id });
+
+            for (const doc of replies) {
+              const dNode = { id: 'doc:' + doc.id, label: doc.title || '(Untitled)', type: 'document', source: src, docId: doc.id };
+              graphNodes.push(dNode);
+              nodeMap[dNode.id] = dNode;
+              graphEdges.push({ source: tNode.id, target: dNode.id });
+            }
+            const parentDoc = chDocs.find(function(d) { return d.id === parentId; });
+            if (parentDoc && !nodeMap['doc:' + parentDoc.id]) {
+              const dNode = { id: 'doc:' + parentDoc.id, label: parentDoc.title || '(Untitled)', type: 'document', source: src, docId: parentDoc.id };
+              graphNodes.push(dNode);
+              nodeMap[dNode.id] = dNode;
+              graphEdges.push({ source: tNode.id, target: dNode.id });
+            }
+          }
+
+          for (const doc of standalone) {
+            if (nodeMap['doc:' + doc.id]) continue;
+            const dNode = { id: 'doc:' + doc.id, label: doc.title || '(Untitled)', type: 'document', source: src, docId: doc.id };
+            graphNodes.push(dNode);
+            nodeMap[dNode.id] = dNode;
+            graphEdges.push({ source: chNode.id, target: dNode.id });
+          }
+        } else {
+          for (const doc of chDocs) {
+            const dNode = { id: 'doc:' + doc.id, label: doc.title || '(Untitled)', type: 'document', source: src, docId: doc.id };
+            graphNodes.push(dNode);
+            nodeMap[dNode.id] = dNode;
+            graphEdges.push({ source: chNode.id, target: dNode.id });
+          }
+        }
+      }
+    }
+  }
+
+  document.getElementById('graphStats').textContent = graphNodes.length + ' nodes, ' + graphEdges.length + ' edges';
+}
+
+function buildGraphLegend(docs) {
+  const sources = new Set(docs.map(function(d) { return d.source || 'unknown'; }));
+  const legend = document.getElementById('graphLegend');
+  let html = '';
+  for (const src of sources) {
+    html += '<span class="graph-legend-item"><span class="graph-legend-dot" style="background:' + sourceColor(src) + '"></span> ' + escapeHtml(src) + '</span>';
+  }
+  html += '<span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--text-muted);width:16px;height:16px"></span> Source</span>';
+  html += '<span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--text-muted);width:10px;height:10px"></span> Channel</span>';
+  html += '<span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--text-muted);width:6px;height:6px"></span> Thread</span>';
+  html += '<span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--text-muted);width:4px;height:4px"></span> Document</span>';
+  legend.innerHTML = html;
+}
+
+function startGraphSimulation() {
+  if (graphAnimId) cancelAnimationFrame(graphAnimId);
+
+  // Build adjacency for fast lookup
+  const adjMap = {};
+  for (const node of graphNodes) adjMap[node.id] = [];
+  for (const edge of graphEdges) {
+    if (adjMap[edge.source]) adjMap[edge.source].push(edge.target);
+    if (adjMap[edge.target]) adjMap[edge.target].push(edge.source);
+  }
+
+  // Separate simulation nodes: for large graphs, only simulate non-doc nodes
+  const simNodes = graphNodes.length > 500
+    ? graphNodes.filter(function(n) { return n.type !== 'document'; })
+    : graphNodes;
+  const simSet = new Set(simNodes.map(function(n) { return n.id; }));
+  const simEdges = graphEdges.filter(function(e) { return simSet.has(e.source) && simSet.has(e.target); });
+
+  // Node index map for quick lookup
+  const nodeIdx = {};
+  for (let i = 0; i < graphNodes.length; i++) nodeIdx[graphNodes[i].id] = i;
+
+  function tick() {
+    if (graphAlpha < 0.001) {
+      renderGraph();
+      return;
+    }
+
+    const n = simNodes.length;
+    const repulsionK = 800;
+    const springK = 0.05;
+    const springLen = 80;
+    const centerK = 0.01;
+    const damping = 0.88;
+    const cx = graphCanvasW / 2;
+    const cy = graphCanvasH / 2;
+
+    // Repulsion (O(n^2) on simulated nodes only)
+    for (let i = 0; i < n; i++) {
+      const a = simNodes[i];
+      for (let j = i + 1; j < n; j++) {
+        const b = simNodes[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const force = repulsionK / (dist * dist) * graphAlpha;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        a.vx -= fx;
+        a.vy -= fy;
+        b.vx += fx;
+        b.vy += fy;
+      }
+    }
+
+    // Spring attraction along edges
+    for (const edge of simEdges) {
+      const a = graphNodes[nodeIdx[edge.source]];
+      const b = graphNodes[nodeIdx[edge.target]];
+      if (!a || !b) continue;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const force = (dist - springLen) * springK * graphAlpha;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a.vx += fx;
+      a.vy += fy;
+      b.vx -= fx;
+      b.vy -= fy;
+    }
+
+    // Center gravity and velocity update for simulated nodes
+    for (const node of simNodes) {
+      if (node === graphDragNode) continue;
+      node.vx += (cx - node.x) * centerK * graphAlpha;
+      node.vy += (cy - node.y) * centerK * graphAlpha;
+      node.vx *= damping;
+      node.vy *= damping;
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+
+    // Position document nodes around their parent if not simulated
+    if (graphNodes.length > 500) {
+      for (const edge of graphEdges) {
+        const target = graphNodes[nodeIdx[edge.target]];
+        const source = graphNodes[nodeIdx[edge.source]];
+        if (!target || !source) continue;
+        if (target.type === 'document' && !simSet.has(target.id)) {
+          // Position near parent with slight offset
+          if (!target._angle) target._angle = Math.random() * Math.PI * 2;
+          const r = 20 + Math.random() * 15;
+          target.x = source.x + Math.cos(target._angle) * r;
+          target.y = source.y + Math.sin(target._angle) * r;
+        }
+      }
+    }
+
+    graphAlpha *= 0.995;
+    renderGraph();
+    graphAnimId = requestAnimationFrame(tick);
+  }
+
+  graphAnimId = requestAnimationFrame(tick);
+}
+
+function renderGraph() {
+  const canvas = document.getElementById('graphCanvas');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.translate(graphTransform.x, graphTransform.y);
+  ctx.scale(graphTransform.scale, graphTransform.scale);
+
+  const nodeIdx = {};
+  for (let i = 0; i < graphNodes.length; i++) nodeIdx[graphNodes[i].id] = i;
+
+  // Draw edges
+  for (const edge of graphEdges) {
+    const a = graphNodes[nodeIdx[edge.source]];
+    const b = graphNodes[nodeIdx[edge.target]];
+    if (!a || !b) continue;
+    const isDocEdge = b.type === 'document' || a.type === 'document';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = isDocEdge ? 'rgba(150,150,150,0.1)' : 'rgba(150,150,150,0.25)';
+    ctx.lineWidth = isDocEdge ? 0.5 : 1;
+    // Highlight edges connected to hovered node
+    if (graphHovered && (edge.source === graphHovered.id || edge.target === graphHovered.id)) {
+      ctx.strokeStyle = 'rgba(37,99,235,0.6)';
+      ctx.lineWidth = 1.5;
+    }
+    ctx.stroke();
+  }
+
+  // Draw nodes
+  for (const node of graphNodes) {
+    const r = graphNodeRadius(node.type);
+    const color = graphNodeColor(node.source, node.type);
+
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    if (graphHovered && graphHovered.id === node.id) {
+      ctx.fillStyle = 'var(--primary)';
+      ctx.fillStyle = '#2563eb';
+    }
+    ctx.fill();
+
+    // Draw labels for source and channel nodes
+    if (node.type === 'source' || node.type === 'channel') {
+      ctx.font = (node.type === 'source' ? 'bold 11px' : '9px') + ' -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillStyle = '#212529';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const label = node.type === 'channel' ? truncate(node.label, 20) : node.label;
+      ctx.fillText(label, node.x, node.y + r + 3);
+    }
+  }
+
+  ctx.restore();
+}
+
+function setupGraphInteraction() {
+  const canvas = document.getElementById('graphCanvas');
+  const tooltip = document.getElementById('graphTooltip');
+
+  // Remove old listeners by replacing canvas (clean approach)
+  const newCanvas = canvas.cloneNode(true);
+  canvas.parentNode.replaceChild(newCanvas, canvas);
+  const c = newCanvas;
+
+  // Resize observer
+  const ro = new ResizeObserver(function(entries) {
+    for (const entry of entries) {
+      c.width = entry.contentRect.width;
+      c.height = entry.contentRect.height;
+      graphCanvasW = c.width;
+      graphCanvasH = c.height;
+      renderGraph();
+    }
+  });
+  ro.observe(document.getElementById('graphContainer'));
+
+  function canvasPos(e) {
+    const rect = c.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left - graphTransform.x) / graphTransform.scale,
+      y: (e.clientY - rect.top - graphTransform.y) / graphTransform.scale
+    };
+  }
+
+  function findNode(mx, my) {
+    let closest = null;
+    let closestDist = Infinity;
+    for (const node of graphNodes) {
+      const dx = node.x - mx;
+      const dy = node.y - my;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const hitR = Math.max(graphNodeRadius(node.type), 8) / graphTransform.scale * 1.5;
+      if (dist < hitR && dist < closestDist) {
+        closest = node;
+        closestDist = dist;
+      }
+    }
+    return closest;
+  }
+
+  c.addEventListener('mousedown', function(e) {
+    const pos = canvasPos(e);
+    const node = findNode(pos.x, pos.y);
+    if (node && (node.type !== 'document' || graphNodes.length <= 500)) {
+      graphDragNode = node;
+    } else {
+      graphDrag = { startX: e.clientX, startY: e.clientY, tx: graphTransform.x, ty: graphTransform.y };
+    }
+  });
+
+  c.addEventListener('mousemove', function(e) {
+    if (graphDragNode) {
+      const pos = canvasPos(e);
+      graphDragNode.x = pos.x;
+      graphDragNode.y = pos.y;
+      graphDragNode.vx = 0;
+      graphDragNode.vy = 0;
+      renderGraph();
+      return;
+    }
+    if (graphDrag) {
+      graphTransform.x = graphDrag.tx + (e.clientX - graphDrag.startX);
+      graphTransform.y = graphDrag.ty + (e.clientY - graphDrag.startY);
+      renderGraph();
+      return;
+    }
+
+    // Hover detection
+    const pos = canvasPos(e);
+    const node = findNode(pos.x, pos.y);
+    if (node !== graphHovered) {
+      graphHovered = node;
+      if (node) {
+        let meta = node.type;
+        if (node.count != null) meta += ' - ' + node.count + ' docs';
+        tooltip.innerHTML = '<div class="tt-title">' + escapeHtml(node.label) + '</div><div class="tt-meta">' + escapeHtml(meta) + '</div>';
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.clientX + 14) + 'px';
+        tooltip.style.top = (e.clientY + 14) + 'px';
+      } else {
+        tooltip.style.display = 'none';
+      }
+      renderGraph();
+    } else if (node) {
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY + 14) + 'px';
+    }
+  });
+
+  c.addEventListener('mouseup', function(e) {
+    graphDragNode = null;
+    graphDrag = null;
+  });
+
+  c.addEventListener('mouseleave', function(e) {
+    graphDragNode = null;
+    graphDrag = null;
+    graphHovered = null;
+    tooltip.style.display = 'none';
+    renderGraph();
+  });
+
+  c.addEventListener('click', function(e) {
+    const pos = canvasPos(e);
+    const node = findNode(pos.x, pos.y);
+    if (!node) return;
+    if (node.type === 'document' && node.docId) {
+      showDocument(node.docId);
+    } else {
+      // Zoom to cluster area
+      const cx = graphCanvasW / 2;
+      const cy = graphCanvasH / 2;
+      graphTransform.scale = Math.min(graphTransform.scale * 1.8, 5);
+      graphTransform.x = cx - node.x * graphTransform.scale;
+      graphTransform.y = cy - node.y * graphTransform.scale;
+      renderGraph();
+    }
+  });
+
+  c.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    const rect = c.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const oldScale = graphTransform.scale;
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    graphTransform.scale = Math.max(0.1, Math.min(10, graphTransform.scale * delta));
+
+    // Zoom toward mouse position
+    graphTransform.x = mx - (mx - graphTransform.x) * (graphTransform.scale / oldScale);
+    graphTransform.y = my - (my - graphTransform.y) * (graphTransform.scale / oldScale);
+
+    renderGraph();
+  }, { passive: false });
+}
+
+function stopGraphSimulation() {
+  if (graphAnimId) {
+    cancelAnimationFrame(graphAnimId);
+    graphAnimId = null;
+  }
+}
+
+/* ---- Auto Refresh ---- */
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => {
+    if (currentTab === 'dashboard') loadDashboard();
+  }, 60000);
+}
+
+/* ---- Keyboard ---- */
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    closeDocModal();
+  } else if (e.key === 'ArrowLeft' && !document.getElementById('docModal').classList.contains('hidden')) {
+    navDoc(-1);
+  } else if (e.key === 'ArrowRight' && !document.getElementById('docModal').classList.contains('hidden')) {
+    navDoc(1);
+  }
+});
+
+window.addEventListener('popstate', function(e) {
+  handleRoute();
+});
+
+/* ---- Route Handler ---- */
+function handleRoute() {
+  const hash = window.location.hash;
+  if (hash.startsWith('#doc/')) {
+    const docId = hash.substring(5);
+    if (docId) showDocument(docId);
+  } else if (hash.startsWith('#docs/')) {
+    const parts = hash.substring(6).split('/').map(decodeURIComponent).filter(Boolean);
+    docBrowsePath = parts;
+    showTab('documents');
+  } else if (hash.startsWith('#kb/')) {
+    kbCurrentPath = decodeURIComponent(hash.substring(4));
+    showTab('kb');
+  } else if (hash.startsWith('#tab/')) {
+    const tab = hash.substring(5);
+    if (['dashboard', 'documents', 'search', 'sources', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
+      showTab(tab);
+    }
+  }
+}
+
+/* ---- Init ---- */
+async function init() {
+  const ok = await checkAuth();
+  if (ok) {
+    const hash = window.location.hash;
+    if (hash.startsWith('#doc/')) {
+      loadDashboard();
+      const docId = hash.substring(5);
+      if (docId) showDocument(docId);
+    } else if (hash.startsWith('#docs/')) {
+      const parts = hash.substring(6).split('/').map(decodeURIComponent).filter(Boolean);
+      docBrowsePath = parts;
+      showTab('documents');
+    } else if (hash.startsWith('#kb/')) {
+      kbCurrentPath = decodeURIComponent(hash.substring(4));
+      showTab('kb');
+    } else if (hash.startsWith('#tab/')) {
+      const tab = hash.substring(5);
+      if (['dashboard', 'documents', 'search', 'sources', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
+        showTab(tab);
+      } else {
+        loadDashboard();
+      }
+    } else {
+      loadDashboard();
+    }
+    startAutoRefresh();
+  }
+}
+
+init();
+</script>
+</body>
+</html>

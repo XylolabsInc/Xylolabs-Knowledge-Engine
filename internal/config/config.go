@@ -46,6 +46,10 @@ type Config struct {
 	APIHost string
 	APIPort int
 
+	// Console Auth
+	ConsoleUsername string
+	ConsolePassword string
+
 	// Sync intervals
 	SlackSyncInterval  time.Duration
 	GoogleSyncInterval time.Duration
@@ -96,6 +100,9 @@ func Load() *Config {
 		APIHost: envOrDefault("API_HOST", "0.0.0.0"),
 		APIPort: envOrDefaultInt("API_PORT", 8080),
 
+		ConsoleUsername: envOrDefault("CONSOLE_USERNAME", "admin"),
+		ConsolePassword: envOrDefault("CONSOLE_PASSWORD", ""),
+
 		SlackSyncInterval:  envOrDefaultDuration("SLACK_SYNC_INTERVAL", 5*time.Minute),
 		GoogleSyncInterval: envOrDefaultDuration("GOOGLE_SYNC_INTERVAL", 15*time.Minute),
 		NotionSyncInterval: envOrDefaultDuration("NOTION_SYNC_INTERVAL", 10*time.Minute),
@@ -123,6 +130,11 @@ func (c *Config) NotionEnabled() bool {
 // GeminiEnabled returns true if Gemini API key is configured.
 func (c *Config) GeminiEnabled() bool {
 	return c.GeminiAPIKey != ""
+}
+
+// ConsoleAuthEnabled returns true if console password is set.
+func (c *Config) ConsoleAuthEnabled() bool {
+	return c.ConsolePassword != ""
 }
 
 // Location returns the configured timezone as a *time.Location.

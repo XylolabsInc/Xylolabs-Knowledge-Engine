@@ -82,6 +82,7 @@ func main() {
 	// Outer-scope handles for tool executor wiring after all connectors init.
 	var botHandler *bot.Bot
 	var googleConn *googleconn.Connector
+	var jobScheduler *worker.JobScheduler
 
 	// Initialize connectors based on configuration
 	if cfg.SlackEnabled() {
@@ -184,19 +185,24 @@ func main() {
 			nw = tools.NewNotionWriter(cfg.NotionAPIKey, logger)
 		}
 		ss := tools.NewScreenshotter(logger)
-		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, logger)
+		sm := tools.NewSchedulerManager(store, slack.New(cfg.SlackBotToken), cfg.Location(), logger)
+		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, sm, logger)
 		botHandler.SetToolExecutor(toolExecutor)
 		logger.Info("tool executor enabled",
 			"google_drive", gw != nil,
 			"notion", nw != nil,
 		)
+
+		// Start job scheduler for scheduled messages
+		jobScheduler = worker.NewJobScheduler(store, slack.New(cfg.SlackBotToken), cfg.Location(), logger)
+		jobScheduler.Start()
 	}
 
 	// Start scheduler
 	scheduler.Start()
 
 	// Start API server
-	server := api.NewServer(cfg.APIHost, cfg.APIPort, engine, store, scheduler, syncManager, logger)
+	server := api.NewServer(cfg.APIHost, cfg.APIPort, engine, store, scheduler, syncManager, store, cfg.ConsoleUsername, cfg.ConsolePassword, cfg.KBRepoDir, logger)
 	go func() {
 		if err := server.Start(); err != nil {
 			logger.Error("api server failed", "error", err)
@@ -214,6 +220,9 @@ func main() {
 	// Graceful shutdown
 	close(done)
 	scheduler.Stop()
+	if jobScheduler != nil {
+		jobScheduler.Stop()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
