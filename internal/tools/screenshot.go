@@ -57,19 +57,9 @@ func (s *Screenshotter) Capture(ctx context.Context, url string, width, height i
 	taskCtx, timeoutCancel := context.WithTimeout(taskCtx, 30*time.Second)
 	defer timeoutCancel()
 
-	// Inject Google Fonts CJK web font to ensure Korean/Japanese/Chinese text
-	// renders correctly even when system fonts are unavailable (e.g. snap Chromium).
-	const cjkFontCSS = `
-		var style = document.createElement('style');
-		style.textContent = '@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+SC:wght@400;700&display=swap"); * { font-family: "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", sans-serif !important; }';
-		document.head.appendChild(style);
-	`
-
 	var buf []byte
 	actions := []chromedp.Action{
 		chromedp.Navigate(url),
-		chromedp.Sleep(1 * time.Second),
-		chromedp.Evaluate(cjkFontCSS, nil),
 		chromedp.Sleep(2 * time.Second),
 	}
 
