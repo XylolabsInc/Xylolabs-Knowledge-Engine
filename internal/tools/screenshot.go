@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -41,6 +42,11 @@ func (s *Screenshotter) Capture(ctx context.Context, url string, width, height i
 		chromedp.Flag("lang", "ko-KR,ko,en-US,en"),
 		chromedp.Flag("font-render-hinting", "none"),
 	)
+
+	// Use a custom Chrome binary if CHROME_PATH is set (e.g. to bypass snap sandbox for CJK fonts).
+	if chromePath := os.Getenv("CHROME_PATH"); chromePath != "" {
+		opts = append(opts, chromedp.ExecPath(chromePath))
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
