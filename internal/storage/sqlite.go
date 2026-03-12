@@ -175,7 +175,7 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) ([]kb.SearchResult, error) {
 		snippet(fts_documents, 1, '<b>', '</b>', '...', 32) AS snippet,
 		bm25(fts_documents, 5.0, 1.0, 2.0, 2.0) AS score
 		FROM fts_documents fts
-		JOIN documents d ON d.id = fts.content_id
+		JOIN documents d ON d.rowid = fts.rowid
 		WHERE fts_documents MATCH ?`
 
 	args = append(args, query.Query)
