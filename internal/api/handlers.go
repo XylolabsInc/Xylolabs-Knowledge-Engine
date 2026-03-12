@@ -416,6 +416,101 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleKBDocTree(w http.ResponseWriter, r *http.Request) {
+	result, err := s.store.ListDocuments(kb.ListDocumentsQuery{Limit: 1000})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list documents")
+		return
+	}
+
+	type node struct {
+		Name     string  `json:"name"`
+		Path     string  `json:"path"`
+		IsDir    bool    `json:"is_dir"`
+		Children []*node `json:"children,omitempty"`
+		Size     int64   `json:"size,omitempty"`
+	}
+
+	// Group by source -> channel
+	sourceMap := map[string]map[string][]kb.Document{}
+	for _, doc := range result.Documents {
+		src := string(doc.Source)
+		ch := doc.Channel
+		if ch == "" {
+			ch = doc.ContentType
+		}
+		if ch == "" {
+			ch = "(uncategorized)"
+		}
+		if sourceMap[src] == nil {
+			sourceMap[src] = map[string][]kb.Document{}
+		}
+		sourceMap[src][ch] = append(sourceMap[src][ch], doc)
+	}
+
+	var tree []*node
+	for src, channels := range sourceMap {
+		srcNode := &node{Name: src, Path: "db/" + src, IsDir: true}
+		for ch, docs := range channels {
+			chNode := &node{Name: ch, Path: "db/" + src + "/" + ch, IsDir: true}
+			for _, doc := range docs {
+				title := doc.Title
+				if title == "" {
+					title = doc.ID[:12]
+				}
+				docNode := &node{
+					Name:  title + ".md",
+					Path:  "db/" + doc.ID,
+					IsDir: false,
+					Size:  int64(len(doc.Content)),
+				}
+				chNode.Children = append(chNode.Children, docNode)
+			}
+			srcNode.Children = append(srcNode.Children, chNode)
+		}
+		tree = append(tree, srcNode)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"tree": tree})
+}
+
+func (s *Server) handleKBDocFile(w http.ResponseWriter, r *http.Request) {
+	docID := r.URL.Query().Get("id")
+	if docID == "" {
+		writeError(w, http.StatusBadRequest, "id parameter required")
+		return
+	}
+
+	doc, err := s.engine.GetDocument(r.Context(), docID)
+	if err != nil || doc == nil {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	// Format as markdown
+	var md strings.Builder
+	md.WriteString("# " + doc.Title + "\n\n")
+	md.WriteString("- **Source**: " + string(doc.Source) + "\n")
+	md.WriteString("- **Channel**: " + doc.Channel + "\n")
+	if doc.Author != "" {
+		md.WriteString("- **Author**: " + doc.Author + "\n")
+	}
+	if !doc.Timestamp.IsZero() {
+		md.WriteString("- **Date**: " + doc.Timestamp.Format("2006-01-02 15:04") + "\n")
+	}
+	if doc.URL != "" {
+		md.WriteString("- **URL**: " + doc.URL + "\n")
+	}
+	md.WriteString("\n---\n\n")
+	md.WriteString(doc.Content)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":    "db/" + doc.ID,
+		"name":    doc.Title + ".md",
+		"content": md.String(),
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

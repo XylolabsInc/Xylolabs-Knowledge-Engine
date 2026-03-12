@@ -289,14 +289,11 @@ tr.clickable { cursor: pointer; }
       <button class="nav-item" onclick="showTab('search')" data-tab="search" data-i18n="search">
         <span class="icon">&#9906;</span> Search
       </button>
-      <button class="nav-item" onclick="showTab('sources')" data-tab="sources" data-i18n="sources">
-        <span class="icon">&#8635;</span> Sources
-      </button>
       <button class="nav-item" onclick="showTab('jobs')" data-tab="jobs" data-i18n="jobs">
         <span class="icon">&#9675;</span> Jobs
       </button>
       <button class="nav-item" onclick="showTab('index')" data-tab="index" data-i18n="index">
-        <span class="icon">&#8801;</span> Index
+        <span class="icon">&#8801;</span> Raw Data
       </button>
       <button class="nav-item" onclick="showTab('kb')" data-tab="kb" data-i18n="kb">
         <span class="icon">&#9674;</span> KB
@@ -352,6 +349,13 @@ tr.clickable { cursor: pointer; }
           <tbody id="syncTable"></tbody>
         </table>
       </div>
+
+      <div class="section-card">
+        <div class="section-title" data-i18n="sources">Sources</div>
+        <div class="sources-grid" id="sourcesGrid">
+          <div class="loading" data-i18n="loadingSources">Loading sources...</div>
+        </div>
+      </div>
     </div>
 
     <!-- Documents Tab -->
@@ -393,14 +397,6 @@ tr.clickable { cursor: pointer; }
       </div>
     </div>
 
-    <!-- Sources Tab -->
-    <div id="tab-sources" class="tab-content">
-      <h2 class="tab-title" data-i18n="sources">Sources</h2>
-      <div class="sources-grid" id="sourcesGrid">
-        <div class="loading" data-i18n="loadingSources">Loading sources...</div>
-      </div>
-    </div>
-
     <!-- Jobs Tab -->
     <div id="tab-jobs" class="tab-content">
       <h2 class="tab-title" data-i18n="jobs">Jobs</h2>
@@ -411,7 +407,7 @@ tr.clickable { cursor: pointer; }
 
     <!-- Index Tab -->
     <div id="tab-index" class="tab-content">
-      <h2 class="tab-title" data-i18n="index">Index</h2>
+      <h2 class="tab-title" data-i18n="index">Raw Data</h2>
       <div class="filter-bar">
         <select id="indexSource" onchange="loadIndex()">
           <option value="" data-i18n="allSources">All Sources</option>
@@ -471,7 +467,7 @@ const translations = {
     search: 'Search',
     sources: 'Sources',
     jobs: 'Jobs',
-    index: 'Index',
+    index: 'Raw Data',
     kb: 'KB',
     graph: 'Graph',
     logout: 'Logout',
@@ -533,7 +529,7 @@ const translations = {
     search: '\uac80\uc0c9',
     sources: '\uc18c\uc2a4',
     jobs: '\uc791\uc5c5',
-    index: '\uc778\ub371\uc2a4',
+    index: '\uc6d0\ubcf8 \ub370\uc774\ud130',
     kb: 'KB',
     graph: '\uadf8\ub798\ud504',
     logout: '\ub85c\uadf8\uc544\uc6c3',
@@ -800,7 +796,6 @@ function showTab(name) {
   // Load data for the tab
   if (name === 'dashboard') loadDashboard();
   else if (name === 'documents') { renderDocBrowser(); }
-  else if (name === 'sources') loadSources();
   else if (name === 'jobs') loadJobs();
   else if (name === 'index') loadIndex();
   else if (name === 'kb') renderKB();
@@ -857,6 +852,7 @@ async function loadDashboard() {
   } catch (e) {
     console.error('Dashboard load failed:', e);
   }
+  loadSources();
 }
 
 /* ---- Documents (Directory Browser) ---- */
@@ -1477,8 +1473,14 @@ let kbCurrentPath = ''; // empty = root, or a directory/file path
 async function loadKBTree() {
   if (kbTree) return kbTree;
   try {
-    const data = await api('GET', '/api/v1/kb/tree');
-    kbTree = data.tree || [];
+    const [fsData, dbData] = await Promise.all([
+      api('GET', '/api/v1/kb/tree'),
+      api('GET', '/api/v1/kb/docs/tree').catch(() => ({ tree: [] }))
+    ]);
+    const fsTree = fsData.tree || [];
+    const dbTree = dbData.tree || [];
+    // Merge: database docs first, then filesystem KB
+    kbTree = [...dbTree, ...fsTree];
     return kbTree;
   } catch (e) {
     console.error('KB tree load failed:', e);
@@ -1534,8 +1536,8 @@ async function renderKB() {
   const node = findKBNode(tree, kbCurrentPath);
   if (node && node.is_dir) {
     renderKBDirectory(container, node.children || []);
-  } else if (kbCurrentPath.endsWith('.md')) {
-    // It's a file - load and render
+  } else if (kbCurrentPath.endsWith('.md') || kbCurrentPath.startsWith('db/')) {
+    // It's a file - load and render (db/ paths are database documents)
     await renderKBFile(container, kbCurrentPath);
   } else {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Not found</div></div>';
@@ -1584,7 +1586,13 @@ function renderKBDirectory(container, items) {
 async function renderKBFile(container, path) {
   container.innerHTML = '<div class="loading">' + t('loading') + '</div>';
   try {
-    const data = await api('GET', '/api/v1/kb/file?path=' + encodeURIComponent(path));
+    let data;
+    if (path.startsWith('db/')) {
+      const docId = path.substring(3); // remove 'db/' prefix
+      data = await api('GET', '/api/v1/kb/docs/file?id=' + encodeURIComponent(docId));
+    } else {
+      data = await api('GET', '/api/v1/kb/file?path=' + encodeURIComponent(path));
+    }
     const rendered = renderMarkdown(data.content || '');
     container.innerHTML = '<div class="kb-markdown">' + rendered + '</div>';
 
@@ -1748,17 +1756,33 @@ async function loadGraph() {
     graphCanvasW = canvas.width;
     graphCanvasH = canvas.height;
 
-    // Init positions randomly around center
+    // Init positions: place source nodes spaced around center, children near parents
     const cx = graphCanvasW / 2, cy = graphCanvasH / 2;
+    const sourceNodes = graphNodes.filter(n => n.type === 'source');
+    const angleStep = (2 * Math.PI) / Math.max(sourceNodes.length, 1);
+    const parentPos = {};
+    sourceNodes.forEach((n, i) => {
+      n.x = cx + Math.cos(i * angleStep) * 150;
+      n.y = cy + Math.sin(i * angleStep) * 150;
+      n.vx = 0; n.vy = 0;
+      parentPos[n.id] = { x: n.x, y: n.y };
+    });
+    // Position children near their parent edge source
+    const edgeMap = {};
+    for (const e of graphEdges) { edgeMap[e.target] = e.source; }
     for (const node of graphNodes) {
-      node.x = cx + (Math.random() - 0.5) * graphCanvasW * 0.4;
-      node.y = cy + (Math.random() - 0.5) * graphCanvasH * 0.4;
-      node.vx = 0;
-      node.vy = 0;
+      if (node.type === 'source') continue;
+      const pid = edgeMap[node.id];
+      const pp = parentPos[pid] || { x: cx, y: cy };
+      const spread = node.type === 'channel' ? 60 : node.type === 'thread' ? 30 : 15;
+      node.x = pp.x + (Math.random() - 0.5) * spread;
+      node.y = pp.y + (Math.random() - 0.5) * spread;
+      node.vx = 0; node.vy = 0;
+      parentPos[node.id] = { x: node.x, y: node.y };
     }
 
     graphTransform = { x: 0, y: 0, scale: 1 };
-    graphAlpha = 1.0;
+    graphAlpha = 0.8;
 
     // Build legend
     buildGraphLegend(docs);
@@ -1901,11 +1925,12 @@ function startGraphSimulation() {
     }
 
     const n = simNodes.length;
-    const repulsionK = 400;
-    const springK = 0.05;
-    const springLen = 80;
-    const centerK = 0.01;
-    const damping = 0.85;
+    const repulsionK = 200;
+    const springK = 0.04;
+    const springLen = 60;
+    const centerK = 0.015;
+    const damping = 0.8;
+    const maxVel = 8;
     const cx = graphCanvasW / 2;
     const cy = graphCanvasH / 2;
 
@@ -1951,6 +1976,9 @@ function startGraphSimulation() {
       node.vy += (cy - node.y) * centerK * graphAlpha;
       node.vx *= damping;
       node.vy *= damping;
+      // Cap velocity to prevent wild flying
+      const vel = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+      if (vel > maxVel) { node.vx *= maxVel / vel; node.vy *= maxVel / vel; }
       node.x += node.vx;
       node.y += node.vy;
     }
@@ -2226,7 +2254,7 @@ function handleRoute() {
     showTab('kb');
   } else if (hash.startsWith('#tab/')) {
     const tab = hash.substring(5);
-    if (['dashboard', 'documents', 'search', 'sources', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
+    if (['dashboard', 'documents', 'search', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
       showTab(tab);
     }
   }
@@ -2251,7 +2279,7 @@ async function init() {
       showTab('kb');
     } else if (hash.startsWith('#tab/')) {
       const tab = hash.substring(5);
-      if (['dashboard', 'documents', 'search', 'sources', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
+      if (['dashboard', 'documents', 'search', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
         showTab(tab);
       } else {
         loadDashboard();

@@ -105,6 +105,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// KB repo browsing (auth-protected)
 	mux.HandleFunc("GET /api/v1/kb/tree", s.auth.requireAuth(s.handleKBTree))
 	mux.HandleFunc("GET /api/v1/kb/file", s.auth.requireAuth(s.handleKBFile))
+
+	// KB database documents browsing (auth-protected)
+	mux.HandleFunc("GET /api/v1/kb/docs/tree", s.auth.requireAuth(s.handleKBDocTree))
+	mux.HandleFunc("GET /api/v1/kb/docs/file", s.auth.requireAuth(s.handleKBDocFile))
 }
 
 func (s *Server) handleRootRedirect(w http.ResponseWriter, r *http.Request) {
