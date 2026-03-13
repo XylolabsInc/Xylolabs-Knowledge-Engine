@@ -9,6 +9,7 @@ const (
 	SourceSlack  Source = "slack"
 	SourceGoogle Source = "google"
 	SourceNotion Source = "notion"
+	SourceManual Source = "manual"
 )
 
 // Document represents a single piece of content in the knowledge base.

@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -81,10 +83,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	if query.Source != "" {
 		switch query.Source {
-		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion:
+		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual:
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, or notion")
+			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, notion, or manual")
 			return
 		}
 	}
@@ -168,10 +170,10 @@ func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	if query.Source != "" {
 		switch query.Source {
-		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion:
+		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual:
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, or notion")
+			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, notion, or manual")
 			return
 		}
 	}
@@ -283,7 +285,7 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 
 	kbSource := kb.Source(source)
 	switch kbSource {
-	case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion:
+	case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual:
 		// valid
 	default:
 		writeError(w, http.StatusBadRequest, "unknown source: "+source)
@@ -592,6 +594,204 @@ func (s *Server) handleKBDocFile(w http.ResponseWriter, r *http.Request) {
 		"name":    doc.Title + ".md",
 		"content": md.String(),
 	})
+}
+
+func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request: max 10MB")
+		return
+	}
+
+	title := strings.TrimSpace(r.FormValue("title"))
+	if title == "" {
+		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if len(title) > 500 {
+		writeError(w, http.StatusBadRequest, "title too long (max 500 characters)")
+		return
+	}
+
+	content := r.FormValue("content")
+	contentType := r.FormValue("content_type")
+	if contentType == "" {
+		contentType = "text/markdown"
+	}
+	category := r.FormValue("category")
+	author := r.FormValue("author")
+	url := r.FormValue("url")
+
+	metadata := map[string]string{}
+
+	// Handle file upload
+	file, header, err := r.FormFile("file")
+	if err == nil {
+		defer file.Close()
+		if header.Size > 10<<20 {
+			writeError(w, http.StatusBadRequest, "file too large (max 10MB)")
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(file, 10<<20+1))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "failed to read file")
+			return
+		}
+		if int64(len(data)) > 10<<20 {
+			writeError(w, http.StatusBadRequest, "file too large (max 10MB)")
+			return
+		}
+
+		// Detect MIME type
+		mimeType := header.Header.Get("Content-Type")
+		if mimeType == "" || mimeType == "application/octet-stream" {
+			mimeType = http.DetectContentType(data)
+		}
+
+		// Extract content from file
+		if s.extractor != nil {
+			result, err := s.extractor.ExtractFromBytes(r.Context(), data, mimeType, header.Filename)
+			if err == nil && result.Text != "" {
+				content = result.Text
+				contentType = result.MimeType
+			} else if err != nil {
+				s.logger.Warn("file extraction failed, using empty content", "filename", header.Filename, "error", err)
+			}
+		}
+
+		metadata["original_filename"] = header.Filename
+	}
+
+	if content == "" && metadata["original_filename"] == "" {
+		writeError(w, http.StatusBadRequest, "content or file is required")
+		return
+	}
+
+	now := time.Now()
+	doc := kb.Document{
+		Source:      kb.SourceManual,
+		SourceID:    fmt.Sprintf("manual-%d", now.UnixNano()),
+		Title:       title,
+		Content:     content,
+		ContentType: contentType,
+		Author:      author,
+		Channel:     category,
+		URL:         url,
+		Timestamp:   now,
+		UpdatedAt:   now,
+		IndexedAt:   now,
+		Metadata:    metadata,
+	}
+
+	if err := s.engine.Index(r.Context(), doc); err != nil {
+		s.logger.Error("failed to create document", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to create document")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, doc)
+}
+
+func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" || len(id) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid document ID")
+		return
+	}
+
+	existing, err := s.engine.GetDocument(r.Context(), id)
+	if err != nil {
+		s.logger.Warn("get document failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get document")
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request: max 10MB")
+		return
+	}
+
+	if title := strings.TrimSpace(r.FormValue("title")); title != "" {
+		if len(title) > 500 {
+			writeError(w, http.StatusBadRequest, "title too long (max 500 characters)")
+			return
+		}
+		existing.Title = title
+	}
+
+	if category := r.FormValue("category"); category != "" {
+		existing.Channel = category
+	}
+	if author := r.FormValue("author"); author != "" {
+		existing.Author = author
+	}
+	if url := r.FormValue("url"); url != "" {
+		existing.URL = url
+	}
+	if ct := r.FormValue("content_type"); ct != "" {
+		existing.ContentType = ct
+	}
+
+	// Handle file upload
+	file, header, err := r.FormFile("file")
+	if err == nil {
+		defer file.Close()
+		if header.Size > 10<<20 {
+			writeError(w, http.StatusBadRequest, "file too large (max 10MB)")
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(file, 10<<20+1))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "failed to read file")
+			return
+		}
+		mimeType := header.Header.Get("Content-Type")
+		if mimeType == "" || mimeType == "application/octet-stream" {
+			mimeType = http.DetectContentType(data)
+		}
+		if s.extractor != nil {
+			result, err := s.extractor.ExtractFromBytes(r.Context(), data, mimeType, header.Filename)
+			if err == nil && result.Text != "" {
+				existing.Content = result.Text
+				existing.ContentType = result.MimeType
+			}
+		}
+		if existing.Metadata == nil {
+			existing.Metadata = map[string]string{}
+		}
+		existing.Metadata["original_filename"] = header.Filename
+	} else if content := r.FormValue("content"); content != "" {
+		existing.Content = content
+	}
+
+	existing.UpdatedAt = time.Now()
+
+	if err := s.store.UpsertDocument(*existing); err != nil {
+		s.logger.Error("failed to update document", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to update document")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, existing)
+}
+
+func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" || len(id) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid document ID")
+		return
+	}
+
+	if err := s.store.DeleteDocument(id); err != nil {
+		s.logger.Error("failed to delete document", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete document")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

@@ -81,6 +81,7 @@ tr:hover td { background: var(--bg-secondary); }
 .badge-blue { background: var(--primary-light); color: var(--primary); }
 .badge-green { background: var(--success-light); color: var(--success); }
 .badge-default { background: var(--bg-tertiary); color: var(--text-secondary); }
+.badge-manual { background: #0d9488; color: #fff; }
 
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .status-green { background: var(--success); }
@@ -98,6 +99,20 @@ tr:hover td { background: var(--bg-secondary); }
 .btn-outline { background: var(--bg); color: var(--text-secondary); border-color: var(--border); }
 .btn-outline:hover { background: var(--bg-secondary); color: var(--text); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.manual-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+.manual-modal-overlay.hidden { display: none; }
+.manual-modal { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 32px; width: 100%; max-width: 600px; max-height: 90vh; overflow-y: auto; }
+.manual-modal h3 { font-size: 1.25rem; font-weight: 600; margin-bottom: 20px; }
+.manual-modal label { display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 4px; color: var(--text-secondary); }
+.manual-modal input[type="text"], .manual-modal textarea, .manual-modal select { display: block; width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.875rem; font-family: var(--font); margin-bottom: 12px; outline: none; }
+.manual-modal input:focus, .manual-modal textarea:focus, .manual-modal select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+.manual-modal textarea { min-height: 150px; resize: vertical; }
+.manual-modal .file-upload { margin-bottom: 12px; }
+.manual-modal .file-info { font-size: 0.8125rem; color: var(--text-secondary); margin-top: 4px; }
+.manual-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn-danger:hover { background: #c82333; border-color: #c82333; }
+.btn-sm { padding: 4px 10px; font-size: 0.8125rem; }
 
 .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 0.875rem; color: var(--text-secondary); }
 .pagination-buttons { display: flex; gap: 8px; }
@@ -270,6 +285,39 @@ tr.clickable { cursor: pointer; }
   </div>
 </div>
 
+<!-- Manual Document Modal -->
+    <div id="manualDocModal" class="manual-modal-overlay hidden">
+      <div class="manual-modal">
+        <h3 id="manualDocModalTitle" data-i18n="addDocument">Add Document</h3>
+        <input type="hidden" id="manualDocEditId" value="">
+        <label data-i18n="title">Title</label>
+        <input type="text" id="manualDocTitle" placeholder="Document title" maxlength="500">
+        <label>File</label>
+        <div class="file-upload">
+          <input type="file" id="manualDocFile" accept=".hwp,.hwpx,.pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.jpg,.jpeg,.png,.gif,.webp" onchange="onManualFileSelect()">
+          <div class="file-info" id="manualFileInfo"></div>
+          <button class="btn btn-outline btn-sm" id="manualFileClear" style="display:none;margin-top:4px" onclick="clearManualFile()">Clear file</button>
+        </div>
+        <label data-i18n="content">Content</label>
+        <textarea id="manualDocContent" placeholder="Enter document content (or upload a file)"></textarea>
+        <label data-i18n="category">Category</label>
+        <input type="text" id="manualDocCategory" placeholder="Optional category for organizing">
+        <label data-i18n="author">Author</label>
+        <input type="text" id="manualDocAuthor" placeholder="Optional author name">
+        <label>Content Type</label>
+        <select id="manualDocContentType">
+          <option value="text/markdown">text/markdown</option>
+          <option value="text/plain">text/plain</option>
+        </select>
+        <label>URL</label>
+        <input type="text" id="manualDocURL" placeholder="Optional reference URL">
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="closeManualDocModal()" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" onclick="saveManualDoc()" data-i18n="save">Save</button>
+        </div>
+      </div>
+    </div>
+
 <!-- Mobile Toggle -->
 <button class="mobile-toggle" onclick="toggleSidebar()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg></button>
 
@@ -299,6 +347,9 @@ tr.clickable { cursor: pointer; }
       </button>
       <button class="nav-item" onclick="showTab('kb')" data-tab="kb" data-i18n="kb">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span> KB
+      </button>
+      <button class="nav-item" onclick="showTab('manual')" data-tab="manual" data-i18n="manualKB">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></span> Manual KB
       </button>
       <button class="nav-item" onclick="showTab('graph')" data-tab="graph" data-i18n="graph">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg></span> Graph
@@ -374,6 +425,21 @@ tr.clickable { cursor: pointer; }
       </div>
     </div>
 
+    <!-- Manual KB Tab -->
+    <div id="tab-manual" class="tab-content">
+      <h2 class="tab-title" data-i18n="manualKB">Manual KB</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div style="font-size:0.875rem;color:var(--text-secondary)" id="manualDocCount"></div>
+        <button class="btn btn-primary" onclick="showManualDocModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          <span data-i18n="addDocument">Add Document</span>
+        </button>
+      </div>
+      <div id="manualDocList">
+        <div class="loading" data-i18n="loading">Loading...</div>
+      </div>
+    </div>
+
     <!-- Search Tab -->
     <div id="tab-search" class="tab-content">
       <h2 class="tab-title" data-i18n="search">Search</h2>
@@ -387,6 +453,7 @@ tr.clickable { cursor: pointer; }
           <option value="slack">Slack</option>
           <option value="google">Google</option>
           <option value="notion">Notion</option>
+          <option value="manual">Manual</option>
         </select>
         <input type="text" id="searchChannel" placeholder="Channel" data-i18n="channel" style="min-width:120px;flex:0 1 auto">
         <input type="text" id="searchAuthor" placeholder="Author" data-i18n="author" style="min-width:120px;flex:0 1 auto">
@@ -416,6 +483,7 @@ tr.clickable { cursor: pointer; }
           <option value="slack">Slack</option>
           <option value="google">Google</option>
           <option value="notion">Notion</option>
+          <option value="manual">Manual</option>
         </select>
         <span id="indexStats" style="font-size:0.8125rem;color:var(--text-secondary)"></span>
       </div>
@@ -522,6 +590,23 @@ const translations = {
     recurring: 'recurring',
     once: 'once',
     noJobs: 'No scheduled jobs',
+    manualKB: 'Manual KB',
+    addDocument: 'Add Document',
+    editDocument: 'Edit Document',
+    deleteDocument: 'Delete',
+    title: 'Title',
+    content: 'Content',
+    category: 'Category',
+    date: 'Date',
+    actions: 'Actions',
+    save: 'Save',
+    cancel: 'Cancel',
+    edit: 'Edit',
+    delete: 'Delete',
+    confirmDelete: 'Are you sure you want to delete this document?',
+    noManualDocs: 'No manual documents yet. Click "Add Document" to create one.',
+    titleRequired: 'Title is required',
+    fileContentPlaceholder: 'Content will be extracted from uploaded file',
   },
   ko: {
     title: '\uc790\uc77c\ub85c\ub7a9\uc2a4 \uc9c0\uc2dd \uc5d4\uc9c4',
@@ -584,6 +669,23 @@ const translations = {
     recurring: '\ubc18\ubcf5',
     once: '1\ud68c',
     noJobs: '\uc608\uc57d\ub41c \uc791\uc5c5 \uc5c6\uc74c',
+    manualKB: '\uc218\ub3d9 KB',
+    addDocument: '\ubb38\uc11c \ucd94\uac00',
+    editDocument: '\ubb38\uc11c \uc218\uc815',
+    deleteDocument: '\uc0ad\uc81c',
+    title: '\uc81c\ubaa9',
+    content: '\ub0b4\uc6a9',
+    category: '\uce74\ud14c\uace0\ub9ac',
+    date: '\ub0a0\uc9dc',
+    actions: '\uc791\uc5c5',
+    save: '\uc800\uc7a5',
+    cancel: '\ucde8\uc18c',
+    edit: '\uc218\uc815',
+    delete: '\uc0ad\uc81c',
+    confirmDelete: '\uc774 \ubb38\uc11c\ub97c \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?',
+    noManualDocs: '\uc218\ub3d9 \ubb38\uc11c\uac00 \uc5c6\uc2b5\ub2c8\ub2e4. "\ubb38\uc11c \ucd94\uac00"\ub97c \ud074\ub9ad\ud558\uc5ec \uc0dd\uc131\ud558\uc138\uc694.',
+    titleRequired: '\uc81c\ubaa9\uc740 \ud544\uc218\uc785\ub2c8\ub2e4',
+    fileContentPlaceholder: '\uc5c5\ub85c\ub4dc\ub41c \ud30c\uc77c\uc5d0\uc11c \ub0b4\uc6a9\uc774 \ucd94\ucd9c\ub429\ub2c8\ub2e4',
   }
 };
 
@@ -649,6 +751,23 @@ async function api(method, path, body) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
+  if (method !== 'GET') {
+    const csrf = document.cookie.split('; ').find(c => c.startsWith('xke_csrf='));
+    if (csrf) opts.headers['X-CSRF-Token'] = csrf.split('=')[1];
+  }
+  const res = await fetch(path, opts);
+  if (res.status === 401) {
+    showLoginOverlay();
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function apiMultipart(method, path, formData) {
+  const opts = { method, body: formData, headers: {} };
+  const csrf = document.cookie.split('; ').find(c => c.startsWith('xke_csrf='));
+  if (csrf) opts.headers['X-CSRF-Token'] = csrf.split('=')[1];
   const res = await fetch(path, opts);
   if (res.status === 401) {
     showLoginOverlay();
@@ -698,7 +817,7 @@ function truncate(str, len) {
 
 function sourceBadge(source) {
   const s = (source || '').toLowerCase();
-  const cls = s === 'slack' ? 'badge-slack' : s === 'google' ? 'badge-google' : s === 'notion' ? 'badge-notion' : 'badge-default';
+  const cls = s === 'slack' ? 'badge-slack' : s === 'google' ? 'badge-google' : s === 'notion' ? 'badge-notion' : s === 'manual' ? 'badge-manual' : 'badge-default';
   return `<span class="badge ${cls}">${escapeHtml(source || 'unknown')}</span>`;
 }
 
@@ -707,6 +826,7 @@ function sourceColor(source) {
   if (s === 'slack') return '#4A154B';
   if (s === 'google') return '#4285F4';
   if (s === 'notion') return '#000000';
+  if (s === 'manual') return '#0d9488';
   return '#6c757d';
 }
 
@@ -801,6 +921,7 @@ function showTab(name) {
   else if (name === 'jobs') loadJobs();
   else if (name === 'index') loadIndex();
   else if (name === 'kb') { kbTree = null; renderKB(); }
+  else if (name === 'manual') loadManualDocs();
   else if (name === 'graph') loadGraph();
 }
 
@@ -1255,6 +1376,139 @@ async function triggerSync(source, cardId) {
   }
 }
 
+/* ---- Manual KB ---- */
+let manualEditId = null;
+
+async function loadManualDocs() {
+  const container = document.getElementById('manualDocList');
+  container.innerHTML = '<div class="loading">' + t('loading') + '</div>';
+  try {
+    const data = await api('GET', '/api/v1/documents?source=manual&limit=1000');
+    const docs = (data.documents || []).sort(function(a, b) { return new Date(b.timestamp) - new Date(a.timestamp); });
+    document.getElementById('manualDocCount').textContent = docs.length + ' ' + t('docs');
+
+    if (docs.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('noManualDocs') + '</div></div>';
+      return;
+    }
+
+    let html = '<table><thead><tr><th>' + t('title') + '</th><th>' + t('category') + '</th><th>' + t('author') + '</th><th>' + t('date') + '</th><th>' + t('actions') + '</th></tr></thead><tbody>';
+    for (const doc of docs) {
+      const title = doc.title || '(Untitled)';
+      const category = doc.channel || '-';
+      const author = doc.author || '-';
+      const date = doc.timestamp ? new Date(doc.timestamp).toLocaleDateString() : '-';
+      const filename = (doc.metadata && doc.metadata.original_filename) ? ' <span style="font-size:0.75rem;color:var(--text-muted)">(' + escapeHtml(doc.metadata.original_filename) + ')</span>' : '';
+      html += '<tr>'
+        + '<td style="cursor:pointer" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">' + escapeHtml(truncate(title, 60)) + filename + '</td>'
+        + '<td>' + escapeHtml(category) + '</td>'
+        + '<td>' + escapeHtml(author) + '</td>'
+        + '<td>' + escapeHtml(date) + '</td>'
+        + '<td><button class="btn btn-outline btn-sm" onclick="editManualDoc(\'' + escapeHtml(doc.id) + '\')">' + t('edit') + '</button> '
+        + '<button class="btn btn-danger btn-sm" onclick="deleteManualDoc(\'' + escapeHtml(doc.id) + '\',\'' + escapeHtml(title.replace(/'/g, "\\'")) + '\')">' + t('delete') + '</button></td>'
+        + '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">' + t('failedLoad') + '</div></div>';
+  }
+}
+
+function showManualDocModal(editDoc) {
+  manualEditId = editDoc ? editDoc.id : null;
+  document.getElementById('manualDocModalTitle').textContent = manualEditId ? t('editDocument') : t('addDocument');
+  document.getElementById('manualDocEditId').value = manualEditId || '';
+  document.getElementById('manualDocTitle').value = editDoc ? (editDoc.title || '') : '';
+  document.getElementById('manualDocContent').value = editDoc ? (editDoc.content || '') : '';
+  document.getElementById('manualDocContent').readOnly = false;
+  document.getElementById('manualDocCategory').value = editDoc ? (editDoc.channel || '') : '';
+  document.getElementById('manualDocAuthor').value = editDoc ? (editDoc.author || '') : '';
+  document.getElementById('manualDocContentType').value = editDoc ? (editDoc.content_type || 'text/markdown') : 'text/markdown';
+  document.getElementById('manualDocURL').value = editDoc ? (editDoc.url || '') : '';
+  document.getElementById('manualDocFile').value = '';
+  document.getElementById('manualFileInfo').textContent = '';
+  document.getElementById('manualFileClear').style.display = 'none';
+  document.getElementById('manualDocModal').classList.remove('hidden');
+}
+
+function closeManualDocModal() {
+  document.getElementById('manualDocModal').classList.add('hidden');
+  manualEditId = null;
+}
+
+function onManualFileSelect() {
+  const fileInput = document.getElementById('manualDocFile');
+  const info = document.getElementById('manualFileInfo');
+  const clearBtn = document.getElementById('manualFileClear');
+  const contentArea = document.getElementById('manualDocContent');
+  if (fileInput.files.length > 0) {
+    const f = fileInput.files[0];
+    info.textContent = f.name + ' (' + formatBytes(f.size) + ')';
+    clearBtn.style.display = '';
+    contentArea.readOnly = true;
+    contentArea.placeholder = t('fileContentPlaceholder');
+  }
+}
+
+function clearManualFile() {
+  document.getElementById('manualDocFile').value = '';
+  document.getElementById('manualFileInfo').textContent = '';
+  document.getElementById('manualFileClear').style.display = 'none';
+  document.getElementById('manualDocContent').readOnly = false;
+  document.getElementById('manualDocContent').placeholder = 'Enter document content (or upload a file)';
+}
+
+async function saveManualDoc() {
+  const title = document.getElementById('manualDocTitle').value.trim();
+  if (!title) { alert(t('titleRequired')); return; }
+
+  const fd = new FormData();
+  fd.append('title', title);
+  fd.append('category', document.getElementById('manualDocCategory').value.trim());
+  fd.append('author', document.getElementById('manualDocAuthor').value.trim());
+  fd.append('content_type', document.getElementById('manualDocContentType').value);
+  fd.append('url', document.getElementById('manualDocURL').value.trim());
+
+  const fileInput = document.getElementById('manualDocFile');
+  if (fileInput.files.length > 0) {
+    fd.append('file', fileInput.files[0]);
+  } else {
+    fd.append('content', document.getElementById('manualDocContent').value);
+  }
+
+  try {
+    if (manualEditId) {
+      await apiMultipart('PUT', '/api/v1/documents/' + manualEditId, fd);
+    } else {
+      await apiMultipart('POST', '/api/v1/documents', fd);
+    }
+    closeManualDocModal();
+    loadManualDocs();
+  } catch (e) {
+    alert('Failed to save document: ' + e.message);
+  }
+}
+
+async function editManualDoc(id) {
+  try {
+    const doc = await api('GET', '/api/v1/documents/' + id);
+    showManualDocModal(doc);
+  } catch (e) {
+    alert('Failed to load document: ' + e.message);
+  }
+}
+
+async function deleteManualDoc(id, title) {
+  if (!confirm(t('confirmDelete') + '\n\n' + title)) return;
+  try {
+    await api('DELETE', '/api/v1/documents/' + id);
+    loadManualDocs();
+  } catch (e) {
+    alert('Failed to delete document: ' + e.message);
+  }
+}
+
 /* ---- Jobs ---- */
 async function loadJobs() {
   try {
@@ -1339,7 +1593,7 @@ async function loadIndex() {
     }
 
     let html = '';
-    const sourceOrder = ['slack', 'google', 'notion'];
+    const sourceOrder = ['slack', 'google', 'notion', 'manual'];
     const sources = Object.keys(grouped).sort((a, b) => {
       const ai = sourceOrder.indexOf(a), bi = sourceOrder.indexOf(b);
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -2310,7 +2564,7 @@ function handleRoute() {
     showTab('kb');
   } else if (hash.startsWith('#tab/')) {
     const tab = hash.substring(5);
-    if (['dashboard', 'documents', 'search', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
+    if (['dashboard', 'documents', 'search', 'jobs', 'index', 'kb', 'manual', 'graph'].includes(tab)) {
       showTab(tab);
     }
   }
@@ -2335,7 +2589,7 @@ async function init() {
       showTab('kb');
     } else if (hash.startsWith('#tab/')) {
       const tab = hash.substring(5);
-      if (['dashboard', 'documents', 'search', 'jobs', 'index', 'kb', 'graph'].includes(tab)) {
+      if (['dashboard', 'documents', 'search', 'jobs', 'index', 'kb', 'manual', 'graph'].includes(tab)) {
         showTab(tab);
       } else {
         loadDashboard();

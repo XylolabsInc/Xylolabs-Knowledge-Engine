@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
 	"github.com/xylolabsinc/xylolabs-kb/internal/worker"
@@ -37,6 +38,7 @@ type Server struct {
 	auth         *authMiddleware
 	jobLister    JobLister
 	kbRepoDir    string
+	extractor    *extractor.Extractor
 	logger       *slog.Logger
 	startedAt    time.Time
 	requestCount atomic.Int64
@@ -44,7 +46,7 @@ type Server struct {
 }
 
 // NewServer creates an API server.
-func NewServer(host string, port int, engine *kb.Engine, store kb.Storage, scheduler *worker.Scheduler, syncManager *worker.SyncManager, jobLister JobLister, consoleUsername, consolePassword, kbRepoDir string, logger *slog.Logger) *Server {
+func NewServer(host string, port int, engine *kb.Engine, store kb.Storage, scheduler *worker.Scheduler, syncManager *worker.SyncManager, jobLister JobLister, consoleUsername, consolePassword, kbRepoDir string, ext *extractor.Extractor, logger *slog.Logger) *Server {
 	auth := newAuthMiddleware(consoleUsername, consolePassword)
 	s := &Server{
 		engine:      engine,
@@ -54,6 +56,7 @@ func NewServer(host string, port int, engine *kb.Engine, store kb.Storage, sched
 		auth:        auth,
 		jobLister:   jobLister,
 		kbRepoDir:   kbRepoDir,
+		extractor:   ext,
 		logger:      logger.With("component", "api-server"),
 		startedAt:   time.Now(),
 	}
@@ -99,6 +102,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/stats", s.auth.requireAuth(s.handleGetStats))
 	mux.HandleFunc("GET /api/v1/sources", s.auth.requireAuth(s.handleListSources))
 	mux.HandleFunc("POST /api/v1/sync/{source}", s.auth.requireAuth(s.auth.requireCSRF(s.handleTriggerSync)))
+	mux.HandleFunc("POST /api/v1/documents", s.auth.requireAuth(s.auth.requireCSRF(s.handleCreateDocument)))
+	mux.HandleFunc("PUT /api/v1/documents/{id}", s.auth.requireAuth(s.auth.requireCSRF(s.handleUpdateDocument)))
+	mux.HandleFunc("DELETE /api/v1/documents/{id}", s.auth.requireAuth(s.auth.requireCSRF(s.handleDeleteDocument)))
 
 	// Root redirect to console
 	mux.HandleFunc("GET /", s.handleRootRedirect)
@@ -160,7 +166,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 		// CORS headers
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token, X-Request-ID")
 		w.Header().Set("X-Request-ID", requestID)
 

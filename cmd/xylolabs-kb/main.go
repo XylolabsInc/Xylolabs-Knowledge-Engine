@@ -217,7 +217,7 @@ func main() {
 	scheduler.Start()
 
 	// Start API server
-	server := api.NewServer(cfg.APIHost, cfg.APIPort, engine, store, scheduler, syncManager, store, cfg.ConsoleUsername, cfg.ConsolePassword, cfg.KBRepoDir, logger)
+	server := api.NewServer(cfg.APIHost, cfg.APIPort, engine, store, scheduler, syncManager, store, cfg.ConsoleUsername, cfg.ConsolePassword, cfg.KBRepoDir, ext, logger)
 	go func() {
 		if err := server.Start(); err != nil {
 			logger.Error("api server failed", "error", err)
