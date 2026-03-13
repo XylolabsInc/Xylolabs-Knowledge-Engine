@@ -4,6 +4,13 @@
 #   --full: Re-index all documents (ignores sync state)
 set -euo pipefail
 
+# Guard: refuse to run as root to prevent file ownership issues
+if [ "$(id -u)" = "0" ]; then
+    echo "ERROR: kb-gen-run.sh must NOT run as root (creates root-owned files in the KB repo)." >&2
+    echo "Run as: sudo -u ubuntu $0 $*" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 KB_DIR="${KB_REPO_DIR:-/opt/knowledge}"
 API_URL="${API_URL:-http://localhost:8080}"

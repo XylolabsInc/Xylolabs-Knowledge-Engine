@@ -12,7 +12,7 @@ Curated knowledge base auto-generated from Slack, Google Workspace, and Notion.
 
 ## How It Works
 
-1. **Go Worker** ([xylolabs-kb](https://github.com/XylolabsInc/xylolabs-kb)) fetches raw data from Slack, Google Workspace, and Notion into a SQLite database
+1. **Go Worker** ([Xylolabs-Knowledge-Engine](https://github.com/XylolabsInc/Xylolabs-Knowledge-Engine)) fetches raw data from Slack, Google Workspace, and Notion into a SQLite database
 2. **Cron Job** (`generate-kb.sh`) invokes `kb-gen` (Gemini AI) to transform raw data into structured markdown, with Claude Code CLI as fallback when Gemini quota is exhausted
 3. **This repo** stores the curated markdown knowledge base with hierarchy, cross-references, and navigable indexes
 

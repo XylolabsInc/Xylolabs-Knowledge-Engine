@@ -315,7 +315,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=ubuntu
+Group=ubuntu
 WorkingDirectory=/opt/xylolabs-kb
 ExecStart=/opt/xylolabs-kb/bin/xylolabs-kb
 EnvironmentFile=/opt/xylolabs-kb/.env
@@ -323,6 +324,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -361,11 +363,11 @@ This script:
 When deployed with `--with-cron`, the following cron jobs are installed:
 
 ```cron
-# Incremental KB generation — every 6 hours
-7 */6 * * *  root  cd /opt/knowledge && /opt/xylolabs-kb/scripts/generate-kb.sh
+# Incremental KB generation — every 6 hours (run as ubuntu to avoid permission issues)
+7 */6 * * *  ubuntu  cd /opt/knowledge && /opt/xylolabs-kb/scripts/generate-kb.sh
 
 # Weekly full rebuild — Sunday 3 AM
-17 3 * * 0   root  /opt/xylolabs-kb/scripts/regenerate-kb.sh
+17 3 * * 0   ubuntu  /opt/xylolabs-kb/scripts/regenerate-kb.sh
 ```
 
 ### launchd (macOS)
