@@ -43,6 +43,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); line
 .nav-item:hover { background: var(--bg-tertiary); color: var(--text); }
 .nav-item.active { background: var(--primary-light); color: var(--primary); font-weight: 550; }
 .nav-item .icon { font-size: 1.125rem; width: 22px; text-align: center; flex-shrink: 0; }
+.nav-item .icon svg { display: block; }
 .sidebar-footer { padding: 8px; border-top: 1px solid var(--border-light); }
 .logout-btn { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; color: var(--text-secondary); border: none; background: none; width: 100%; text-align: left; font-family: var(--font); transition: all var(--transition); }
 .logout-btn:hover { background: var(--danger-light); color: var(--danger); }
@@ -270,7 +271,7 @@ tr.clickable { cursor: pointer; }
 </div>
 
 <!-- Mobile Toggle -->
-<button class="mobile-toggle" onclick="toggleSidebar()">&#9776;</button>
+<button class="mobile-toggle" onclick="toggleSidebar()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg></button>
 
 <!-- App -->
 <div class="app">
@@ -282,30 +283,30 @@ tr.clickable { cursor: pointer; }
     </div>
     <nav class="sidebar-nav">
       <button class="nav-item active" onclick="showTab('dashboard')" data-tab="dashboard" data-i18n="dashboard">
-        <span class="icon">&#9632;</span> Dashboard
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></span> Dashboard
       </button>
       <button class="nav-item" onclick="showTab('documents')" data-tab="documents" data-i18n="documents">
-        <span class="icon">&#9776;</span> Documents
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg></span> Documents
       </button>
       <button class="nav-item" onclick="showTab('search')" data-tab="search" data-i18n="search">
-        <span class="icon">&#8981;</span> Search
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span> Search
       </button>
       <button class="nav-item" onclick="showTab('jobs')" data-tab="jobs" data-i18n="jobs">
-        <span class="icon">&#8634;</span> Jobs
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></span> Jobs
       </button>
       <button class="nav-item" onclick="showTab('index')" data-tab="index" data-i18n="index">
-        <span class="icon">&#9638;</span> Raw Data
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg></span> Raw Data
       </button>
       <button class="nav-item" onclick="showTab('kb')" data-tab="kb" data-i18n="kb">
-        <span class="icon">&#9733;</span> KB
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span> KB
       </button>
       <button class="nav-item" onclick="showTab('graph')" data-tab="graph" data-i18n="graph">
-        <span class="icon">&#9672;</span> Graph
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg></span> Graph
       </button>
     </nav>
     <div class="sidebar-footer" id="logoutSection" style="display:none">
       <button class="logout-btn" onclick="doLogout()" data-i18n="logout">
-        <span class="icon">&#8594;</span> Logout
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></span> Logout
       </button>
     </div>
     <div class="sidebar-footer">
@@ -901,7 +902,7 @@ async function renderDocBrowser() {
       let html = '<div class="dir-grid">';
       for (const [src, count] of Object.entries(bySource)) {
         html += '<div class="dir-item" onclick="navigateDocs([\'' + escapeHtml(src) + '\'])">'
-          + '<div class="dir-icon" style="color:' + sourceColor(src) + '">&#9632;</div>'
+          + '<div class="dir-icon" style="color:' + sourceColor(src) + '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></div>'
           + '<div>'
           + '<div class="dir-label" style="text-transform:capitalize">' + escapeHtml(src) + '</div>'
           + '<div class="dir-count">' + count + ' ' + t('docs') + '</div>'
@@ -937,7 +938,7 @@ async function renderDocBrowser() {
       let html = '<div class="dir-grid">';
       for (const [ch, count] of sorted) {
         html += '<div class="dir-item" onclick="navigateDocs([\'' + escapeHtml(source) + '\',\'' + escapeHtml(ch) + '\'])">'
-          + '<div class="dir-icon">&#9783;</div>'
+          + '<div class="dir-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></div>'
           + '<div>'
           + '<div class="dir-label">' + escapeHtml(ch) + '</div>'
           + '<div class="dir-count">' + count + ' ' + t('docs') + '</div>'
@@ -979,9 +980,9 @@ async function renderDocBrowser() {
       html += '<div class="section-title" style="font-size:0.8125rem;margin-bottom:12px">Hierarchy</div>';
       html += '<div style="display:flex;align-items:center;gap:8px;font-size:0.8125rem">';
       html += '<span style="padding:4px 10px;border-radius:var(--radius-sm);background:' + sourceColor(source) + ';color:#fff;font-weight:600;text-transform:capitalize">' + escapeHtml(source) + '</span>';
-      html += '<span style="color:var(--text-muted)">&#8594;</span>';
+      html += '<span style="color:var(--text-muted)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>';
       html += '<span style="padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg-tertiary);font-weight:500">' + escapeHtml(channel) + '</span>';
-      html += '<span style="color:var(--text-muted)">&#8594;</span>';
+      html += '<span style="color:var(--text-muted)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>';
       html += '<span style="color:var(--text-secondary)">' + filtered.length + ' ' + t('docs') + '</span>';
       html += '</div>';
 
@@ -998,7 +999,7 @@ async function renderDocBrowser() {
       for (const doc of pageDocs) {
         const title = doc.title || truncate(doc.content, 80) || '(Untitled)';
         html += '<div class="doc-list-item" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">'
-          + '<div class="doc-list-icon">&#9633;</div>'
+          + '<div class="doc-list-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></div>'
           + '<div class="doc-list-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 80)) + '</div>'
           + '<div class="doc-list-meta">'
           + sourceBadge(doc.source)
@@ -1352,7 +1353,7 @@ async function loadIndex() {
 
       html += '<div class="tree-source">';
       html += '<div class="tree-source-header" onclick="toggleTree(\'' + srcId + '\')">';
-      html += '<span class="tree-toggle open" id="toggle-' + srcId + '">&#9656;</span>';
+      html += '<span class="tree-toggle open" id="toggle-' + srcId + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>';
       html += sourceBadge(src) + ' <span class="tree-source-name">' + escapeHtml(src) + '</span>';
       html += '<span class="tree-source-count">' + totalDocs + ' ' + t('docs') + ' / ' + channelNames.length + ' ' + t('channels') + '</span>';
       html += '</div>';
@@ -1364,7 +1365,7 @@ async function loadIndex() {
 
         html += '<div class="tree-channel">';
         html += '<div class="tree-channel-header" onclick="toggleTree(\'' + chId + '\')">';
-        html += '<span class="tree-toggle open" id="toggle-' + chId + '" style="font-size:0.625rem">&#9656;</span>';
+        html += '<span class="tree-toggle open" id="toggle-' + chId + '" style="font-size:0.625rem"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>';
         html += '<span class="tree-channel-name">' + escapeHtml(ch) + '</span>';
         html += '<span class="tree-channel-count">' + chDocs.length + '</span>';
         html += '</div>';
@@ -1395,7 +1396,7 @@ async function loadIndex() {
 
             html += '<div class="tree-channel" style="margin-left:8px">';
             html += '<div class="tree-channel-header" onclick="toggleTree(\'' + threadId + '\')">';
-            html += '<span class="tree-toggle" id="toggle-' + threadId + '" style="font-size:0.625rem">&#9656;</span>';
+            html += '<span class="tree-toggle" id="toggle-' + threadId + '" style="font-size:0.625rem"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>';
             html += '<span class="tree-channel-name" style="font-size:0.8125rem;color:var(--text-secondary)">Thread: ' + escapeHtml(truncate(parentTitle, 40)) + '</span>';
             html += '<span class="tree-channel-count">' + (replies.length + (parent ? 1 : 0)) + '</span>';
             html += '</div>';
@@ -1575,6 +1576,32 @@ function findKBNode(nodes, path) {
   return null;
 }
 
+function getKBIcon(item) {
+  if (item.is_dir) {
+    const name = (item.name || '').toLowerCase();
+    if (name === 'slack' || name === 'channels') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 10c-.83 0-1.5-.67-1.5-1.5v-5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5z"></path><path d="M20.5 10H19V8.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"></path><path d="M9.5 14c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5S8 21.33 8 20.5v-5c0-.83.67-1.5 1.5-1.5z"></path><path d="M3.5 14H5v1.5c0 .83-.67 1.5-1.5 1.5S2 16.33 2 15.5 2.67 14 3.5 14z"></path><path d="M14 14.5c0-.83.67-1.5 1.5-1.5h5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-5c-.83 0-1.5-.67-1.5-1.5z"></path><path d="M15.5 19H14v1.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5z"></path><path d="M10 9.5C10 8.67 9.33 8 8.5 8h-5C2.67 8 2 8.67 2 9.5S2.67 11 3.5 11h5c.83 0 1.5-.67 1.5-1.5z"></path><path d="M8.5 5H10V3.5C10 2.67 9.33 2 8.5 2S7 2.67 7 3.5 7.67 5 8.5 5z"></path></svg>';
+    if (name === 'google' || name === 'docs') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4285F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
+    if (name === 'notion' || name === 'pages') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"></path><path d="M9 4v16"></path><path d="M14 8l-5 8"></path></svg>';
+    if (name === 'indexes' || name === '_meta') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>';
+    if (name === 'weekly') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>';
+    if (name === 'user-provided') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
+    // Default folder
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
+  }
+  // File icons based on name/path
+  const name = (item.name || '').toLowerCase();
+  if (name === 'readme.md') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>';
+  if (name === 'claude.md' || name === 'agents.md') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>';
+  const path = (item.path || '').toLowerCase();
+  if (path.startsWith('slack/') || path.startsWith('channels/')) return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4A154B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
+  if (path.startsWith('google/')) return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4285F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>';
+  if (path.startsWith('notion/')) return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
+  if (path.startsWith('indexes/') || path.startsWith('_meta/')) return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+  if (path.startsWith('user-provided/')) return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>';
+  // Default file
+  return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
+}
+
 function renderKBDirectory(container, items) {
   if (!items || items.length === 0) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Empty directory</div></div>';
@@ -1589,7 +1616,7 @@ function renderKBDirectory(container, items) {
 
   let html = '<div class="kb-file-tree">';
   for (const item of sorted) {
-    const icon = item.is_dir ? '&#9783;' : '&#9633;';
+    const icon = getKBIcon(item);
     const size = item.is_dir ? '' : formatBytes(item.size || 0);
     const cls = item.is_dir ? 'kb-tree-dir' : '';
     html += '<div class="kb-tree-item ' + cls + '" onclick="navigateKB(\'' + escapeHtml(item.path) + '\')">';
