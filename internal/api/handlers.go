@@ -55,6 +55,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "query parameter 'q' is required")
 		return
 	}
+	if len(queryText) > 500 {
+		writeError(w, http.StatusBadRequest, "query too long (max 500 characters)")
+		return
+	}
 
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
@@ -73,6 +77,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Author:  q.Get("author"),
 		Limit:   limit,
 		Offset:  offset,
+	}
+
+	if query.Source != "" {
+		switch query.Source {
+		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion:
+			// valid
+		default:
+			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, or notion")
+			return
+		}
 	}
 
 	if from := q.Get("from"); from != "" {
@@ -152,6 +166,16 @@ func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 		Offset: offset,
 	}
 
+	if query.Source != "" {
+		switch query.Source {
+		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion:
+			// valid
+		default:
+			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, or notion")
+			return
+		}
+	}
+
 	if since := q.Get("since"); since != "" {
 		if t, err := time.Parse(time.RFC3339, since); err == nil {
 			query.Since = t
@@ -175,6 +199,10 @@ func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "document ID is required")
+		return
+	}
+	if len(id) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid document ID")
 		return
 	}
 
@@ -415,6 +443,10 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path parameter required")
 		return
 	}
+	if len(filePath) > 500 {
+		writeError(w, http.StatusBadRequest, "path too long")
+		return
+	}
 
 	// Security: prevent path traversal
 	cleaned := filepath.Clean(filePath)
@@ -525,6 +557,10 @@ func (s *Server) handleKBDocFile(w http.ResponseWriter, r *http.Request) {
 	docID := r.URL.Query().Get("id")
 	if docID == "" {
 		writeError(w, http.StatusBadRequest, "id parameter required")
+		return
+	}
+	if len(docID) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid document ID")
 		return
 	}
 

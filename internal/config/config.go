@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -135,6 +137,50 @@ func (c *Config) GeminiEnabled() bool {
 // ConsoleAuthEnabled returns true if console password is set.
 func (c *Config) ConsoleAuthEnabled() bool {
 	return c.ConsolePassword != ""
+}
+
+// Validate checks that the configuration is usable and returns any errors found.
+func (c *Config) Validate() []string {
+	var errs []string
+
+	// Check DB directory is writable
+	dbDir := filepath.Dir(c.DBPath)
+	if dbDir != "" && dbDir != "." {
+		if info, err := os.Stat(dbDir); err != nil {
+			errs = append(errs, fmt.Sprintf("DB_PATH directory %q does not exist", dbDir))
+		} else if !info.IsDir() {
+			errs = append(errs, fmt.Sprintf("DB_PATH directory %q is not a directory", dbDir))
+		}
+	}
+
+	// Check timezone is valid
+	if _, err := time.LoadLocation(c.Timezone); err != nil {
+		errs = append(errs, fmt.Sprintf("invalid TIMEZONE %q: %v", c.Timezone, err))
+	}
+
+	// Check API port range
+	if c.APIPort < 1 || c.APIPort > 65535 {
+		errs = append(errs, fmt.Sprintf("API_PORT %d is out of range (1-65535)", c.APIPort))
+	}
+
+	// Check Gemini model is set if API key is provided
+	if c.GeminiAPIKey != "" && c.GeminiModel == "" {
+		errs = append(errs, "GEMINI_API_KEY is set but GEMINI_MODEL is empty")
+	}
+
+	// Check system prompt file exists if specified
+	if c.SystemPromptFile != "" {
+		if _, err := os.Stat(c.SystemPromptFile); err != nil {
+			errs = append(errs, fmt.Sprintf("SYSTEM_PROMPT_FILE %q not found: %v", c.SystemPromptFile, err))
+		}
+	}
+
+	// Check Google creds file exists if impersonate email is set
+	if c.GoogleImpersonateEmail != "" && !fileExists(c.GoogleCredsFile) {
+		errs = append(errs, fmt.Sprintf("GOOGLE_IMPERSONATE_EMAIL is set but credentials file %q not found", c.GoogleCredsFile))
+	}
+
+	return errs
 }
 
 // Location returns the configured timezone as a *time.Location.
