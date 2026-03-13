@@ -43,17 +43,30 @@ die()  { log "FATAL: $*"; exit 1; }
 # Lockfile — prevent concurrent runs
 # -----------------------------------------------------------------------------
 acquire_lock() {
-    if [ -f "$LOCKFILE" ]; then
-        local pid
-        pid=$(cat "$LOCKFILE" 2>/dev/null || echo "")
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            die "Another instance is running (PID $pid)"
-        fi
-        log "Removing stale lockfile (PID $pid)"
-        rm -f "$LOCKFILE"
+    local lockdir="${LOCKFILE}.d"
+    if mkdir "$lockdir" 2>/dev/null; then
+        echo $$ > "$lockdir/pid"
+        trap 'rm -rf "$lockdir"' EXIT
+        return 0
     fi
-    echo $$ > "$LOCKFILE"
-    trap 'rm -f "$LOCKFILE"' EXIT
+
+    # Lock exists — check if the holder is still alive
+    local pid
+    pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        die "Another instance is running (PID $pid)"
+    fi
+
+    # Stale lock — remove and retry once
+    log "Removing stale lockfile (PID $pid)"
+    rm -rf "$lockdir"
+    if mkdir "$lockdir" 2>/dev/null; then
+        echo $$ > "$lockdir/pid"
+        trap 'rm -rf "$lockdir"' EXIT
+        return 0
+    fi
+
+    die "Failed to acquire lock"
 }
 
 # -----------------------------------------------------------------------------
@@ -270,7 +283,7 @@ main() {
     git pull --rebase origin main 2>/dev/null || log "WARNING: git pull failed, continuing with local state"
 
     TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "${TMP_DIR:-}"; rm -f "$LOCKFILE"' EXIT
+    trap 'rm -rf "${TMP_DIR:-}"; rm -rf "${LOCKFILE}.d"' EXIT
 
     local any_processed=false
 

@@ -88,7 +88,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/documents/{id}", s.auth.requireAuth(s.handleGetDocument))
 	mux.HandleFunc("GET /api/v1/stats", s.auth.requireAuth(s.handleGetStats))
 	mux.HandleFunc("GET /api/v1/sources", s.auth.requireAuth(s.handleListSources))
-	mux.HandleFunc("POST /api/v1/sync/{source}", s.auth.requireAuth(s.handleTriggerSync))
+	mux.HandleFunc("POST /api/v1/sync/{source}", s.auth.requireAuth(s.auth.requireCSRF(s.handleTriggerSync)))
 
 	// Root redirect to console
 	mux.HandleFunc("GET /", s.handleRootRedirect)
@@ -96,7 +96,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Console routes
 	mux.HandleFunc("GET /console", s.handleConsole)
 	mux.HandleFunc("POST /console/login", s.auth.handleLogin)
-	mux.HandleFunc("POST /console/logout", s.auth.handleLogout)
+	mux.HandleFunc("POST /console/logout", s.auth.requireCSRF(s.auth.handleLogout))
 	mux.HandleFunc("GET /console/auth/check", s.auth.handleAuthCheck)
 
 	// Console-protected API

@@ -14,9 +14,36 @@ import (
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
+	status := "ok"
+	checks := map[string]string{}
+
+	// Check database connectivity
+	if err := s.store.Ping(); err != nil {
+		status = "degraded"
+		checks["database"] = "error: " + err.Error()
+	} else {
+		checks["database"] = "ok"
+	}
+
+	// Check KB repo directory if configured
+	if s.kbRepoDir != "" {
+		if _, err := os.Stat(s.kbRepoDir); err != nil {
+			status = "degraded"
+			checks["kb_repo"] = "error: " + err.Error()
+		} else {
+			checks["kb_repo"] = "ok"
+		}
+	}
+
+	httpStatus := http.StatusOK
+	if status == "degraded" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+
+	writeJSON(w, httpStatus, map[string]any{
+		"status": status,
 		"time":   time.Now().UTC().Format(time.RFC3339),
+		"checks": checks,
 	})
 }
 
@@ -324,6 +351,11 @@ func (s *Server) handleKBTree(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
+		// Skip symlinks to prevent directory traversal
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
 		// Skip hidden dirs and .git
 		base := filepath.Base(rel)
 		if strings.HasPrefix(base, ".") {
@@ -393,11 +425,26 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 
 	fullPath := filepath.Join(s.kbRepoDir, cleaned)
 
-	// Verify the path is within the KB repo
-	if !strings.HasPrefix(fullPath, s.kbRepoDir) {
+	// Resolve symlinks to prevent escape
+	resolvedPath, err := filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "file not found")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid path")
+		}
+		return
+	}
+	resolvedRepo, err := filepath.EvalSymlinks(s.kbRepoDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server configuration error")
+		return
+	}
+	if !strings.HasPrefix(resolvedPath, resolvedRepo) {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
+	fullPath = resolvedPath
 
 	data, err := os.ReadFile(fullPath)
 	if err != nil {

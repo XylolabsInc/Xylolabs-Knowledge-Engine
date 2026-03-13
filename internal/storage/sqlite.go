@@ -36,6 +36,11 @@ func New(dsn string, logger *slog.Logger) (*SQLiteStore, error) {
 	return &SQLiteStore{db: db, logger: logger.With("component", "sqlite")}, nil
 }
 
+// Ping checks database connectivity.
+func (s *SQLiteStore) Ping() error {
+	return s.db.Ping()
+}
+
 // Close closes the database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()

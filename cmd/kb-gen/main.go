@@ -234,6 +234,7 @@ func main() {
 
 		totalTokensUsed += tokensUsed
 
+		batchWritesBefore := totalFilesWritten
 		for _, block := range blocks {
 			if dryRun {
 				fmt.Printf("[dry-run] Would write: %s (%d bytes)\n", block.Path, len(block.Content))
@@ -258,8 +259,8 @@ func main() {
 			}
 		}
 
-		// Track latest timestamp only when files were actually written
-		if len(blocks) > 0 {
+		// Track latest timestamp only when files were actually written successfully
+		if totalFilesWritten > batchWritesBefore {
 			for _, doc := range b.Documents {
 				if doc.Timestamp > latestTimestamp {
 					latestTimestamp = doc.Timestamp

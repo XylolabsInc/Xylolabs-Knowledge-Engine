@@ -15,6 +15,10 @@ const (
 	sessionCookieName = "xke_session"
 	sessionTTL        = 14 * 24 * time.Hour // 2 weeks
 	cleanupInterval   = 15 * time.Minute
+
+	csrfTokenLength = 32
+	csrfCookieName  = "xke_csrf"
+	csrfHeaderName  = "X-CSRF-Token"
 )
 
 type session struct {
@@ -103,6 +107,12 @@ func (am *authMiddleware) deleteSession(id string) {
 	am.mu.Unlock()
 }
 
+func (am *authMiddleware) generateCSRFToken() string {
+	b := make([]byte, csrfTokenLength)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 func (am *authMiddleware) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !am.enabled {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
@@ -141,7 +151,17 @@ func (am *authMiddleware) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
+	csrfToken := am.generateCSRFToken()
+	http.SetCookie(w, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    csrfToken,
+		Path:     "/",
+		HttpOnly: false, // JS needs to read this
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(sessionTTL.Seconds()),
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "csrf_token": csrfToken})
 }
 
 func (am *authMiddleware) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +215,42 @@ func (am *authMiddleware) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		cookie, err := r.Cookie(sessionCookieName)
 		if err != nil || !am.validateSession(cookie.Value) {
 			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireCSRF validates the CSRF token on state-changing requests.
+func (am *authMiddleware) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !am.enabled {
+			next(w, r)
+			return
+		}
+		// Only validate on state-changing methods
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next(w, r)
+			return
+		}
+		// Allow localhost without CSRF (internal scripts)
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if host == "127.0.0.1" || host == "::1" {
+			next(w, r)
+			return
+		}
+		cookie, err := r.Cookie(csrfCookieName)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "CSRF token missing")
+			return
+		}
+		headerToken := r.Header.Get(csrfHeaderName)
+		if headerToken == "" {
+			writeError(w, http.StatusForbidden, "CSRF token header missing")
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(headerToken)) != 1 {
+			writeError(w, http.StatusForbidden, "CSRF token mismatch")
 			return
 		}
 		next(w, r)

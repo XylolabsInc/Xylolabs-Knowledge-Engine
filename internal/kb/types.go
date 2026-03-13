@@ -119,6 +119,9 @@ type Storage interface {
 	// Stats
 	GetStats() (*Stats, error)
 
+	// Health
+	Ping() error
+
 	// Lifecycle
 	Close() error
 }
