@@ -23,14 +23,19 @@ type Reader struct {
 	mu         sync.Mutex
 	lastPull   time.Time
 	pullMinGap time.Duration
+
+	indexCache    []fileEntry
+	indexCacheAt  time.Time
+	indexCacheTTL time.Duration
 }
 
 // NewReader creates a KB repo reader.
 func NewReader(repoDir string, logger *slog.Logger) *Reader {
 	return &Reader{
-		repoDir:    repoDir,
-		logger:     logger.With("component", "kbrepo"),
-		pullMinGap: 30 * time.Second,
+		repoDir:       repoDir,
+		logger:        logger.With("component", "kbrepo"),
+		pullMinGap:    30 * time.Second,
+		indexCacheTTL: 30 * time.Second,
 	}
 }
 
@@ -51,6 +56,7 @@ func (r *Reader) Pull() {
 	} else {
 		r.logger.Debug("git pull complete", "output", strings.TrimSpace(string(out)))
 		r.lastPull = time.Now()
+		r.indexCache = nil // invalidate cache on successful pull
 	}
 }
 
@@ -120,6 +126,10 @@ type fileEntry struct {
 // loadIndexFiles loads all index and overview files from the repo.
 // These are always included: indexes/*, source READMEs, channel READMEs.
 func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
+	if r.indexCache != nil && time.Since(r.indexCacheAt) < r.indexCacheTTL {
+		return r.indexCache, nil
+	}
+
 	var entries []fileEntry
 
 	// Index files.
@@ -163,6 +173,9 @@ func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
 			}
 		}
 	}
+
+	r.indexCache = entries
+	r.indexCacheAt = time.Now()
 
 	return entries, nil
 }
@@ -266,36 +279,85 @@ func extractTitle(content string) string {
 var linkPattern = regexp.MustCompile(`\]\(([^)]+\.md)\)`)
 
 // findRelevantFiles determines which detail files to load based on the query.
-// It scores sections of index files by keyword match, then extracts file references
-// from the highest-scoring sections.
+// It scores sections of index files by IDF-weighted keyword match with heading boosts,
+// then extracts file references from the highest-scoring sections.
 func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 	keywords := tokenize(query)
 	if len(keywords) == 0 {
 		return nil
 	}
 
-	// Collect all referenced files with their relevance scores.
-	fileScores := make(map[string]int)
+	// Compute IDF: count how many sections each keyword appears in.
+	allSections := []string{}
+	for _, idx := range indexes {
+		allSections = append(allSections, splitSections(idx.content)...)
+	}
+	allDetails := r.listDetailFiles()
+
+	keywordDocFreq := make(map[string]int)
+	totalSections := len(allSections) + len(allDetails)
+	for _, section := range allSections {
+		lower := strings.ToLower(section)
+		seen := make(map[string]bool)
+		for _, kw := range keywords {
+			if !seen[kw] && strings.Contains(lower, kw) {
+				keywordDocFreq[kw]++
+				seen[kw] = true
+			}
+		}
+	}
+
+	// IDF weight: log(totalSections / (1 + docFreq))
+	idfWeight := func(kw string) float64 {
+		df := keywordDocFreq[kw]
+		if df == 0 {
+			return 1.0
+		}
+		w := float64(totalSections) / float64(1+df)
+		if w < 1.0 {
+			w = 1.0
+		}
+		// Use simple log approximation
+		result := 1.0
+		for w > 2.0 {
+			result += 1.0
+			w /= 2.0
+		}
+		return result
+	}
+
+	fileScores := make(map[string]float64)
 
 	for _, idx := range indexes {
-		// Split index content into sections (## headers).
 		sections := splitSections(idx.content)
-
 		for _, section := range sections {
 			lower := strings.ToLower(section)
-			score := 0
+			var score float64
 			for _, kw := range keywords {
-				score += strings.Count(lower, kw)
+				count := strings.Count(lower, kw)
+				if count == 0 {
+					continue
+				}
+				weight := idfWeight(kw)
+
+				// Title/heading boost: check if keyword appears in heading lines
+				headingBoost := 1.0
+				for _, line := range strings.Split(section, "\n") {
+					if strings.HasPrefix(line, "#") && strings.Contains(strings.ToLower(line), kw) {
+						headingBoost = 3.0
+						break
+					}
+				}
+
+				score += float64(count) * weight * headingBoost
 			}
 			if score == 0 {
 				continue
 			}
 
-			// Extract file references from this section.
 			matches := linkPattern.FindAllStringSubmatch(section, -1)
 			for _, m := range matches {
 				ref := m[1]
-				// Resolve relative paths (e.g., ../slack/channels/...)
 				resolved := resolveRef(idx.relPath, ref)
 				if resolved != "" {
 					fileScores[resolved] += score
@@ -304,21 +366,20 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		}
 	}
 
-	// Also do direct keyword matching on all detail file paths.
-	allDetails := r.listDetailFiles()
+	// Direct keyword matching on detail file paths
 	for _, path := range allDetails {
 		lower := strings.ToLower(path)
 		for _, kw := range keywords {
 			if strings.Contains(lower, kw) {
-				fileScores[path] += 2
+				fileScores[path] += 2.0 * idfWeight(kw)
 			}
 		}
 	}
 
-	// Sort by score and take top results.
+	// Sort by score and take top results
 	type scored struct {
 		path  string
-		score int
+		score float64
 	}
 	var ranked []scored
 	for path, score := range fileScores {
@@ -332,7 +393,7 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		}
 	}
 
-	maxFiles := 10
+	maxFiles := 15
 	if len(ranked) < maxFiles {
 		maxFiles = len(ranked)
 	}
@@ -604,7 +665,24 @@ func slugify(s string) string {
 	return slug
 }
 
-// tokenize splits a query into lowercase keyword tokens.
+// synonyms maps common abbreviations and terms to their expansions.
+var synonyms = map[string][]string{
+	"ml":     {"machine", "learning", "머신러닝"},
+	"ai":     {"artificial", "intelligence", "인공지능"},
+	"dl":     {"deep", "learning", "딥러닝"},
+	"llm":    {"large", "language", "model"},
+	"api":    {"interface"},
+	"db":     {"database", "데이터베이스"},
+	"ui":     {"user", "interface", "사용자"},
+	"ux":     {"user", "experience"},
+	"devops": {"deploy", "infrastructure", "배포"},
+	"cicd":   {"ci", "cd", "continuous", "integration", "delivery"},
+	"k8s":    {"kubernetes"},
+	"fe":     {"frontend", "프론트엔드"},
+	"be":     {"backend", "백엔드"},
+}
+
+// tokenize splits a query into lowercase keyword tokens with synonym expansion.
 func tokenize(s string) []string {
 	s = strings.ToLower(s)
 	var tokens []string
@@ -624,7 +702,7 @@ func tokenize(s string) []string {
 		tokens = append(tokens, current.String())
 	}
 
-	// Filter out very short Latin-only tokens.
+	// Filter out very short Latin-only tokens
 	var filtered []string
 	for _, t := range tokens {
 		runes := []rune(t)
@@ -633,5 +711,24 @@ func tokenize(s string) []string {
 		}
 		filtered = append(filtered, t)
 	}
-	return filtered
+
+	// Expand synonyms
+	expanded := make([]string, 0, len(filtered)*2)
+	seen := make(map[string]bool)
+	for _, t := range filtered {
+		if !seen[t] {
+			expanded = append(expanded, t)
+			seen[t] = true
+		}
+		if syns, ok := synonyms[t]; ok {
+			for _, syn := range syns {
+				if !seen[syn] {
+					expanded = append(expanded, syn)
+					seen[syn] = true
+				}
+			}
+		}
+	}
+
+	return expanded
 }
