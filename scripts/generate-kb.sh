@@ -20,6 +20,7 @@ API_BASE="${API_BASE:-http://localhost:8080}"
 KB_REPO_DIR="${KB_REPO_DIR:-/opt/knowledge}"
 LOCKFILE="${LOCKFILE:-/tmp/generate-kb.lock}"
 LOG_PREFIX="[generate-kb]"
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 MAX_DOCS_PER_SOURCE="${MAX_DOCS_PER_SOURCE:-500}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-4-6}"
 CLAUDE_MAX_BUDGET="${CLAUDE_MAX_BUDGET:-5.00}"
@@ -37,7 +38,25 @@ SOURCES=("slack" "google" "notion")
 # Logging
 # -----------------------------------------------------------------------------
 log()  { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $LOG_PREFIX $*"; }
-die()  { log "FATAL: $*"; exit 1; }
+die()  { log "FATAL: $*"; notify_failure "$*"; exit 1; }
+
+# -----------------------------------------------------------------------------
+# Failure notification via Slack webhook
+# -----------------------------------------------------------------------------
+notify_failure() {
+    local message="$1"
+    if [ -z "$SLACK_WEBHOOK_URL" ]; then
+        return
+    fi
+    local payload
+    payload=$(printf '{"text":":rotating_light: *KB Generation Failed*\n%s\nHost: %s\nTime: %s"}' \
+        "$message" \
+        "$(hostname)" \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ')")
+    curl -sf -X POST -H 'Content-Type: application/json' \
+        -d "$payload" \
+        "$SLACK_WEBHOOK_URL" >/dev/null 2>&1 || true
+}
 
 # -----------------------------------------------------------------------------
 # Lockfile — prevent concurrent runs
@@ -345,4 +364,6 @@ main() {
     log "Knowledge base generation complete"
 }
 
-main "$@"
+if ! main "$@"; then
+    notify_failure "generate-kb.sh exited with error"
+fi
