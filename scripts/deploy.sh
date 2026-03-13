@@ -81,6 +81,18 @@ upload() {
 # -----------------------------------------------------------------------------
 upload_env() {
     if [ -f "$PROJECT_DIR/.env" ]; then
+        # Validate critical env vars before uploading
+        local missing=()
+        for var in KB_REPO_DIR GEMINI_API_KEY SLACK_BOT_TOKEN; do
+            if ! grep -q "^${var}=" "$PROJECT_DIR/.env"; then
+                missing+=("$var")
+            fi
+        done
+        if [ ${#missing[@]} -gt 0 ]; then
+            log "WARNING: .env is missing critical variables: ${missing[*]}"
+            log "The bot may not function correctly without these."
+        fi
+
         log "Uploading .env..."
         # Copy .env to temp, fix SYSTEM_PROMPT_FILE path for server
         local tmpenv
