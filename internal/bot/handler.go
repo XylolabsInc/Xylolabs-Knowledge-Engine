@@ -28,6 +28,17 @@ const (
 	maxFileDownload   = 10 * 1024 * 1024 // 10 MB
 	maxThreadHistory  = 20               // max prior messages to include as context
 	maxToolIterations = 5                // max function calling round-trips
+
+	maxTrackedThreads     = 1000
+	maxNotBotThreads      = 500
+	threadCleanupInterval = 10 * time.Minute
+	notBotCacheTTL        = 5 * time.Minute
+
+	// Token budget estimates (chars-based, ~3 chars per token)
+	maxContextChars      = 300000 // ~100k tokens for total context
+	maxKBContextChars    = 200000 // ~67k tokens for KB context
+	maxFileChars         = 24000  // ~8k tokens per attached file
+	maxSystemPromptChars = 50000
 )
 
 //go:embed system_prompt.txt
@@ -57,6 +68,8 @@ type Bot struct {
 	// Key: "channel:thread_ts", Value: when checked.
 	notBotThreads   map[string]time.Time
 	notBotThreadsMu sync.RWMutex
+
+	done chan struct{}
 }
 
 // New creates a Bot handler.
@@ -74,6 +87,7 @@ func New(slackClient *slack.Client, geminiClient *gemini.Client, kbReader *kbrep
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		trackedThreads: make(map[string]bool),
 		notBotThreads:  make(map[string]time.Time),
+		done:           make(chan struct{}),
 	}
 }
 
@@ -100,6 +114,65 @@ func (b *Bot) SetToolExecutor(executor *tools.ToolExecutor) {
 // SetExtractor sets the content extractor for URL fetching.
 func (b *Bot) SetExtractor(ext *extractor.Extractor) {
 	b.extractor = ext
+}
+
+// StartCleanup begins periodic cleanup of thread caches.
+func (b *Bot) StartCleanup() {
+	go func() {
+		ticker := time.NewTicker(threadCleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-b.done:
+				return
+			case <-ticker.C:
+				b.cleanupCaches()
+			}
+		}
+	}()
+}
+
+// StopCleanup stops the periodic cleanup goroutine.
+func (b *Bot) StopCleanup() {
+	close(b.done)
+}
+
+func (b *Bot) cleanupCaches() {
+	// Evict oldest tracked threads if over limit
+	b.trackedThreadsMu.Lock()
+	if len(b.trackedThreads) > maxTrackedThreads {
+		// Simple eviction: clear half the map when it exceeds limit
+		count := 0
+		for k := range b.trackedThreads {
+			delete(b.trackedThreads, k)
+			count++
+			if count >= len(b.trackedThreads)/2 {
+				break
+			}
+		}
+	}
+	b.trackedThreadsMu.Unlock()
+
+	// Evict expired entries from negative cache
+	now := time.Now()
+	b.notBotThreadsMu.Lock()
+	for k, checkedAt := range b.notBotThreads {
+		if now.Sub(checkedAt) > notBotCacheTTL {
+			delete(b.notBotThreads, k)
+		}
+	}
+	// Hard cap
+	if len(b.notBotThreads) > maxNotBotThreads {
+		count := 0
+		for k := range b.notBotThreads {
+			delete(b.notBotThreads, k)
+			count++
+			if count >= len(b.notBotThreads)/2 {
+				break
+			}
+		}
+	}
+	b.notBotThreadsMu.Unlock()
 }
 
 // IsTrackedThread returns true if the bot has previously replied in this thread.
@@ -200,6 +273,12 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	}
 
 	b.logger.Info("kb context loaded", "length", len(kbContext), "query", query)
+
+	// Truncate KB context if it exceeds budget
+	if len(kbContext) > maxKBContextChars {
+		kbContext = kbContext[:maxKBContextChars] + "\n\n[... KB context truncated due to size ...]"
+		b.logger.Warn("kb context truncated", "original_length", len(kbContext), "max", maxKBContextChars)
+	}
 
 	// 2. Download any attached files from the message.
 	var images []gemini.Image
@@ -308,6 +387,12 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	now := time.Now().In(b.location)
 	currentTime := now.Format("2006-01-02 (Monday) 15:04 MST")
 	systemPrompt := fmt.Sprintf(b.systemPrompt, userName) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
+
+	// Truncate system prompt if it exceeds budget
+	if len(systemPrompt) > maxSystemPromptChars {
+		systemPrompt = systemPrompt[:maxSystemPromptChars] + "\n[... truncated ...]"
+		b.logger.Warn("system prompt truncated", "length", len(systemPrompt), "max", maxSystemPromptChars)
+	}
 
 	// 4. Build conversation messages with thread history for context continuity.
 	var messages []gemini.Message

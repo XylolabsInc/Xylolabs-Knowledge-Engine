@@ -47,10 +47,11 @@ func (r *Reader) Pull() {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		r.logger.Warn("git pull failed", "error", err, "output", string(out))
+		// Don't update lastPull on failure — retry sooner
 	} else {
 		r.logger.Debug("git pull complete", "output", strings.TrimSpace(string(out)))
+		r.lastPull = time.Now()
 	}
-	r.lastPull = time.Now()
 }
 
 // BuildContext constructs a context string for the LLM by:

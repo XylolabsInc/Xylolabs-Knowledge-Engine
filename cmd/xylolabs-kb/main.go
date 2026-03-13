@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -79,6 +80,9 @@ func main() {
 	// Done channel for connector lifecycle
 	done := make(chan struct{})
 
+	// Monitor connector health
+	connErrors := make(chan error, 3)
+
 	// Outer-scope handles for tool executor wiring after all connectors init.
 	var botHandler *bot.Bot
 	var googleConn *googleconn.Connector
@@ -106,6 +110,7 @@ func main() {
 				botHandler = bot.New(slackAPI, geminiClient, kbReader, authResp.UserID, cfg.SlackBotToken, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Location(), logger)
 				botHandler.SetExtractor(ext)
 				slackConn.SetBot(botHandler, authResp.UserID)
+				botHandler.StartCleanup()
 				logger.Info("slack bot enabled", "bot_user_id", authResp.UserID)
 			}
 		}
@@ -113,6 +118,7 @@ func main() {
 		go func() {
 			if err := slackConn.Start(done); err != nil {
 				logger.Error("slack connector failed", "error", err)
+				connErrors <- fmt.Errorf("slack: %w", err)
 			}
 		}()
 		logger.Info("slack connector enabled")
@@ -134,6 +140,7 @@ func main() {
 			go func() {
 				if err := googleConn.Start(done); err != nil {
 					logger.Error("google connector failed", "error", err)
+					connErrors <- fmt.Errorf("google: %w", err)
 				}
 			}()
 			logger.Info("google connector enabled")
@@ -167,6 +174,7 @@ func main() {
 		go func() {
 			if err := notionConn.Start(done); err != nil {
 				logger.Error("notion connector failed", "error", err)
+				connErrors <- fmt.Errorf("notion: %w", err)
 			}
 		}()
 		logger.Info("notion connector enabled")
@@ -210,6 +218,13 @@ func main() {
 		}
 	}()
 
+	// Monitor connector health in background
+	go func() {
+		for err := range connErrors {
+			logger.Error("CRITICAL: connector died unexpectedly", "error", err)
+		}
+	}()
+
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -222,6 +237,9 @@ func main() {
 	scheduler.Stop()
 	if jobScheduler != nil {
 		jobScheduler.Stop()
+	}
+	if botHandler != nil {
+		botHandler.StopCleanup()
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

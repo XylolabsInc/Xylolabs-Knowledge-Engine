@@ -138,6 +138,10 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 	}
 
 	if resp.StatusCode >= 400 {
+		retryAfter := resp.Header.Get("Retry-After")
+		if retryAfter != "" {
+			return nil, fmt.Errorf("gemini: API error %d (retry-after: %s): %s", resp.StatusCode, retryAfter, string(respData))
+		}
 		return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, string(respData))
 	}
 

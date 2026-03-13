@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +64,24 @@ const (
 	fileBlockStart       = "===FILE: "
 	fileBlockEnd         = "===ENDFILE==="
 )
+
+// parseRetryAfter extracts Retry-After seconds from an error message.
+func parseRetryAfter(errMsg string) time.Duration {
+	// Look for "retry-after: N" in the error message
+	idx := strings.Index(errMsg, "retry-after: ")
+	if idx < 0 {
+		return 0
+	}
+	after := errMsg[idx+len("retry-after: "):]
+	// Find the end (next ")" or end of string)
+	if end := strings.IndexByte(after, ')'); end > 0 {
+		after = after[:end]
+	}
+	if secs, err := strconv.Atoi(strings.TrimSpace(after)); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
 
 func main() {
 	var (
@@ -210,22 +230,30 @@ func main() {
 			time.Sleep(20 * time.Second)
 		}
 
-		// Retry with exponential backoff on 429 errors.
+		// Retry with exponential backoff on 429/503 errors.
 		var blocks []fileBlock
 		var tokensUsed int
 		var err error
-		for attempt := 0; attempt < 3; attempt++ {
+		maxRetries := 5
+		for attempt := 0; attempt < maxRetries; attempt++ {
 			blocks, tokensUsed, err = processBatch(context.Background(), client, b, source, curatorInstructions, thinkingLevel, logger)
 			if err == nil {
 				break
 			}
-			if strings.Contains(err.Error(), "429") && attempt < 2 {
-				wait := time.Duration(30*(attempt+1)) * time.Second
-				logger.Warn("rate limited, retrying", "batch", b.Key, "attempt", attempt+1, "wait", wait)
-				time.Sleep(wait)
-				continue
+			errMsg := err.Error()
+			isRetryable := strings.Contains(errMsg, "429") || strings.Contains(errMsg, "503")
+			if !isRetryable || attempt >= maxRetries-1 {
+				break
 			}
-			break
+			// Use Retry-After header if available, otherwise exponential backoff with jitter
+			wait := parseRetryAfter(errMsg)
+			if wait == 0 {
+				baseWait := time.Duration(1<<uint(attempt)) * 15 * time.Second // 15s, 30s, 60s, 120s
+				jitter := time.Duration(rand.IntN(int(baseWait / 4)))
+				wait = baseWait + jitter
+			}
+			logger.Warn("rate limited, retrying", "batch", b.Key, "attempt", attempt+1, "wait", wait)
+			time.Sleep(wait)
 		}
 		if err != nil {
 			logger.Error("failed to process batch", "batch", b.Key, "error", err)
