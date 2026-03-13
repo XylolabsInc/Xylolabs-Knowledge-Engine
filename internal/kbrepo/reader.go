@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -366,12 +367,22 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		}
 	}
 
+	// Extract date patterns from query for date-based file matching.
+	// Converts Korean month references like "2월" → "2026-02", "3월" → "2026-03".
+	datePatterns := extractDatePatterns(query)
+
 	// Direct keyword matching on detail file paths
 	for _, path := range allDetails {
 		lower := strings.ToLower(path)
 		for _, kw := range keywords {
 			if strings.Contains(lower, kw) {
 				fileScores[path] += 2.0 * idfWeight(kw)
+			}
+		}
+		// Date-based matching: boost files whose path contains the date pattern
+		for _, dp := range datePatterns {
+			if strings.Contains(lower, dp) {
+				fileScores[path] += 3.0
 			}
 		}
 	}
@@ -667,6 +678,21 @@ func slugify(s string) string {
 
 // synonyms maps common abbreviations and terms to their expansions.
 var synonyms = map[string][]string{
+	// Source type mappings (Korean ↔ English)
+	"슬랙":   {"slack", "channels"},
+	"slack":  {"슬랙", "channels"},
+	"구글":   {"google", "docs"},
+	"google": {"구글", "docs"},
+	"노션":   {"notion", "pages"},
+	"notion": {"노션", "pages"},
+	// Content type mappings
+	"대화":   {"channels", "messages", "slack"},
+	"대화내용": {"channels", "messages", "slack"},
+	"메시지":  {"messages", "slack", "channels"},
+	"문서":   {"docs", "google", "pages", "notion"},
+	"회의":   {"meeting", "회의록", "주간회의"},
+	"회의록":  {"meeting", "minutes", "주간회의"},
+	// Tech abbreviations
 	"ml":     {"machine", "learning", "머신러닝"},
 	"ai":     {"artificial", "intelligence", "인공지능"},
 	"dl":     {"deep", "learning", "딥러닝"},
@@ -731,4 +757,34 @@ func tokenize(s string) []string {
 	}
 
 	return expanded
+}
+
+// koreanMonthPattern matches Korean month references like "1월", "2월", "12월".
+var koreanMonthPattern = regexp.MustCompile(`(\d{1,2})월`)
+
+// extractDatePatterns extracts date path patterns from a query string.
+// "2월" → ["2026-02"], "2025년 3월" → ["2025-03"], "3월" → ["2026-03"].
+func extractDatePatterns(query string) []string {
+	var patterns []string
+
+	// Extract year if present (e.g., "2025년")
+	yearPattern := regexp.MustCompile(`(20\d{2})년?`)
+	yearMatches := yearPattern.FindStringSubmatch(query)
+	year := time.Now().Format("2006")
+	if len(yearMatches) >= 2 {
+		year = yearMatches[1]
+	}
+
+	// Extract months
+	monthMatches := koreanMonthPattern.FindAllStringSubmatch(query, -1)
+	for _, m := range monthMatches {
+		if len(m) >= 2 {
+			month, err := strconv.Atoi(m[1])
+			if err == nil && month >= 1 && month <= 12 {
+				patterns = append(patterns, fmt.Sprintf("%s-%02d", year, month))
+			}
+		}
+	}
+
+	return patterns
 }
