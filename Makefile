@@ -1,7 +1,7 @@
 .PHONY: build run test test-coverage lint clean docker docker-down fmt vet
 
 BINARY=xylolabs-kb
-GO=/opt/homebrew/bin/go
+GO ?= go
 
 build:
 	$(GO) build -o bin/$(BINARY) ./cmd/$(BINARY)/
