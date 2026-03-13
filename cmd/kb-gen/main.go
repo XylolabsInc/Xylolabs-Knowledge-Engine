@@ -58,8 +58,8 @@ type batch struct {
 }
 
 const (
-	defaultModel         = "gemini-3.1-pro-preview"
-	defaultThinkingLevel = "high"
+	defaultModel         = "gemini-3.1-flash-lite-preview"
+	defaultThinkingLevel = "medium"
 	defaultMaxDocs       = 50
 	fileBlockStart       = "===FILE: "
 	fileBlockEnd         = "===ENDFILE==="
@@ -103,7 +103,7 @@ func main() {
 	flag.StringVar(&source, "source", "", "Source name: slack, google, notion (required)")
 	flag.StringVar(&kbDir, "kb-dir", "", "Path to knowledge base repo directory (required)")
 	flag.StringVar(&apiKey, "api-key", "", "Gemini API key (or GEMINI_API_KEY env var)")
-	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.1-pro-preview, or KB_GEN_MODEL env)")
+	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.1-flash-lite-preview, or KB_GEN_MODEL env)")
 	flag.StringVar(&thinkingLevel, "thinking", "", "Thinking level: none, low, medium, high (default: high, or KB_GEN_THINKING env)")
 	flag.IntVar(&maxDocs, "max-docs", 0, "Max documents to process per batch (default: 50)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print what would be written without writing files")
@@ -349,6 +349,8 @@ func groupDocuments(docs []Document, source string, maxDocs int) []batch {
 	switch source {
 	case "slack":
 		return groupSlackDocuments(docs, maxDocs)
+	case "manual":
+		return groupManualDocuments(docs, maxDocs)
 	default:
 		return groupGenericDocuments(docs, maxDocs)
 	}
@@ -422,6 +424,43 @@ func groupGenericDocuments(docs []Document, maxDocs int) []batch {
 	return batches
 }
 
+// groupManualDocuments groups manual documents by category (channel field).
+func groupManualDocuments(docs []Document, maxDocs int) []batch {
+	groups := make(map[string][]Document)
+
+	for _, doc := range docs {
+		category := doc.Channel
+		if category == "" {
+			category = "uncategorized"
+		}
+		category = sanitizeSlug(category)
+		groups[category] = append(groups[category], doc)
+	}
+
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var batches []batch
+	for _, key := range keys {
+		groupDocs := groups[key]
+		for i := 0; i < len(groupDocs); i += maxDocs {
+			end := i + maxDocs
+			if end > len(groupDocs) {
+				end = len(groupDocs)
+			}
+			batches = append(batches, batch{
+				Key:       "manual/" + key,
+				Documents: groupDocs[i:end],
+			})
+		}
+	}
+
+	return batches
+}
+
 // processBatch sends a batch of documents to Gemini and parses file blocks from the response.
 func processBatch(
 	ctx context.Context,
@@ -445,11 +484,19 @@ func processBatch(
 		len(b.Documents), source, b.Key, string(docsJSON),
 	)
 
-	resp, err := client.Generate(ctx, gemini.GenerateRequest{
+	// Smart model routing: escalate to pro+high for complex batches
+	genReq := gemini.GenerateRequest{
 		SystemPrompt:  systemPrompt,
 		Messages:      []gemini.Message{{Role: "user", Content: userMessage}},
 		ThinkingLevel: thinkingLevel,
-	})
+	}
+	if isComplexBatch(b) {
+		genReq.Model = "gemini-3.1-pro-preview"
+		genReq.ThinkingLevel = "high"
+		logger.Info("escalating to pro model for complex batch", "key", b.Key, "docs", len(b.Documents))
+	}
+
+	resp, err := client.Generate(ctx, genReq)
 	if err != nil {
 		return nil, 0, fmt.Errorf("gemini generate: %w", err)
 	}
@@ -466,6 +513,28 @@ func processBatch(
 	}
 
 	return blocks, resp.TokensUsed, nil
+}
+
+// isComplexBatch returns true if a batch warrants escalation to the pro model.
+func isComplexBatch(b batch) bool {
+	// Check total content size
+	totalSize := 0
+	for _, doc := range b.Documents {
+		totalSize += len(doc.Content)
+	}
+	if totalSize > 50*1024 { // > 50KB of content
+		return true
+	}
+
+	// Google and Notion documents benefit from stronger reasoning
+	if len(b.Documents) > 0 {
+		src := b.Documents[0].Source
+		if src == "google" || src == "notion" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // buildSystemPrompt constructs the system prompt for Gemini.
@@ -509,6 +578,8 @@ You may output multiple file blocks. Each file must be complete and self-contain
 		sb.WriteString(`- Notion pages: notion/pages/{page-slug}.md
 - Page slugs should be lowercase, hyphenated versions of the page title
 `)
+	case "manual":
+		sb.WriteString("- Manual documents: manual/{category}/{doc-slug}.md\n- Categories should be lowercase, hyphenated\n")
 	default:
 		sb.WriteString(fmt.Sprintf("- %s documents: %s/{doc-slug}.md\n", source, source))
 	}

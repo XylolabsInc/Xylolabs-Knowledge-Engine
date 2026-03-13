@@ -441,9 +441,12 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 		genReq.Tools = b.toolExecutor.Declarations()
 	}
 
-	// Use pro model for complex creation tasks
+	// Smart model + thinking routing
 	if b.proModel != "" && isCreationTask(query) {
 		genReq.Model = b.proModel
+		genReq.ThinkingLevel = "high"
+	} else if isComplexQuery(query) {
+		genReq.ThinkingLevel = "high"
 	}
 
 	// Tool calling loop: call Gemini, execute any tools, re-call with results
@@ -777,6 +780,36 @@ func isCreationTask(query string) bool {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
+	}
+	return false
+}
+
+// isComplexQuery detects if a query requires deeper reasoning.
+func isComplexQuery(query string) bool {
+	complexPatterns := []string{
+		// Korean analysis/comparison requests
+		"분석해", "비교해", "정리해", "요약해", "브리핑", "현황",
+		"장단점", "평가해", "검토해", "진단해", "리뷰해",
+		// English analysis patterns
+		"analyze", "compare", "summarize", "evaluate", "review",
+		"pros and cons", "trade-off", "assessment",
+		// Reasoning indicators
+		"왜", "어떻게", "why", "how does", "how can", "how should",
+		"explain why", "what are the implications",
+	}
+	lower := strings.ToLower(query)
+	for _, pattern := range complexPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	// Long queries suggest complex intent
+	if len(query) > 200 {
+		return true
+	}
+	// Multiple questions
+	if strings.Count(query, "?") >= 2 {
+		return true
 	}
 	return false
 }
