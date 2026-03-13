@@ -38,29 +38,31 @@
 ## Architecture
 
 ```
-┌──────────┐  ┌──────────┐  ┌──────────┐
-│  Slack   │  │  Google  │  │  Notion  │  Connectors
-│Connector │  │Connector │  │Connector │
-└────┬─────┘  └────┬─────┘  └────┬─────┘
+                        ┌─────────────────┐
+        Users ◄────────►│   Bot Handler   │  User-facing
+                        │  (Slack Chat)   │  conversational AI
+                        └────────┬────────┘
+                                 │ reads
+                                 ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌ ─ ─ ─ ─ ─ ┐
+│  Slack   │  │  Google  │  │  Notion  │    Future
+│Connector │  │Connector │  │Connector │  │Connectors │  ◄── Extensible
+└────┬─────┘  └────┬─────┘  └────┬─────┘  └ ─ ─ ─ ─ ─ ┘
      │              │              │
      └──────────────┴──────────────┘
                     │
      ┌──────────────┼──────────────┐
      │              │              │
-┌────▼────┐  ┌─────▼──────┐  ┌────▼─────┐
-│   Bot   │  │ KB Engine  │  │Extractor │
-│ Handler │  │            │  │(PDF/IMG/ │
-└────┬────┘  └─────┬──────┘  │Office/Web│
-     │              │         └────┬─────┘
-     │    ┌─────────┼──────────┐   │
-┌────▼──┐ │  ┌─────▼──┐  ┌───▼───▼────┐
-│Gemini │ │  │Storage │  │    API     │
-│  AI   │ │  │(SQLite)│  │  (HTTP)    │
-└───────┘ │  └────────┘  └────────────┘
-┌─────────▼──────┐
-│  KB Repo       │
-│ (Markdown/Git) │
-└────────────────┘
+┌────▼──────┐ ┌────▼──────┐ ┌─────▼─────┐
+│ KB Engine │ │ Extractor │ │  Storage  │
+│           │ │(PDF/IMG/  │ │ (SQLite)  │
+└─────┬─────┘ │Office/Web)│ └─────┬─────┘
+      │       └───────────┘       │
+      │                           │
+┌─────▼────────┐          ┌───────▼─────┐
+│  KB Repo     │          │    API      │
+│(Markdown/Git)│          │   (HTTP)    │
+└──────────────┘          └─────────────┘
 ```
 
 **Data flow:**
