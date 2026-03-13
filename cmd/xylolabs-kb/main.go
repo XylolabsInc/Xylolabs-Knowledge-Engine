@@ -29,6 +29,13 @@ import (
 func main() {
 	cfg := config.Load()
 
+	// Validate configuration
+	if errs := cfg.Validate(); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintf(os.Stderr, "config warning: %s\n", e)
+		}
+	}
+
 	// Set up structured logging
 	var logLevel slog.Level
 	switch cfg.LogLevel {
