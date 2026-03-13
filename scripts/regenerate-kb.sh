@@ -8,6 +8,13 @@ set -euo pipefail
 # Intended for weekly scheduled runs (e.g., Sunday 3 AM).
 # =============================================================================
 
+# Guard: refuse to run as root to prevent file ownership issues
+if [ "$(id -u)" = "0" ]; then
+    echo "ERROR: regenerate-kb.sh must NOT run as root (creates root-owned files in the KB repo)." >&2
+    echo "Run as: sudo -u ubuntu $0 $*" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KB_REPO_DIR="${KB_REPO_DIR:-/opt/knowledge}"
 LOG_PREFIX="[regenerate-kb]"

@@ -8,6 +8,13 @@ set -euo pipefail
 # transform them into structured markdown, and commits to the knowledge repo.
 # =============================================================================
 
+# Guard: refuse to run as root to prevent file ownership issues
+if [ "$(id -u)" = "0" ]; then
+    echo "ERROR: generate-kb.sh must NOT run as root (creates root-owned files in the KB repo)." >&2
+    echo "Run as: sudo -u ubuntu $0 $*" >&2
+    exit 1
+fi
+
 # Configuration (override via environment)
 API_BASE="${API_BASE:-http://localhost:8080}"
 KB_REPO_DIR="${KB_REPO_DIR:-/opt/knowledge}"

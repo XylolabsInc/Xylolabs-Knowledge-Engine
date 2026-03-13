@@ -322,11 +322,11 @@ TRANSLATEEOF
 install_cron() {
     log "Installing crontab..."
     ssh_cmd "cat <<'CRON' | sudo tee /etc/cron.d/xylolabs-kb > /dev/null
-# Incremental KB generation — every 6 hours
-7 */6 * * *  root  cd $REMOTE_KB_DIR && $REMOTE_DIR/scripts/generate-kb.sh >> /var/log/generate-kb.log 2>&1
+# Incremental KB generation — every 6 hours (run as ubuntu to avoid permission issues)
+7 */6 * * *  ubuntu  cd $REMOTE_KB_DIR && $REMOTE_DIR/scripts/generate-kb.sh >> /var/log/generate-kb.log 2>&1
 
 # Weekly full rebuild — Sunday 3 AM
-17 3 * * 0   root  $REMOTE_DIR/scripts/regenerate-kb.sh >> /var/log/generate-kb.log 2>&1
+17 3 * * 0   ubuntu  $REMOTE_DIR/scripts/regenerate-kb.sh >> /var/log/generate-kb.log 2>&1
 CRON"
     log "Crontab installed"
 }

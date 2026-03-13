@@ -258,10 +258,12 @@ func main() {
 			}
 		}
 
-		// Track latest timestamp
-		for _, doc := range b.Documents {
-			if doc.Timestamp > latestTimestamp {
-				latestTimestamp = doc.Timestamp
+		// Track latest timestamp only when files were actually written
+		if len(blocks) > 0 {
+			for _, doc := range b.Documents {
+				if doc.Timestamp > latestTimestamp {
+					latestTimestamp = doc.Timestamp
+				}
 			}
 		}
 	}

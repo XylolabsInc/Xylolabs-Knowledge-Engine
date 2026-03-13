@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=ubuntu
+Group=ubuntu
 WorkingDirectory=/opt/xylolabs-kb
 ExecStart=/opt/xylolabs-kb/bin/xylolabs-kb
 EnvironmentFile=/opt/xylolabs-kb/.env
@@ -12,6 +13,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 
 [Install]

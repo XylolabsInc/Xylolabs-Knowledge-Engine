@@ -248,7 +248,7 @@ func (s *SQLiteStore) ListDocuments(query kb.ListDocumentsQuery) (*kb.ListDocume
 		args = append(args, string(query.Source))
 	}
 	if !query.Since.IsZero() {
-		conditions = append(conditions, "indexed_at > ?")
+		conditions = append(conditions, "timestamp > ?")
 		args = append(args, query.Since.UTC())
 	}
 
