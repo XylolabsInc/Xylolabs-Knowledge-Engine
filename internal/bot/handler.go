@@ -825,12 +825,39 @@ func convertToSlackMrkdwn(text string) string {
 	// ~~strike~~ → ~strike~
 	text = reMarkdownStrike.ReplaceAllString(text, "~$1~")
 	// Fix word boundaries: *bold*이에요 → *bold*​이에요 (insert zero-width space)
-	text = reMrkdwnBoundary.ReplaceAllString(text, "$1$2\u200B$3")
+	// Skip inside <...> (Slack links) to avoid corrupting URLs.
+	text = fixBoundariesPreserveLinks(text)
 	// Strip internal file path links: <../indexes/people.md|인물 인덱스> → 인물 인덱스
 	text = reInternalLink.ReplaceAllString(text, "$1")
 	// Strip bare internal file paths
 	text = reInternalPath.ReplaceAllString(text, "")
 	return text
+}
+
+// fixBoundariesPreserveLinks applies the word-boundary zero-width space fix
+// only to text outside of Slack link constructs (<...>), so URLs aren't corrupted.
+func fixBoundariesPreserveLinks(text string) string {
+	var result strings.Builder
+	for len(text) > 0 {
+		openIdx := strings.Index(text, "<")
+		if openIdx < 0 {
+			result.WriteString(reMrkdwnBoundary.ReplaceAllString(text, "$1$2\u200B$3"))
+			break
+		}
+		// Process text before the link
+		result.WriteString(reMrkdwnBoundary.ReplaceAllString(text[:openIdx], "$1$2\u200B$3"))
+		text = text[openIdx:]
+		// Find closing >
+		closeIdx := strings.Index(text, ">")
+		if closeIdx < 0 {
+			result.WriteString(reMrkdwnBoundary.ReplaceAllString(text, "$1$2\u200B$3"))
+			break
+		}
+		// Keep the link intact (no boundary fixing inside)
+		result.WriteString(text[:closeIdx+1])
+		text = text[closeIdx+1:]
+	}
+	return result.String()
 }
 
 // fetchThreadFiles downloads file attachments from recent messages in the thread
