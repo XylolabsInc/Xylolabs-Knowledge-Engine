@@ -58,9 +58,10 @@ type batch struct {
 }
 
 const (
-	defaultModel         = "gemini-3.1-flash-lite-preview"
-	defaultThinkingLevel = "medium"
+	defaultModel         = "gemini-3.1-pro-preview"
+	defaultThinkingLevel = "high"
 	defaultMaxDocs       = 50
+	maxDocContentChars   = 20000 // ~6.7k tokens; cap per document to limit batch payload
 	fileBlockStart       = "===FILE: "
 	fileBlockEnd         = "===ENDFILE==="
 )
@@ -93,6 +94,7 @@ func main() {
 		thinkingLevel    string
 		maxDocs          int
 		dryRun           bool
+		force            bool
 		fetchPeople      bool
 		googleCredsFile  string
 		impersonateEmail string
@@ -103,10 +105,11 @@ func main() {
 	flag.StringVar(&source, "source", "", "Source name: slack, google, notion (required)")
 	flag.StringVar(&kbDir, "kb-dir", "", "Path to knowledge base repo directory (required)")
 	flag.StringVar(&apiKey, "api-key", "", "Gemini API key (or GEMINI_API_KEY env var)")
-	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.1-flash-lite-preview, or KB_GEN_MODEL env)")
+	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.1-pro-preview, or KB_GEN_MODEL env)")
 	flag.StringVar(&thinkingLevel, "thinking", "", "Thinking level: none, low, medium, high (default: high, or KB_GEN_THINKING env)")
 	flag.IntVar(&maxDocs, "max-docs", 0, "Max documents to process per batch (default: 50)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print what would be written without writing files")
+	flag.BoolVar(&force, "force", false, "Force reprocessing of all documents, ignoring document map")
 	flag.BoolVar(&fetchPeople, "fetch-people", false, "Fetch Google Workspace directory and generate person knowledge files")
 	flag.StringVar(&googleCredsFile, "google-creds", "", "Path to Google service account credentials JSON (or GOOGLE_CREDS_FILE env)")
 	flag.StringVar(&impersonateEmail, "impersonate", "", "Email to impersonate for Admin SDK (or GOOGLE_IMPERSONATE_EMAIL env)")
@@ -196,6 +199,29 @@ func main() {
 	}
 
 	logger.Info("loaded documents", "count", len(apiResp.Documents), "total", apiResp.Total)
+
+	// Filter out already-processed documents (skip if --force)
+	if !force {
+		existingMap := loadDocumentMap(kbDir)
+		var newDocs []Document
+		for _, doc := range apiResp.Documents {
+			if doc.SourceID != "" {
+				if _, exists := existingMap[doc.SourceID]; exists {
+					continue
+				}
+			}
+			newDocs = append(newDocs, doc)
+		}
+		skipped := len(apiResp.Documents) - len(newDocs)
+		if skipped > 0 {
+			logger.Info("skipped already-processed documents", "skipped", skipped, "remaining", len(newDocs))
+		}
+		apiResp.Documents = newDocs
+		if len(apiResp.Documents) == 0 {
+			logger.Info("all documents already processed, nothing to do")
+			return
+		}
+	}
 
 	// Read CLAUDE.md for curation instructions
 	curatorInstructions := readCuratorInstructions(kbDir, logger)
@@ -473,7 +499,17 @@ func processBatch(
 ) ([]fileBlock, int, error) {
 	systemPrompt := buildSystemPrompt(source, curatorInstructions)
 
-	docsJSON, err := json.MarshalIndent(b.Documents, "", "  ")
+	// Truncate large document contents to limit token usage
+	docs := make([]Document, len(b.Documents))
+	copy(docs, b.Documents)
+	for i := range docs {
+		if len(docs[i].Content) > maxDocContentChars {
+			logger.Debug("truncated large document", "source_id", docs[i].SourceID, "original_len", len(b.Documents[i].Content))
+			docs[i].Content = docs[i].Content[:maxDocContentChars] + "\n\n[... content truncated ...]"
+		}
+	}
+
+	docsJSON, err := json.MarshalIndent(docs, "", "  ")
 	if err != nil {
 		return nil, 0, fmt.Errorf("marshal documents: %w", err)
 	}
@@ -484,16 +520,10 @@ func processBatch(
 		len(b.Documents), source, b.Key, string(docsJSON),
 	)
 
-	// Smart model routing: escalate to pro+high for complex batches
 	genReq := gemini.GenerateRequest{
 		SystemPrompt:  systemPrompt,
 		Messages:      []gemini.Message{{Role: "user", Content: userMessage}},
 		ThinkingLevel: thinkingLevel,
-	}
-	if isComplexBatch(b) {
-		genReq.Model = "gemini-3.1-pro-preview"
-		genReq.ThinkingLevel = "high"
-		logger.Info("escalating to pro model for complex batch", "key", b.Key, "docs", len(b.Documents))
 	}
 
 	resp, err := client.Generate(ctx, genReq)
@@ -515,26 +545,18 @@ func processBatch(
 	return blocks, resp.TokensUsed, nil
 }
 
-// isComplexBatch returns true if a batch warrants escalation to the pro model.
-func isComplexBatch(b batch) bool {
-	// Check total content size
-	totalSize := 0
-	for _, doc := range b.Documents {
-		totalSize += len(doc.Content)
+// loadDocumentMap reads the existing document map from _meta/document-map.json.
+func loadDocumentMap(kbDir string) DocumentMap {
+	mapFile := filepath.Join(kbDir, "_meta", "document-map.json")
+	data, err := os.ReadFile(mapFile)
+	if err != nil {
+		return make(DocumentMap)
 	}
-	if totalSize > 50*1024 { // > 50KB of content
-		return true
+	var m DocumentMap
+	if err := json.Unmarshal(data, &m); err != nil {
+		return make(DocumentMap)
 	}
-
-	// Google and Notion documents benefit from stronger reasoning
-	if len(b.Documents) > 0 {
-		src := b.Documents[0].Source
-		if src == "google" || src == "notion" {
-			return true
-		}
-	}
-
-	return false
+	return m
 }
 
 // buildSystemPrompt constructs the system prompt for Gemini.
