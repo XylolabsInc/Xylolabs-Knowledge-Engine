@@ -38,7 +38,7 @@ const (
 	maxContextChars      = 300000 // ~100k tokens for total context
 	maxKBContextChars    = 200000 // ~67k tokens for KB context
 	maxFileChars         = 24000  // ~8k tokens per attached file
-	maxSystemPromptChars = 50000
+	maxSystemPromptChars = 250000
 )
 
 //go:embed system_prompt.txt
