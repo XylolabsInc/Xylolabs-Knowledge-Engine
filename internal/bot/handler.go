@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	maxReplyLength    = 3000
+	maxReplyLength    = 10000
 	maxFileDownload   = 10 * 1024 * 1024 // 10 MB
 	maxThreadHistory  = 20               // max prior messages to include as context
 	maxToolIterations = 5                // max function calling round-trips
@@ -599,16 +599,45 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 
 // postReply posts a message to the given channel and thread, and tracks the thread.
 // Uses Block Kit with explicit mrkdwn type for reliable formatting.
+// Splits long messages into multiple section blocks (Slack limits each to 3000 chars).
 func (b *Bot) postReply(ctx context.Context, channel, threadTS, text string) {
+	const maxBlockTextLen = 3000
+
+	// Build section blocks, splitting long text at paragraph boundaries.
+	var blocks []slack.Block
+	for len(text) > 0 {
+		chunk := text
+		if len(chunk) > maxBlockTextLen {
+			// Try to break at a paragraph boundary.
+			cut := strings.LastIndex(chunk[:maxBlockTextLen], "\n\n")
+			if cut < maxBlockTextLen/2 {
+				// Fall back to a single newline.
+				cut = strings.LastIndex(chunk[:maxBlockTextLen], "\n")
+			}
+			if cut < maxBlockTextLen/2 {
+				cut = maxBlockTextLen
+			}
+			chunk = text[:cut]
+			text = strings.TrimLeft(text[cut:], "\n")
+		} else {
+			text = ""
+		}
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", chunk, false, false),
+			nil, nil,
+		))
+	}
+
+	// Fallback text for notifications (truncated).
+	fallback := blocks[0].(*slack.SectionBlock).Text.Text
+	if len(fallback) > 300 {
+		fallback = fallback[:297] + "..."
+	}
+
 	opts := []slack.MsgOption{
-		slack.MsgOptionText(text, false), // fallback for notifications
+		slack.MsgOptionText(fallback, false),
 		slack.MsgOptionTS(threadTS),
-		slack.MsgOptionBlocks(
-			slack.NewSectionBlock(
-				slack.NewTextBlockObject("mrkdwn", text, false, false),
-				nil, nil,
-			),
-		),
+		slack.MsgOptionBlocks(blocks...),
 	}
 	_, _, err := b.slackClient.PostMessageContext(ctx, channel, opts...)
 	if err != nil {
