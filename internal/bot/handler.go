@@ -576,6 +576,13 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 	responseText = reReactBlock.ReplaceAllString(responseText, "")
 	responseText = strings.TrimSpace(responseText)
 
+	// Log raw response length for debugging empty/stripped responses.
+	b.logger.Info("response post-processing",
+		"raw_length", len(genResp.Text),
+		"after_strip_length", len(responseText),
+		"query", query,
+	)
+
 	// 8. Convert Markdown → Slack mrkdwn, then post.
 	replyText := convertToSlackMrkdwn(responseText)
 	if len(replyText) > maxReplyLength {
