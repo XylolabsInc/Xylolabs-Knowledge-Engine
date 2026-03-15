@@ -240,6 +240,20 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		syncTimes[string(k)] = v.Format(time.RFC3339)
 	}
 
+	// Count KB repo markdown files
+	var kbFileCount int
+	if s.kbRepoDir != "" {
+		filepath.WalkDir(s.kbRepoDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(d.Name(), ".md") && !strings.HasPrefix(path, filepath.Join(s.kbRepoDir, ".git")) {
+				kbFileCount++
+			}
+			return nil
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total_documents":     stats.TotalDocuments,
 		"documents_by_source": bySource,
@@ -247,6 +261,7 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		"total_attachments":   stats.TotalAttachments,
 		"attachment_size":     stats.AttachmentSize,
 		"last_sync_times":     syncTimes,
+		"kb_file_count":       kbFileCount,
 	})
 }
 

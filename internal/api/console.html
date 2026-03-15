@@ -379,6 +379,10 @@ tr.clickable { cursor: pointer; }
           <div class="card-value" id="statDocs">-</div>
         </div>
         <div class="card">
+          <div class="card-title" data-i18n="kbFiles">KB Documents</div>
+          <div class="card-value" id="statKB">-</div>
+        </div>
+        <div class="card">
           <div class="card-title" data-i18n="totalAttachments">Total Attachments</div>
           <div class="card-value" id="statAttach">-</div>
         </div>
@@ -547,6 +551,7 @@ const translations = {
     username: 'Username',
     password: 'Password',
     totalDocs: 'Total Documents',
+    kbFiles: 'KB Documents',
     totalAttachments: 'Total Attachments',
     attachmentSize: 'Attachment Size',
     docsBySource: 'Documents by Source',
@@ -934,6 +939,7 @@ async function loadDashboard() {
   try {
     const data = await api('GET', '/api/v1/stats');
     document.getElementById('statDocs').textContent = (data.total_documents || 0).toLocaleString();
+    document.getElementById('statKB').textContent = (data.kb_file_count || 0).toLocaleString();
     document.getElementById('statAttach').textContent = (data.total_attachments || 0).toLocaleString();
     document.getElementById('statSize').textContent = formatBytes(data.attachment_size || 0);
 
