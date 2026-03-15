@@ -590,7 +590,7 @@ func (r *Reader) updateUserProvidedReadme(readmePath, topic, relPath, content st
 
 	// Extract first meaningful line as excerpt (up to 100 chars).
 	excerpt := extractExcerpt(content, 100)
-	entry := fmt.Sprintf("- [%s](%s)", topic, filepath.Base(relPath))
+	entry := fmt.Sprintf("- [%s](%s)", sanitizeMarkdownLinkText(topic), filepath.Base(relPath))
 	if excerpt != "" {
 		entry += fmt.Sprintf(" — %s", excerpt)
 	}
@@ -648,10 +648,16 @@ func (r *Reader) updateUserProvidedIndex(topic, relPath, content, author string)
 	// Write a section with topic, keywords from content, and file reference.
 	excerpt := extractExcerpt(content, 200)
 	date := time.Now().Format("2006-01-02")
-	entry := fmt.Sprintf("## %s\n- Date: %s | By: %s\n- %s\n- Source: [%s](../%s)\n\n", topic, date, author, excerpt, topic, relPath)
+	entry := fmt.Sprintf("## %s\n- Date: %s | By: %s\n- %s\n- Source: [%s](../%s)\n\n", sanitizeMarkdownLinkText(topic), date, author, excerpt, sanitizeMarkdownLinkText(topic), relPath)
 	if _, err := f.WriteString(entry); err != nil {
 		r.logger.Warn("failed to append to user-provided index", "error", err)
 	}
+}
+
+// sanitizeMarkdownLinkText strips characters that break markdown link syntax: [ ] < >
+func sanitizeMarkdownLinkText(s string) string {
+	r := strings.NewReplacer("[", "", "]", "", "<", "", ">", "")
+	return r.Replace(s)
 }
 
 // slugify converts a string to a URL/filesystem-safe slug.
