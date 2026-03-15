@@ -290,6 +290,13 @@ func main() {
 
 		batchWritesBefore := totalFilesWritten
 		for _, block := range blocks {
+			// Skip index/README files — these must be built separately to avoid
+			// overwriting aggregated data with single-batch output.
+			if isIndexFile(block.Path) {
+				logger.Debug("skipping index file from batch output", "path", block.Path)
+				continue
+			}
+
 			if dryRun {
 				fmt.Printf("[dry-run] Would write: %s (%d bytes)\n", block.Path, len(block.Content))
 				continue
@@ -545,6 +552,19 @@ func processBatch(
 	return blocks, resp.TokensUsed, nil
 }
 
+// isIndexFile returns true if the path is an index or README file that should not
+// be overwritten by per-batch output (these must be rebuilt from all data).
+func isIndexFile(path string) bool {
+	base := filepath.Base(path)
+	if strings.EqualFold(base, "README.md") {
+		return true
+	}
+	if strings.HasPrefix(path, "indexes/") || strings.HasPrefix(path, "indexes\\") {
+		return true
+	}
+	return false
+}
+
 // loadDocumentMap reads the existing document map from _meta/document-map.json.
 func loadDocumentMap(kbDir string) DocumentMap {
 	mapFile := filepath.Join(kbDir, "_meta", "document-map.json")
@@ -573,7 +593,16 @@ func buildSystemPrompt(source, curatorInstructions string) string {
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(`## Output Format
+	sb.WriteString(`## IMPORTANT: Do NOT generate index or README files
+
+Do NOT output any of the following files — they are maintained separately and will be overwritten:
+- README.md (any directory)
+- indexes/*.md (people.md, topics.md, keywords.md, cross-references.md, taxonomy.md, etc.)
+- slack/README.md, google/README.md, notion/README.md
+
+Only output the actual content files (daily digests, document summaries, etc.).
+
+## Output Format
 
 For each file you want to create or update, output it in this exact format:
 
