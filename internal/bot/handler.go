@@ -561,6 +561,12 @@ func (b *Bot) respond(ctx context.Context, ev *slackevents.MessageEvent, query s
 		responseText = strings.TrimSpace(responseText)
 	}
 
+	// Strip any remaining malformed LEARN blocks (e.g. single-line) that the parser missed.
+	if strings.Contains(responseText, "===LEARN") {
+		responseText = reLearnBlockCleanup.ReplaceAllString(responseText, "")
+		responseText = strings.TrimSpace(responseText)
+	}
+
 	// 7.5. Extract emoji reaction name, then strip REACT blocks from the reply.
 	var reactEmoji string
 	if m := reReactBlock.FindStringSubmatch(responseText); len(m) > 1 {
@@ -763,7 +769,8 @@ var (
 	// Matches bare internal paths like ../indexes/people.md or notion/pages/foo.md
 	reInternalPath = regexp.MustCompile(`(?:\.\.?/)?(?:indexes|slack|google|notion|user-provided|_meta)/[^\s,)>]+\.md`)
 
-	reLearnBlock     = regexp.MustCompile(`(?s)===LEARN:\s*(.+?)\s*===[ \t]*\r?\n(.*?)===ENDLEARN===[ \t]*\r?\n?`)
+	reLearnBlock        = regexp.MustCompile(`(?s)===LEARN:\s*(.+?)\s*===[ \t]*\r?\n(.*?)===ENDLEARN===[ \t]*\r?\n?`)
+	reLearnBlockCleanup = regexp.MustCompile(`(?s)===LEARN:.*?===ENDLEARN===[ \t]*\r?\n?`)
 	reReactBlock     = regexp.MustCompile(`===REACT:\s*(\S+?)===`)
 )
 
