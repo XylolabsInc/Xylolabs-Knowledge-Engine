@@ -4,7 +4,7 @@
 
 - **Language:** Go 1.26+
 - **Module:** `github.com/xylolabsinc/xylolabs-kb`
-- **Purpose:** Always-running knowledge base service with Slack, Google Workspace, and Notion connectors
+- **Purpose:** Always-running knowledge base service with Slack, Discord, Google Workspace, and Notion connectors
 - **Storage:** SQLite + FTS5 (pure Go via `modernc.org/sqlite`) — no CGO
 - **API:** HTTP REST API served by the `internal/api` package
 - **Entry point:** `cmd/xylolabs-kb/main.go`
@@ -26,7 +26,10 @@ All core types live in `internal/kb/types.go`. This is the single source of trut
 | Interface | Defined in | Implemented in |
 |-----------|-----------|----------------|
 | `kb.Storage` | `internal/kb/types.go` | `internal/storage/` |
-| `kb.Connector` | `internal/kb/types.go` | `internal/slack/`, `internal/google/`, `internal/notion/` |
+| `kb.Connector` | `internal/kb/types.go` | `internal/slack/`, `internal/google/`, `internal/notion/`, `internal/discord/` |
+| `tools.MessagePoster` | `internal/tools/messenger.go` | `internal/bot/slack_platform.go`, `internal/bot/discord_messenger.go` |
+| `tools.ChannelResolver` | `internal/tools/messenger.go` | `internal/bot/slack_platform.go`, `internal/bot/discord_messenger.go` |
+| `bot.Platform` | `internal/bot/platform.go` | `internal/bot/slack_platform.go`, `internal/bot/discord_platform.go` |
 
 Every connector must implement all four methods: `Name() Source`, `Start(done <-chan struct{}) error`, `Sync() error`, `Stop() error`.
 
@@ -37,17 +40,36 @@ Every connector must implement all four methods: `Name() Source`, `Start(done <-
 | `internal/kb/` | Domain types and interfaces only | Business logic, SQL, HTTP |
 | `internal/storage/` | SQLite + FTS5 persistence | HTTP, connector logic |
 | `internal/slack/` | Slack Socket Mode + sync | Storage calls outside kb.Storage |
+| `internal/discord/` | Discord gateway connector + message sync | Storage calls outside kb.Storage |
 | `internal/google/` | Google Workspace API sync | Slack or Notion logic |
 | `internal/notion/` | Notion API sync | Storage schema |
 | `internal/attachment/` | File download and local storage | API routing |
 | `internal/worker/` | Background sync scheduling | Direct API calls |
 | `internal/api/` | HTTP handlers and routing | Sync orchestration |
-| `internal/bot/` | Slack bot response handling (Gemini-powered Q&A) | Storage calls, connector logic |
+| `internal/bot/` | Platform-agnostic bot (Gemini-powered Q&A, Slack + Discord) | Storage calls, connector logic |
+| `internal/tools/` | MessagePoster/ChannelResolver interfaces for bot tools | Platform-specific logic |
 | `internal/kbrepo/` | Markdown KB repo reader for bot context | HTTP, SQL, connector logic |
 | `internal/gemini/` | Gemini API client (text + vision) | Storage, bot logic |
 | `internal/extractor/` | Content extraction (PDF, images, Office, web) | HTTP routing, sync logic |
 | `cmd/xylolabs-kb/` | Wiring, startup, shutdown | Business logic |
 | `cmd/kb-gen/` | Gemini-powered KB generation tool | Runtime wiring |
+
+### Discord platform abstraction
+
+The bot layer is platform-agnostic. Adding Discord required a thin abstraction so `internal/bot/` can serve both Slack and Discord without duplicating Q&A logic.
+
+| File | Role |
+|------|------|
+| `internal/bot/platform.go` | `Platform` interface + `IncomingMessage` type (source of truth for bot input) |
+| `internal/bot/slack_platform.go` | `Platform` implementation for Slack (wraps `*slack.Client`) |
+| `internal/bot/discord_platform.go` | `Platform` implementation for Discord (wraps `*discordgo.Session`) |
+| `internal/bot/discord_messenger.go` | `MessagePoster` + `ChannelResolver` implementation for Discord |
+| `internal/bot/formatting.go` | Platform-agnostic text formatting utilities shared by both platforms |
+| `internal/discord/connector.go` | Discord gateway connector — implements `kb.Connector`, indexes messages |
+| `internal/discord/converter.go` | Converts Discord messages to `kb.Document` |
+| `internal/tools/messenger.go` | `MessagePoster` and `ChannelResolver` interfaces consumed by bot tools |
+
+**Rule:** All Q&A and tool-dispatch logic lives in `internal/bot/` against the `Platform` interface. Never add Slack-specific or Discord-specific API calls there. Platform-specific code belongs in the corresponding `*_platform.go` or `discord_messenger.go` files.
 
 ### No exported types from `internal/`
 

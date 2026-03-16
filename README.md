@@ -2,13 +2,13 @@
 
 # 🧠 Xylolabs Knowledge Engine
 
-**Unified Knowledge Base Engine for Slack, Google Workspace & Notion**
+**Unified Knowledge Base Engine for Slack, Discord, Google Workspace & Notion**
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge)](LICENSE)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)](.)
 
-*An always-on service that continuously ingests, indexes, and unifies organizational knowledge from Slack messages, Google Workspace documents, and Notion pages into a single searchable knowledge base — with an AI-powered Slack bot that answers questions grounded in your organization's data.*
+*An always-on service that continuously ingests, indexes, and unifies organizational knowledge from Slack messages, Discord messages, Google Workspace documents, and Notion pages into a single searchable knowledge base — with AI-powered chat bots for Slack and Discord that answer questions grounded in your organization's data.*
 
 ---
 
@@ -16,14 +16,15 @@
 
 ## Features
 
-- **Slack bot as primary interface** — @mention or DM the bot in Slack to ask questions, create documents, manage spreadsheets, build presentations, and organize files — all through natural conversation. The Slack bot is the main way users interact with the knowledge engine
+- **Multi-platform bot interface** — @mention or DM the bot in Slack or Discord to ask questions, create documents, manage spreadsheets, build presentations, and organize files — all through natural conversation
 - **Unified ingestion** — pulls content from Slack (messages, threads, files), Google Workspace (Docs, Sheets, Slides, Calendar, Drive files), and Notion (pages, databases) into one store
 - **Full-text search** — SQLite FTS5 index with relevance scoring and snippet extraction across all sources
 - **Markdown knowledge repo** — curated knowledge stored as structured markdown in a Git repository; the bot reads indexes hierarchically and fetches only relevant detail files
 - **Incremental sync** — cursor-based sync state tracking per source; only fetches new or updated content on each pass
 - **Real-time Slack events** — Socket Mode listener for immediate ingestion of new messages without polling
+- **Real-time Discord events** — Discord gateway listener for immediate ingestion of new messages
 - **Auto-join channels** — bot automatically joins all public channels and newly created channels
-- **AI-powered Slack bot** — @mention or DM the bot to ask questions; answers are grounded in the markdown knowledge repo via Gemini AI with function calling support for Google Drive and Notion write operations. Responds in the user's language (English by default)
+- **AI-powered bot** — @mention or DM the bot in Slack or Discord; answers are grounded in the markdown knowledge repo via Gemini AI with function calling support for Google Drive and Notion write operations. Responds in the user's language (English by default)
 - **Google Calendar sync** — indexes calendar events (past 90 days to next 90 days) with attendees, location, and description
 - **File content extraction** — automatically extracts text from PDFs, images (via Gemini vision), Office documents (DOCX/XLSX/PPTX), and web links during ingestion
 - **Multi-modal understanding** — images and PDFs attached to Slack messages or Google Drive are processed with AI for text extraction and description
@@ -40,16 +41,16 @@
 ```
                         ┌─────────────────┐
         Users ◄────────►│   Bot Handler   │  User-facing
-                        │  (Slack Chat)   │  conversational AI
+                        │(Slack / Discord)│  conversational AI
                         └────────┬────────┘
                                  │ reads
                                  ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐  ┌ ─ ─ ─ ─ ─ ┐
-│  Slack   │  │  Google  │  │  Notion  │    Future
-│Connector │  │Connector │  │Connector │  │Connectors │  ◄── Extensible
-└────┬─────┘  └────┬─────┘  └────┬─────┘  └ ─ ─ ─ ─ ─ ┘
-     │              │              │
-     └──────────────┴──────────────┘
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│  Slack   │  │ Discord  │  │  Google  │  │  Notion  │
+│Connector │  │Connector │  │Connector │  │Connector │  ◄── Extensible
+└────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘
+     │              │              │              │
+     └──────────────┴──────────────┴──────────────┘
                     │
      ┌──────────────┼──────────────┐
      │              │              │
@@ -89,6 +90,8 @@ Set up Xylolabs Knowledge Engine from https://github.com/xylolabsinc/Xylolabs-Kn
    - SLACK_SIGNING_SECRET
    - GOOGLE_CREDENTIALS_FILE path (OAuth2 or service account JSON)
    - NOTION_API_KEY (ntn_...)
+   - DISCORD_BOT_TOKEN (bot token from Discord Developer Portal)
+   - DISCORD_GUILD_ID (server ID)
    - GEMINI_API_KEY
 4. Fill in .env with the values I provide. Leave unconfigured connectors empty — they auto-disable.
 5. Run `make build` to compile (requires Go 1.26+, no CGO needed)
@@ -127,6 +130,7 @@ Open `.env` and fill in the credentials for the connectors you want to enable. C
 | Connector | Required Credentials | Setup Guide |
 |-----------|---------------------|-------------|
 | **Slack** | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` | [Slack setup](docs/datasource-setup-guide.md) |
+| **Discord** | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | [Discord setup](#discord) |
 | **Google Workspace** | `GOOGLE_CREDENTIALS_FILE` (OAuth2 JSON on disk) | [Google setup](docs/datasource-setup-guide.md) |
 | **Notion** | `NOTION_API_KEY` | [Notion setup](docs/datasource-setup-guide.md) |
 | **Gemini AI** (for bot) | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) |
@@ -189,6 +193,18 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 Slack is auto-enabled when both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are set.
 
 > **Note:** `.env.example` may set `SLACK_SYNC_INTERVAL=60s` for faster iteration during development; the code default is `5m`.
+
+### Discord
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DISCORD_BOT_TOKEN` | Discord Bot Token from Developer Portal | — |
+| `DISCORD_GUILD_ID` | Discord Server (Guild) ID | — |
+| `DISCORD_SYNC_INTERVAL` | How often to run a full sync pass | `5m` |
+
+Discord is auto-enabled when both `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` are set.
+
+> **Note:** The **MESSAGE_CONTENT** privileged gateway intent must be enabled in the [Discord Developer Portal](https://discord.com/developers/applications) for the bot to read message text.
 
 ### Google Workspace
 
@@ -269,7 +285,7 @@ GET /api/v1/search?q={query}&source={source}&channel={channel}&author={author}&f
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `q` | string | Full-text search query (required) |
-| `source` | string | Filter by source: `slack`, `google`, `notion` |
+| `source` | string | Filter by source: `slack`, `discord`, `google`, `notion` |
 | `channel` | string | Filter by channel or workspace |
 | `author` | string | Filter by author name or email |
 | `from` | RFC3339 | Filter documents after this timestamp |
@@ -312,7 +328,7 @@ GET /api/v1/documents?source={source}&since={RFC3339}&limit={n}&offset={n}
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `source` | string | Filter by source: `slack`, `google`, `notion` |
+| `source` | string | Filter by source: `slack`, `discord`, `google`, `notion` |
 | `since` | RFC3339 | Only documents indexed after this timestamp |
 | `limit` | int | Max results (default 500, max 1000) |
 | `offset` | int | Pagination offset |
@@ -474,12 +490,24 @@ This will:
 4. Enable the site and reload nginx
 5. Verify the service is healthy
 
-## Slack Bot
+## Chat Bot
 
-When `GEMINI_API_KEY` is set and Slack is enabled, the bot responds to:
+The Knowledge Engine provides AI-powered chat bots for **Slack** and **Discord**. When `GEMINI_API_KEY` is set and the respective platform is enabled, the bot responds to:
 
 - **@mentions** — mention the bot in any channel and ask a question
 - **Direct messages** — send the bot a DM
+- **Thread replies** — once the bot responds in a thread, subsequent messages are handled automatically
+
+### Platform-Specific Formatting
+
+| Feature | Slack | Discord |
+|---------|-------|---------|
+| Bold | `*bold*` (mrkdwn) | `**bold**` (Markdown) |
+| Links | `<url\|text>` (mrkdwn) | `[text](url)` (Markdown) |
+| Headers | `*Header*` (bold) | `## Header` (native) |
+| Message limit | 3,000 chars/block | 2,000 chars/message |
+| Reactions | Native Slack emoji | Unicode emoji mapping |
+| File upload | `files:write` scope | Direct CDN upload |
 
 The bot:
 1. Extracts the question from the message
@@ -569,6 +597,37 @@ When files are shared in Slack channels or uploaded to Google Drive, the system 
 
 The bot automatically joins all public channels during each sync cycle and new channels in real-time via the `channel_created` event.
 
+### Discord
+
+**Required Bot Permissions:**
+
+| Permission | Purpose |
+|-----------|---------|
+| Send Messages | Post bot replies |
+| Read Message History | Historical message sync |
+| Add Reactions | Emoji reactions on messages |
+| Attach Files | Upload screenshots and files |
+
+**Required Privileged Gateway Intents:**
+
+| Intent | Purpose |
+|--------|---------|
+| MESSAGE_CONTENT | Read message text content |
+| GUILD_MESSAGES | Receive message events in servers |
+| DIRECT_MESSAGES | Receive DM events |
+
+**Setup steps:**
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications) and create a new application
+2. Under **Bot**, create a bot user and copy the **Token** — set as `DISCORD_BOT_TOKEN`
+3. Under **Bot > Privileged Gateway Intents**, enable **MESSAGE CONTENT INTENT**
+4. Under **OAuth2 > URL Generator**, select scopes: `bot`, `applications.commands`
+5. Select bot permissions: Send Messages, Read Message History, Add Reactions, Attach Files
+6. Copy the generated invite URL and open it to add the bot to your server
+7. Right-click your server name → Copy Server ID — set as `DISCORD_GUILD_ID`
+
+> **Tip:** To copy the Server ID, enable Developer Mode in Discord settings (User Settings → App Settings → Advanced → Developer Mode).
+
 ### Google Workspace
 
 The connector supports both **OAuth2** (for user-delegated access) and **Service Account** (for domain-wide delegation in Google Workspace organizations).
@@ -618,7 +677,7 @@ xylolabs-kb uses **SQLite** with the **FTS5** extension for full-text search.
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | TEXT PRIMARY KEY | Internal UUID |
-| `source` | TEXT | `slack`, `google`, or `notion` |
+| `source` | TEXT | `slack`, `discord`, `google`, or `notion` |
 | `source_id` | TEXT | Original ID in the source system |
 | `parent_id` | TEXT | Parent document ID (for threads/hierarchy) |
 | `title` | TEXT | Document title or message preview |
@@ -657,6 +716,12 @@ xylolabs-kb uses **SQLite** with the **FTS5** extension for full-text search.
 | `last_sync_at` | DATETIME | Timestamp of last successful sync |
 | `cursor` | TEXT | Source-specific pagination cursor |
 | `metadata` | TEXT (JSON) | Additional sync metadata |
+
+**`scheduled_jobs` table** — scheduled and recurring message jobs:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `platform` | TEXT | Target platform: `slack` or `discord` (default: `slack`) |
 
 ### FTS5 search capabilities
 
@@ -771,9 +836,10 @@ xylolabs-kb/
 │   │   └── types.go         # Core domain types, Storage interface, Connector interface
 │   ├── storage/             # SQLite + FTS5 implementation of kb.Storage
 │   ├── slack/               # Slack connector (Socket Mode + periodic sync)
+│   ├── discord/             # Discord connector (Gateway + periodic sync)
 │   ├── google/              # Google Workspace connector (Drive, Docs, Sheets, Slides, Calendar)
 │   ├── notion/              # Notion connector (pages, databases)
-│   ├── bot/                 # Slack bot response handler (Gemini-powered)
+│   ├── bot/                 # Platform-agnostic bot handler (Slack + Discord)
 │   ├── tools/               # Tool executor for write operations (Google Drive, Notion)
 │   ├── kbrepo/              # Hierarchical markdown KB repo reader
 │   ├── gemini/              # Gemini API client (with function calling support)

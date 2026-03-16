@@ -36,9 +36,18 @@ This guide walks you through obtaining every API token and credential required t
    - [3.6 Verification](#36-verification)
    - [3.7 Common Pitfalls and Troubleshooting](#37-common-pitfalls-and-troubleshooting)
 
-4. [Quick Reference — All Environment Variables](#4-quick-reference--all-environment-variables)
+4. [Discord Setup](#4-discord-setup)
+   - [4.1 Create a Discord Application](#41-create-a-discord-application)
+   - [4.2 Create a Bot User](#42-create-a-bot-user)
+   - [4.3 Invite the Bot to Your Server](#43-invite-the-bot-to-your-server)
+   - [4.4 Get Your Server (Guild) ID](#44-get-your-server-guild-id)
+   - [4.5 Environment Variables Summary](#45-environment-variables-summary)
+   - [4.6 Verification](#46-verification)
+   - [4.7 Common Pitfalls and Troubleshooting](#47-common-pitfalls-and-troubleshooting)
 
-5. [Security Best Practices](#5-security-best-practices)
+5. [Quick Reference — All Environment Variables](#5-quick-reference--all-environment-variables)
+
+6. [Security Best Practices](#6-security-best-practices)
 
 ---
 
@@ -975,7 +984,194 @@ The Notion API has a rate limit of approximately 3 requests per second per integ
 
 ---
 
-## 4. Quick Reference — All Environment Variables
+## 4. Discord Setup
+
+### Prerequisites
+
+- A Discord account with a server where you have admin permissions.
+- A Discord application with a bot user (created in the steps below).
+
+**App vs. Bot distinction:** A Discord *Application* is the container that holds your bot's configuration, credentials, and permissions. A *Bot User* is the member that appears in your server and sends/reads messages. You need two credentials: the **Bot Token** (used to authenticate as the bot user) and the **Guild ID** (identifies which server to monitor).
+
+---
+
+### 4.1 Create a Discord Application
+
+1. Open [https://discord.com/developers/applications](https://discord.com/developers/applications) in your browser. Sign in with your Discord account if prompted.
+
+2. Click the **New Application** button near the top right of the page.
+
+3. In the dialog that appears, enter a name for your application — for example, `Xylolabs Knowledge Bot`. This name is visible to users when the bot is added to a server.
+
+4. Accept the Developer Terms of Service if prompted, then click **Create**.
+
+5. You are now on the **General Information** page for your new application. Note the **Application ID** displayed here — you may need it later for OAuth2 flows or debugging.
+
+6. Keep this browser tab open. You will navigate to other sections of this panel throughout the setup.
+
+---
+
+### 4.2 Create a Bot User
+
+1. In the left sidebar, click **Bot**.
+
+2. Click **Add Bot** (if a bot user has not already been created for this application). Confirm when prompted.
+
+3. Under the bot's username, click **Reset Token** (or **Copy** if a token is already visible). A dialog will warn you that the existing token will be invalidated — confirm and then **copy the new token immediately**. This is your `DISCORD_BOT_TOKEN`. Store it in a password manager or directly into your `.env` file. Discord will not show you this token again after you navigate away.
+
+4. Scroll down to the **Privileged Gateway Intents** section. These are optional capabilities that require explicit opt-in because they expose sensitive data:
+   - **MESSAGE CONTENT INTENT** — Required. Without this, the bot can see that a message was sent but cannot read its text content. Turn this **On**.
+   - **SERVER MEMBERS INTENT** — Optional. Required only if you need to resolve user display names or member metadata. Turn this **On** if you need author attribution beyond user IDs.
+
+5. Click **Save Changes** at the bottom of the page.
+
+> **Security note:** The bot token is equivalent to a password. Anyone with this token can act as your bot. Never commit it to version control, share it in chat, or include it in client-side code.
+
+---
+
+### 4.3 Invite the Bot to Your Server
+
+The bot must be explicitly invited to your server with the correct permissions before it can read or interact with any channels.
+
+1. In the left sidebar, click **OAuth2**, then click **URL Generator** in the submenu.
+
+2. Under **Scopes**, select the following checkboxes:
+   - `bot` — Grants the application permission to join as a bot user.
+   - `applications.commands` — Required if you plan to register slash commands (optional for read-only indexing).
+
+3. A **Bot Permissions** panel appears below once `bot` is selected. Check the following permissions:
+   - **Read Messages/View Channels** — Required to see channels and their contents.
+   - **Read Message History** — Required to backfill historical messages. Without this, the bot can only see new messages sent after it joined.
+   - **Send Messages** — Required if the bot needs to respond or confirm actions.
+   - **Add Reactions** — Optional. Useful for reaction-based acknowledgement flows.
+   - **Attach Files** — Optional. Required if the bot sends file attachments in responses.
+
+4. Scroll to the bottom of the page to find the **Generated URL**. Copy this URL and open it in a new browser tab.
+
+5. A Discord authorization page appears. From the **Add to Server** dropdown, select the server where you want to install the bot. Click **Continue**, review the permissions, and click **Authorize**.
+
+6. Complete any CAPTCHA if shown. The bot now appears in your server's member list, though it will show as offline until the service starts.
+
+---
+
+### 4.4 Get Your Server (Guild) ID
+
+Discord refers to servers internally as "guilds". The Guild ID is required to tell xylolabs-kb which server to monitor.
+
+1. Open the Discord client (desktop app or browser at [discord.com/app](https://discord.com/app)).
+
+2. Open **User Settings** by clicking the gear icon near the bottom left, next to your username.
+
+3. Go to **App Settings** → **Advanced**.
+
+4. Enable the **Developer Mode** toggle. This adds copy-ID options to various right-click menus throughout the Discord UI.
+
+5. Close Settings and return to your server list on the left sidebar.
+
+6. Right-click your server's icon or name. A context menu appears with a **Copy Server ID** option at the bottom. Click it.
+
+7. Paste the copied value somewhere safe — this is your `DISCORD_GUILD_ID`. It is a long numeric string (for example, `123456789012345678`).
+
+---
+
+### 4.5 Environment Variables Summary
+
+Add the following to your `.env` file (or equivalent secrets configuration):
+
+```bash
+# Required
+DISCORD_ENABLED=true
+DISCORD_BOT_TOKEN=your-bot-token-here
+DISCORD_GUILD_ID=your-guild-id-here
+
+# Optional
+DISCORD_SYNC_INTERVAL=5m       # How often to poll for new messages (default: 5m)
+```
+
+| Variable | Required | Description | Example Value |
+|----------|----------|-------------|---------------|
+| `DISCORD_ENABLED` | No | Enable Discord connector | `true` |
+| `DISCORD_BOT_TOKEN` | Yes (if Discord enabled) | Bot User Token | (long alphanumeric string) |
+| `DISCORD_GUILD_ID` | Yes (if Discord enabled) | Server (Guild) ID | `123456789012345678` |
+| `DISCORD_SYNC_INTERVAL` | No | Polling interval for new messages | `5m` (e.g., 30s, 2m, 1h) |
+
+---
+
+### 4.6 Verification
+
+**Step 1 — Verify the bot token:**
+
+```bash
+curl -s \
+     -H "Authorization: Bot YOUR_DISCORD_BOT_TOKEN" \
+     https://discord.com/api/v10/users/@me | jq '{id: .id, username: .username, bot: .bot}'
+```
+
+A successful response looks like:
+
+```json
+{
+  "id": "123456789012345678",
+  "username": "Xylolabs Knowledge Bot",
+  "bot": true
+}
+```
+
+If you see `{"code": 0, "message": "401: Unauthorized"}`, the token is wrong or has been reset. Return to step 4.2 and copy a fresh token.
+
+**Step 2 — Verify the bot is in the server:**
+
+After starting the service, the bot should appear **online** in your server's member list (under a role or in the members panel). If it shows as offline, the service is not running or is failing to connect — check the service logs for `DISCORD_BOT_TOKEN` or websocket connection errors.
+
+**Step 3 — Verify in xylolabs-kb:**
+
+Start the service and check the logs:
+
+```
+INFO discord connector started
+INFO sync started source=discord
+INFO sync complete source=discord documents_indexed=NNN duration_ms=NNN
+```
+
+Then verify via the search API:
+
+```bash
+curl "http://localhost:8080/search?q=test&source=discord&limit=1"
+curl http://localhost:8080/stats
+# Check documents_by_source.discord is greater than 0
+```
+
+---
+
+### 4.7 Common Pitfalls and Troubleshooting
+
+**Bot doesn't appear online / service fails to connect**
+
+The most common cause is a wrong or expired `DISCORD_BOT_TOKEN`. Tokens are invalidated when you click "Reset Token" in the Developer Portal. Verify the token value in your `.env` and restart the service.
+
+**Messages are visible in server but content is not being indexed**
+
+The **MESSAGE CONTENT INTENT** is not enabled. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → your application → **Bot** → enable **MESSAGE CONTENT INTENT** → Save Changes. Restart the service.
+
+**"Missing Access" or "Missing Permissions" errors in logs**
+
+The bot does not have the required channel permissions. Either the server-level permissions granted during the OAuth2 invite are insufficient, or a channel has overrides that block the bot. In Discord, go to the channel settings → **Permissions** and ensure the bot's role has **View Channel** and **Read Message History** checked.
+
+**Messages not being backfilled / only new messages are indexed**
+
+The bot is missing the **Read Message History** permission. This must be granted both at the server level (during the OAuth2 invite) and at the channel level (no deny overrides). See "Missing Access" troubleshooting above.
+
+**`DISCORD_GUILD_ID` is wrong or not found**
+
+Confirm Developer Mode is enabled in Discord settings (step 4.4), then right-click the server name and re-copy the ID. Guild IDs are always purely numeric strings — if yours contains letters, it is not a valid Guild ID.
+
+**Rate limiting (HTTP 429) during initial sync**
+
+Discord's API enforces per-route rate limits. xylolabs-kb handles these automatically with retry/backoff. A large server with many channels and message history will simply take longer on the first sync. Subsequent incremental syncs are faster.
+
+---
+
+## 5. Quick Reference — All Environment Variables
 
 | Variable | Required | Description | Example Value | Where to Obtain |
 |----------|----------|-------------|---------------|-----------------|
@@ -999,14 +1195,18 @@ The Notion API has a rate limit of approximately 3 requests per second per integ
 | `NOTION_API_KEY` | Yes (if Notion enabled) | Internal Integration Token | `ntn_...` | notion.so/my-integrations → [integration] → Internal Integration Token |
 | `NOTION_SYNC_INTERVAL` | No | Polling interval for page changes | `5m` | — |
 | `NOTION_ROOT_PAGES` | Yes (if Notion enabled) | Root page IDs to crawl | `abc123...,def456...` | Notion page URL → last 32-char hex segment |
+| `DISCORD_ENABLED` | No | Enable Discord connector | `false` | — |
+| `DISCORD_BOT_TOKEN` | Yes (if Discord enabled) | Bot User Token | (long alphanumeric string) | discord.com/developers/applications → [app] → Bot → Reset Token |
+| `DISCORD_GUILD_ID` | Yes (if Discord enabled) | Server (Guild) ID | `123456789012345678` | Discord client → Developer Mode → right-click server → Copy Server ID |
+| `DISCORD_SYNC_INTERVAL` | No | Polling interval for new messages | `5m` | — (e.g., 30s, 2m, 1h) |
 
 ---
 
-## 5. Security Best Practices
+## 6. Security Best Practices
 
 ### Never commit tokens to version control
 
-All tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `NOTION_API_KEY`, `credentials.json`, `token.json`) must never be committed to git. The `.gitignore` in xylolabs-kb already excludes `.env` and common credential files, but always verify:
+All tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `NOTION_API_KEY`, `DISCORD_BOT_TOKEN`, `credentials.json`, `token.json`) must never be committed to git. The `.gitignore` in xylolabs-kb already excludes `.env` and common credential files, but always verify:
 
 ```bash
 git status
@@ -1027,6 +1227,7 @@ The `.env` file is for local development. For production:
 - **Slack**: Only add the scopes you actually use. If you do not need to index DMs, do not add `im:history` and `im:read`. If you do not need file attachments, omit `files:read`.
 - **Google**: Request only `drive.readonly`, `documents.readonly`, and `spreadsheets.readonly`. Add `gmail.readonly` only if email indexing is required. Use folder-level sharing (`GOOGLE_DRIVE_FOLDERS`) rather than organization-wide access when possible.
 - **Notion**: Enable only "Read content". Add "Read user information" only if you need author attribution with email addresses.
+- **Discord**: Only grant the bot permissions it actually needs. For read-only indexing, omit **Send Messages**, **Add Reactions**, and **Attach Files** if those features are not used. Disable **SERVER MEMBERS INTENT** if user name resolution is not required.
 
 ### Rotate tokens periodically
 
@@ -1038,12 +1239,14 @@ The `.env` file is for local development. For production:
 | `NOTION_API_KEY` | Annually | Click "Regenerate" in the integration settings |
 | Google service account key | Every 90 days | Create a new key in Cloud Console; delete the old one |
 | Google OAuth2 token | Auto-refreshes | Manually revoke at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) if needed |
+| `DISCORD_BOT_TOKEN` | Annually or if compromised | Click "Reset Token" in Developer Portal → Bot; update `.env` and restart |
 
 ### Audit access logs
 
 - **Slack**: Workspace owners can view app activity in the Slack Admin dashboard under **Apps** → your app.
 - **Google**: Go to Google Cloud Console → **APIs & Services** → **Credentials** to see last-used timestamps. Enable **Cloud Audit Logs** for detailed access logging.
 - **Notion**: Go to [notion.so/my-integrations](https://www.notion.so/my-integrations) → your integration → **Activity** (if available) to see recent API calls.
+- **Discord**: Go to [discord.com/developers/applications](https://discord.com/developers/applications) → your application → **OAuth2** to review authorized scopes. Use Discord's **Server Audit Log** (Server Settings → Audit Log) to review bot actions within your server.
 
 ### Secure the credentials files
 
