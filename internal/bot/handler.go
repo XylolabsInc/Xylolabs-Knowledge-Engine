@@ -233,7 +233,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	userName := b.platform.ResolveUserName(ctx, msg.UserID)
 	now := time.Now().In(b.location)
 	currentTime := now.Format("2006-01-02 (Monday) 15:04 MST")
-	systemPrompt := fmt.Sprintf(b.systemPrompt, userName) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
+	systemPrompt := fmt.Sprintf(b.systemPrompt, userName, platformFormattingInstructions(b.platform.Name())) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	if len(systemPrompt) > maxSystemPromptChars {
 		systemPrompt = systemPrompt[:maxSystemPromptChars] + "\n[... truncated ...]"

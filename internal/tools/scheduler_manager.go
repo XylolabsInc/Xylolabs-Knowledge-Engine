@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,22 @@ import (
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
 )
+
+// Control block patterns that must be stripped from outgoing messages.
+var (
+	reControlReact = regexp.MustCompile(`===REACT:\s*\S+?===`)
+	reControlLearn = regexp.MustCompile(`(?s)===LEARN:.*?===ENDLEARN===[ \t]*\r?\n?`)
+	reControlSkip  = regexp.MustCompile(`===SKIP===`)
+)
+
+// stripControlBlocks removes ===REACT:...===, ===LEARN:...===ENDLEARN===, and ===SKIP===
+// from a message before posting to a channel.
+func stripControlBlocks(text string) string {
+	text = reControlReact.ReplaceAllString(text, "")
+	text = reControlLearn.ReplaceAllString(text, "")
+	text = reControlSkip.ReplaceAllString(text, "")
+	return strings.TrimSpace(text)
+}
 
 // SchedulerStore abstracts job persistence for the scheduler manager.
 type SchedulerStore interface {
@@ -257,6 +274,9 @@ func (sm *SchedulerManager) SendMessage(channel, message, threadTS string) (map[
 	if err != nil {
 		return nil, fmt.Errorf("resolve channel %q: %w", channel, err)
 	}
+
+	// Strip bot control blocks that should never appear in outgoing messages.
+	message = stripControlBlocks(message)
 
 	ts, err := sm.poster.PostMessage(context.Background(), channelID, message, threadTS)
 	if err != nil {

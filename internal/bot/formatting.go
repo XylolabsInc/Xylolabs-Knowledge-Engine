@@ -81,6 +81,28 @@ func isComplexQuery(query string) bool {
 	return false
 }
 
+// platformFormattingInstructions returns platform-specific formatting guidelines
+// to be injected into the system prompt.
+func platformFormattingInstructions(platform string) string {
+	switch platform {
+	case "discord":
+		return `Use standard Markdown formatting (Discord):
+- Bold: **text**. Italic: *text*. Strike: ~~text~~
+- Code: ` + "`code`" + `. Code block: ` + "```code```" + `. Quote: > text
+- List: "- " or "• ". Link: [display text](URL)
+- Headers: ## Header (use sparingly)
+- Tables are supported. Use markdown tables when presenting structured data.
+- NEVER use Slack mrkdwn syntax like <URL|text> or *single asterisk bold*.`
+	default: // "slack"
+		return `Use Slack mrkdwn formatting (NOT standard Markdown):
+- Bold: *text* (single asterisk, NOT **). Italic: _text_. Strike: ~text~
+- Code: ` + "`code`" + `. Code block: ` + "```code```" + `. Quote: > text
+- List: "- " or "• ". Link: <URL|display text>
+- NEVER use # headers, **bold**, [link](url), or other standard Markdown syntax.
+- NEVER use markdown tables (| col | col |). Slack does not render tables. Use bullet-point lists instead.`
+	}
+}
+
 // mergeConsecutiveRoles combines adjacent messages with the same role,
 // as the Gemini API requires strictly alternating user/model turns.
 func mergeConsecutiveRoles(messages []gemini.Message) []gemini.Message {
