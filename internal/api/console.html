@@ -221,7 +221,7 @@ tr.clickable { cursor: pointer; }
 .kb-tree-name { font-size: 0.875rem; font-weight: 500; }
 .kb-tree-size { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; }
 .kb-tree-dir .kb-tree-name { font-weight: 600; }
-.kb-markdown { background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 28px 32px; line-height: 1.8; font-size: 0.9rem; max-width: 900px; }
+.kb-markdown { background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 28px 32px; line-height: 1.8; font-size: 0.9rem; max-width: 900px; overflow-wrap: break-word; word-wrap: break-word; }
 .kb-markdown h1 { font-size: 1.5rem; font-weight: 700; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border-light); }
 .kb-markdown h1:first-child { margin-top: 0; }
 .kb-markdown h2 { font-size: 1.25rem; font-weight: 600; margin: 20px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border-light); }
@@ -236,7 +236,8 @@ tr.clickable { cursor: pointer; }
 .kb-markdown pre code { background: none; padding: 0; }
 .kb-markdown blockquote { border-left: 3px solid var(--primary); padding-left: 16px; margin: 12px 0; color: var(--text-secondary); }
 .kb-markdown hr { border: none; border-top: 1px solid var(--border-light); margin: 16px 0; }
-.kb-markdown table { border-collapse: collapse; margin: 12px 0; }
+.kb-markdown .table-wrapper { overflow-x: auto; margin: 12px 0; -webkit-overflow-scrolling: touch; }
+.kb-markdown table { border-collapse: collapse; white-space: nowrap; }
 .kb-markdown table th, .kb-markdown table td { border: 1px solid var(--border-light); padding: 8px 12px; text-align: left; }
 .kb-markdown table th { background: var(--bg-secondary); font-weight: 600; }
 .kb-markdown strong { font-weight: 600; }
@@ -2008,7 +2009,7 @@ function renderMarkdown(md) {
     const tag = 'td';
     return '<tr>' + cells.map(c => '<' + tag + '>' + c + '</' + tag + '>').join('') + '</tr>';
   });
-  html = html.replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>');
+  html = html.replace(/(<tr>.*<\/tr>\n?)+/g, '<div class="table-wrapper"><table>$&</table></div>');
 
   // Paragraphs: wrap remaining text lines
   html = html.split('\n\n').map(block => {
