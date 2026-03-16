@@ -13,16 +13,10 @@ import (
 	"github.com/slack-go/slack/socketmode"
 	"golang.org/x/time/rate"
 
+	"github.com/xylolabsinc/xylolabs-kb/internal/bot"
 	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
-
-// BotHandler handles bot mentions, DMs, and thread replies.
-type BotHandler interface {
-	HandleMention(ctx context.Context, ev *slackevents.MessageEvent)
-	HandleDirectMessage(ctx context.Context, ev *slackevents.MessageEvent)
-	IsTrackedThread(channel, threadTS string) bool
-}
 
 // Connector handles real-time and historical Slack message ingestion.
 type Connector struct {
@@ -40,7 +34,7 @@ type Connector struct {
 
 	limiter *rate.Limiter
 
-	bot       BotHandler          // may be nil if Gemini not configured
+	botHandler bot.BotHandler      // may be nil if Gemini not configured
 	extractor *extractor.Extractor // may be nil
 	botUserID string
 }
@@ -70,8 +64,8 @@ func NewConnector(botToken, appToken string, engine *kb.Engine, store kb.Storage
 }
 
 // SetBot sets the bot handler for mention/DM processing.
-func (c *Connector) SetBot(bot BotHandler, botUserID string) {
-	c.bot = bot
+func (c *Connector) SetBot(handler bot.BotHandler, botUserID string) {
+	c.botHandler = handler
 	c.botUserID = botUserID
 }
 
@@ -226,23 +220,26 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event slackevents.Event
 			}
 
 			// Bot routing: check for mentions, DMs, and tracked thread replies
-			if c.bot != nil {
+			if c.botHandler != nil {
 				// Skip bot's own messages
 				if ev.User == c.botUserID {
 					return
 				}
 				// Direct messages (DM channels start with "D")
 				if strings.HasPrefix(ev.Channel, "D") {
-					go c.bot.HandleDirectMessage(ctx, ev)
+					incoming := slackEventToIncomingMessage(ev)
+					go c.botHandler.HandleDirectMessage(ctx, incoming)
 					return // Don't index DMs to the bot
 				}
 				// @mentions
 				if strings.Contains(ev.Text, "<@"+c.botUserID+">") {
-					go c.bot.HandleMention(ctx, ev)
+					incoming := slackEventToIncomingMessage(ev)
+					go c.botHandler.HandleMention(ctx, incoming)
 					// Fall through to still index the message
-				} else if ev.ThreadTimeStamp != "" && c.bot.IsTrackedThread(ev.Channel, ev.ThreadTimeStamp) {
+				} else if ev.ThreadTimeStamp != "" && c.botHandler.IsTrackedThread(ev.Channel, ev.ThreadTimeStamp) {
 					// Thread reply in a conversation the bot is participating in
-					go c.bot.HandleDirectMessage(ctx, ev)
+					incoming := slackEventToIncomingMessage(ev)
+					go c.botHandler.HandleDirectMessage(ctx, incoming)
 					// Fall through to still index the message
 				}
 			}
@@ -261,6 +258,39 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event slackevents.Event
 			}
 		}
 	}
+}
+
+// slackEventToIncomingMessage converts a Slack event to a platform-agnostic IncomingMessage.
+func slackEventToIncomingMessage(ev *slackevents.MessageEvent) *bot.IncomingMessage {
+	msg := &bot.IncomingMessage{
+		Platform:  "slack",
+		Channel:   ev.Channel,
+		MessageID: ev.TimeStamp,
+		UserID:    ev.User,
+		Text:      ev.Text,
+		IsDM:      strings.HasPrefix(ev.Channel, "D"),
+	}
+	// Set ThreadID
+	if ev.ThreadTimeStamp != "" {
+		msg.ThreadID = ev.ThreadTimeStamp
+	}
+	// Convert file attachments
+	if ev.Message != nil {
+		for _, f := range ev.Message.Files {
+			url := f.URLPrivateDownload
+			if url == "" {
+				url = f.URLPrivate
+			}
+			msg.Files = append(msg.Files, bot.FileAttachment{
+				ID:       f.ID,
+				Name:     f.Name,
+				MimeType: f.Mimetype,
+				URL:      url,
+				Size:     f.Size,
+			})
+		}
+	}
+	return msg
 }
 
 func (c *Connector) listAllChannels(ctx context.Context) ([]slack.Channel, error) {

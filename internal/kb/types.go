@@ -6,10 +6,11 @@ import "time"
 type Source string
 
 const (
-	SourceSlack  Source = "slack"
-	SourceGoogle Source = "google"
-	SourceNotion Source = "notion"
-	SourceManual Source = "manual"
+	SourceSlack   Source = "slack"
+	SourceGoogle  Source = "google"
+	SourceNotion  Source = "notion"
+	SourceDiscord Source = "discord"
+	SourceManual  Source = "manual"
 )
 
 // Document represents a single piece of content in the knowledge base.

@@ -440,6 +440,7 @@ type ScheduledJob struct {
 	CreatedBy string
 	CreatedAt time.Time
 	Enabled   bool
+	Platform  string // "slack" or "discord"
 }
 
 // CreateScheduledJob inserts a new scheduled job.
@@ -448,11 +449,15 @@ func (s *SQLiteStore) CreateScheduledJob(job ScheduledJob) error {
 	if job.Enabled {
 		enabled = 1
 	}
+	platform := job.Platform
+	if platform == "" {
+		platform = "slack"
+	}
 	_, err := s.db.Exec(`
-		INSERT INTO scheduled_jobs (id, type, channel_id, message, cron_expr, run_at, next_run, created_by, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO scheduled_jobs (id, type, channel_id, message, cron_expr, run_at, next_run, created_by, enabled, platform)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.ID, job.Type, job.ChannelID, job.Message, job.CronExpr,
-		nullTime(job.RunAt), nullTime(job.NextRun), job.CreatedBy, enabled,
+		nullTime(job.RunAt), nullTime(job.NextRun), job.CreatedBy, enabled, platform,
 	)
 	if err != nil {
 		return fmt.Errorf("create scheduled job %s: %w", job.ID, err)
@@ -466,10 +471,10 @@ func (s *SQLiteStore) GetScheduledJob(id string) (*ScheduledJob, error) {
 	var runAt, nextRun, createdAt sql.NullTime
 	var enabled int
 	err := s.db.QueryRow(`
-		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled, platform
 		FROM scheduled_jobs WHERE id = ?`, id).Scan(
 		&job.ID, &job.Type, &job.ChannelID, &job.Message, &job.CronExpr,
-		&runAt, &nextRun, &job.CreatedBy, &createdAt, &enabled,
+		&runAt, &nextRun, &job.CreatedBy, &createdAt, &enabled, &job.Platform,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -493,7 +498,7 @@ func (s *SQLiteStore) GetScheduledJob(id string) (*ScheduledJob, error) {
 // ListScheduledJobs returns all enabled scheduled jobs.
 func (s *SQLiteStore) ListScheduledJobs() ([]ScheduledJob, error) {
 	rows, err := s.db.Query(`
-		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled, platform
 		FROM scheduled_jobs WHERE enabled = 1 ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list scheduled jobs: %w", err)
@@ -505,7 +510,7 @@ func (s *SQLiteStore) ListScheduledJobs() ([]ScheduledJob, error) {
 // ListScheduledJobsByCreator returns all enabled jobs created by a specific user.
 func (s *SQLiteStore) ListScheduledJobsByCreator(userID string) ([]ScheduledJob, error) {
 	rows, err := s.db.Query(`
-		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled, platform
 		FROM scheduled_jobs WHERE enabled = 1 AND created_by = ? ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list scheduled jobs by creator %s: %w", userID, err)
@@ -544,7 +549,7 @@ func (s *SQLiteStore) DisableScheduledJob(id string) error {
 // GetDueJobs returns all enabled jobs whose next_run is at or before the given time.
 func (s *SQLiteStore) GetDueJobs(now time.Time) ([]ScheduledJob, error) {
 	rows, err := s.db.Query(`
-		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled
+		SELECT id, type, channel_id, message, cron_expr, run_at, next_run, created_by, created_at, enabled, platform
 		FROM scheduled_jobs WHERE enabled = 1 AND next_run <= ? ORDER BY next_run ASC`, now.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("get due jobs: %w", err)
@@ -561,7 +566,7 @@ func scanScheduledJobs(rows *sql.Rows) ([]ScheduledJob, error) {
 		var enabled int
 		if err := rows.Scan(
 			&job.ID, &job.Type, &job.ChannelID, &job.Message, &job.CronExpr,
-			&runAt, &nextRun, &job.CreatedBy, &createdAt, &enabled,
+			&runAt, &nextRun, &job.CreatedBy, &createdAt, &enabled, &job.Platform,
 		); err != nil {
 			return nil, fmt.Errorf("scan scheduled job: %w", err)
 		}

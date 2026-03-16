@@ -380,7 +380,7 @@ func readCuratorInstructions(kbDir string, logger *slog.Logger) string {
 // groupDocuments splits documents into batches appropriate for the source type.
 func groupDocuments(docs []Document, source string, maxDocs int) []batch {
 	switch source {
-	case "slack":
+	case "slack", "discord":
 		return groupSlackDocuments(docs, maxDocs)
 	case "manual":
 		return groupManualDocuments(docs, maxDocs)
@@ -621,6 +621,10 @@ You may output multiple file blocks. Each file must be complete and self-contain
 		sb.WriteString(`- Slack messages: slack/channels/{channel-name}/{YYYY-MM-DD}.md (daily digests per channel)
 - Channel names should be lowercase, hyphenated (e.g., "engineering", "product-updates")
 `)
+	case "discord":
+		sb.WriteString(`- Discord messages: discord/channels/{channel-name}/{YYYY-MM-DD}.md (daily digests per channel)
+- Channel names should be lowercase, hyphenated (e.g., "general", "dev-chat")
+`)
 	case "google":
 		sb.WriteString(`- Google docs: google/docs/{doc-slug}.md
 - Doc slugs should be lowercase, hyphenated versions of the document title
@@ -662,7 +666,7 @@ When processing these:
 
 `)
 
-	if source == "slack" {
+	if source == "slack" || source == "discord" {
 		sb.WriteString(`For Slack daily digests:
 - Create a chronological summary of the day's conversations
 - Highlight key topics, decisions, and action items

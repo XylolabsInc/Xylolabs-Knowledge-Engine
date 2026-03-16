@@ -32,7 +32,7 @@ KB_GEN_THINKING="${KB_GEN_THINKING:-high}"
 KB_GEN_API_KEY="${KB_GEN_API_KEY:-${GEMINI_API_KEY:-}}"
 
 # Sources to process
-SOURCES=("slack" "google" "notion")
+SOURCES=("slack" "google" "notion" "discord")
 
 # -----------------------------------------------------------------------------
 # Logging

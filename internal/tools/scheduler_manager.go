@@ -27,22 +27,20 @@ type SchedulerStore interface {
 // SchedulerManager handles scheduling operations for the tool executor.
 type SchedulerManager struct {
 	store    SchedulerStore
-	slack    *slack.Client
+	poster   MessagePoster
+	resolver ChannelResolver
 	location *time.Location
 	logger   *slog.Logger
-
-	mu       sync.RWMutex
-	channels map[string]string // channel name → channel ID cache
 }
 
 // NewSchedulerManager creates a new SchedulerManager.
-func NewSchedulerManager(store SchedulerStore, slackClient *slack.Client, location *time.Location, logger *slog.Logger) *SchedulerManager {
+func NewSchedulerManager(store SchedulerStore, poster MessagePoster, resolver ChannelResolver, location *time.Location, logger *slog.Logger) *SchedulerManager {
 	return &SchedulerManager{
 		store:    store,
-		slack:    slackClient,
+		poster:   poster,
+		resolver: resolver,
 		location: location,
 		logger:   logger.With("component", "scheduler-manager"),
-		channels: make(map[string]string),
 	}
 }
 
@@ -184,46 +182,12 @@ func (sm *SchedulerManager) CancelJob(jobID string) (map[string]any, error) {
 
 // resolveChannel converts a channel name or ID to a channel ID.
 func (sm *SchedulerManager) resolveChannel(channel string) (string, error) {
-	// Already a channel ID
-	if strings.HasPrefix(channel, "C") && len(channel) > 8 {
-		return channel, nil
-	}
+	return sm.resolver.ResolveChannel(channel)
+}
 
-	// Strip # prefix if present
-	name := strings.TrimPrefix(channel, "#")
-
-	// Check cache
-	sm.mu.RLock()
-	if id, ok := sm.channels[name]; ok {
-		sm.mu.RUnlock()
-		return id, nil
-	}
-	sm.mu.RUnlock()
-
-	// Look up via Slack API
-	channels, _, err := sm.slack.GetConversations(&slack.GetConversationsParameters{
-		Types:           []string{"public_channel", "private_channel"},
-		Limit:           1000,
-		ExcludeArchived: true,
-	})
-	if err != nil {
-		return "", fmt.Errorf("list channels: %w", err)
-	}
-
-	sm.mu.Lock()
-	for _, ch := range channels {
-		sm.channels[ch.Name] = ch.ID
-	}
-	sm.mu.Unlock()
-
-	sm.mu.RLock()
-	id, ok := sm.channels[name]
-	sm.mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("channel %q not found", name)
-	}
-
-	return id, nil
+// resolveChannelName performs a reverse lookup from channel ID to name.
+func (sm *SchedulerManager) resolveChannelName(channelID string) string {
+	return sm.resolver.ResolveChannelName(channelID)
 }
 
 // parseTime parses a time string. Supports RFC3339 and relative expressions.
@@ -294,12 +258,46 @@ func (sm *SchedulerManager) SendMessage(channel, message, threadTS string) (map[
 		return nil, fmt.Errorf("resolve channel %q: %w", channel, err)
 	}
 
-	// Build Block Kit section blocks, splitting long text at 3000 chars
+	ts, err := sm.poster.PostMessage(context.Background(), channelID, message, threadTS)
+	if err != nil {
+		return nil, fmt.Errorf("send message to %s: %w", channel, err)
+	}
+
+	channelName := sm.resolveChannelName(channelID)
+	sm.logger.Info("sent message", "channel_id", channelID, "channel_name", channelName, "timestamp", ts)
+
+	return map[string]any{
+		"channel_id":   channelID,
+		"channel_name": channelName,
+		"timestamp":    ts,
+		"status":       "sent",
+	}, nil
+}
+
+// SlackMessagePoster implements MessagePoster and ChannelResolver for Slack.
+type SlackMessagePoster struct {
+	client   *slack.Client
+	logger   *slog.Logger
+	mu       sync.RWMutex
+	channels map[string]string // channel name → channel ID cache
+}
+
+// NewSlackMessagePoster creates a SlackMessagePoster.
+func NewSlackMessagePoster(client *slack.Client, logger *slog.Logger) *SlackMessagePoster {
+	return &SlackMessagePoster{
+		client:   client,
+		logger:   logger,
+		channels: make(map[string]string),
+	}
+}
+
+// PostMessage sends a message to a Slack channel using Block Kit.
+func (p *SlackMessagePoster) PostMessage(ctx context.Context, channelID, text string, threadTS string) (string, error) {
 	const maxBlockTextLen = 3000
 	var blocks []slack.Block
-	text := message
-	for len(text) > 0 {
-		chunk := text
+	remaining := text
+	for len(remaining) > 0 {
+		chunk := remaining
 		if len(chunk) > maxBlockTextLen {
 			cut := strings.LastIndex(chunk[:maxBlockTextLen], "\n\n")
 			if cut < maxBlockTextLen/2 {
@@ -308,10 +306,10 @@ func (sm *SchedulerManager) SendMessage(channel, message, threadTS string) (map[
 			if cut < maxBlockTextLen/2 {
 				cut = maxBlockTextLen
 			}
-			chunk = text[:cut]
-			text = strings.TrimLeft(text[cut:], "\n")
+			chunk = remaining[:cut]
+			remaining = strings.TrimLeft(remaining[cut:], "\n")
 		} else {
-			text = ""
+			remaining = ""
 		}
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn", chunk, false, false),
@@ -319,7 +317,7 @@ func (sm *SchedulerManager) SendMessage(channel, message, threadTS string) (map[
 		))
 	}
 
-	fallback := message
+	fallback := text
 	if len(fallback) > 300 {
 		fallback = fallback[:297] + "..."
 	}
@@ -332,48 +330,73 @@ func (sm *SchedulerManager) SendMessage(channel, message, threadTS string) (map[
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
 
-	_, ts, err := sm.slack.PostMessageContext(context.Background(), channelID, opts...)
+	_, ts, err := p.client.PostMessageContext(ctx, channelID, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("send message to %s: %w", channel, err)
+		return "", fmt.Errorf("post message: %w", err)
 	}
-
-	channelName := sm.resolveChannelName(channelID)
-
-	sm.logger.Info("sent message", "channel_id", channelID, "channel_name", channelName, "timestamp", ts)
-
-	return map[string]any{
-		"channel_id":   channelID,
-		"channel_name": channelName,
-		"timestamp":    ts,
-		"status":       "sent",
-	}, nil
+	return ts, nil
 }
 
-// resolveChannelName performs a reverse lookup from channel ID to channel name.
-func (sm *SchedulerManager) resolveChannelName(channelID string) string {
-	// Check cache (reverse lookup: find name where value == channelID)
-	sm.mu.RLock()
-	for name, id := range sm.channels {
+// ResolveChannel converts a channel name or ID to a channel ID.
+func (p *SlackMessagePoster) ResolveChannel(channel string) (string, error) {
+	if strings.HasPrefix(channel, "C") && len(channel) > 8 {
+		return channel, nil
+	}
+
+	name := strings.TrimPrefix(channel, "#")
+
+	p.mu.RLock()
+	if id, ok := p.channels[name]; ok {
+		p.mu.RUnlock()
+		return id, nil
+	}
+	p.mu.RUnlock()
+
+	channels, _, err := p.client.GetConversations(&slack.GetConversationsParameters{
+		Types:           []string{"public_channel", "private_channel"},
+		Limit:           1000,
+		ExcludeArchived: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("list channels: %w", err)
+	}
+
+	p.mu.Lock()
+	for _, ch := range channels {
+		p.channels[ch.Name] = ch.ID
+	}
+	p.mu.Unlock()
+
+	p.mu.RLock()
+	id, ok := p.channels[name]
+	p.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("channel %q not found", name)
+	}
+	return id, nil
+}
+
+// ResolveChannelName performs a reverse lookup from channel ID to name.
+func (p *SlackMessagePoster) ResolveChannelName(channelID string) string {
+	p.mu.RLock()
+	for name, id := range p.channels {
 		if id == channelID {
-			sm.mu.RUnlock()
+			p.mu.RUnlock()
 			return "#" + name
 		}
 	}
-	sm.mu.RUnlock()
+	p.mu.RUnlock()
 
-	// Fallback: query Slack API
-	info, err := sm.slack.GetConversationInfoContext(context.Background(), &slack.GetConversationInfoInput{
+	info, err := p.client.GetConversationInfoContext(context.Background(), &slack.GetConversationInfoInput{
 		ChannelID: channelID,
 	})
 	if err != nil {
-		sm.logger.Debug("failed to resolve channel name", "channel_id", channelID, "error", err)
 		return channelID
 	}
 
-	// Cache for future use
-	sm.mu.Lock()
-	sm.channels[info.Name] = channelID
-	sm.mu.Unlock()
+	p.mu.Lock()
+	p.channels[info.Name] = channelID
+	p.mu.Unlock()
 
 	return "#" + info.Name
 }

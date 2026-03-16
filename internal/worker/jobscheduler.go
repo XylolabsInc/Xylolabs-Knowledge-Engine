@@ -7,10 +7,14 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"github.com/slack-go/slack"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
 )
+
+// MessagePoster abstracts sending messages to a channel.
+type MessagePoster interface {
+	PostMessage(ctx context.Context, channelID, text string, threadTS string) (timestamp string, err error)
+}
 
 // JobStore abstracts scheduled job persistence for testability.
 type JobStore interface {
@@ -22,7 +26,7 @@ type JobStore interface {
 // JobScheduler polls for due scheduled jobs and posts messages to Slack.
 type JobScheduler struct {
 	store    JobStore
-	slack    *slack.Client
+	poster   MessagePoster
 	location *time.Location
 	logger   *slog.Logger
 	done     chan struct{}
@@ -30,10 +34,10 @@ type JobScheduler struct {
 }
 
 // NewJobScheduler creates a new job scheduler.
-func NewJobScheduler(store JobStore, slackClient *slack.Client, location *time.Location, logger *slog.Logger) *JobScheduler {
+func NewJobScheduler(store JobStore, poster MessagePoster, location *time.Location, logger *slog.Logger) *JobScheduler {
 	return &JobScheduler{
 		store:    store,
-		slack:    slackClient,
+		poster:   poster,
 		location: location,
 		logger:   logger.With("component", "job-scheduler"),
 		done:     make(chan struct{}),
@@ -81,11 +85,7 @@ func (js *JobScheduler) poll() {
 	for _, job := range jobs {
 		js.logger.Info("executing scheduled job", "id", job.ID, "type", job.Type, "channel", job.ChannelID)
 
-		_, _, err := js.slack.PostMessageContext(
-			context.Background(),
-			job.ChannelID,
-			slack.MsgOptionText(job.Message, false),
-		)
+		_, err := js.poster.PostMessage(context.Background(), job.ChannelID, job.Message, "")
 		if err != nil {
 			js.logger.Error("failed to post scheduled message", "id", job.ID, "channel", job.ChannelID, "error", err)
 			continue

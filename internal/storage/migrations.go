@@ -156,6 +156,10 @@ END;
 INSERT INTO fts_documents(fts_documents) VALUES('rebuild');
 `,
 	},
+	{
+		version: 5,
+		sql:     `ALTER TABLE scheduled_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'slack';`,
+	},
 }
 
 // runMigrations applies all pending migrations.

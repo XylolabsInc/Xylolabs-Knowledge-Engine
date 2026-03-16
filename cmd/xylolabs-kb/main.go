@@ -19,6 +19,7 @@ import (
 	googleconn "github.com/xylolabsinc/xylolabs-kb/internal/google"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kbrepo"
+	discordconn "github.com/xylolabsinc/xylolabs-kb/internal/discord"
 	notionconn "github.com/xylolabsinc/xylolabs-kb/internal/notion"
 	slackconn "github.com/xylolabsinc/xylolabs-kb/internal/slack"
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
@@ -88,12 +89,16 @@ func main() {
 	done := make(chan struct{})
 
 	// Monitor connector health
-	connErrors := make(chan error, 3)
+	connErrors := make(chan error, 5)
 
 	// Outer-scope handles for tool executor wiring after all connectors init.
 	var botHandler *bot.Bot
+	var slackPlatform *bot.SlackPlatform
+	var discordBotHandler *bot.Bot
+	var discordPlatform *bot.DiscordPlatform
 	var googleConn *googleconn.Connector
 	var jobScheduler *worker.JobScheduler
+	var discordJobScheduler *worker.JobScheduler
 
 	// Initialize connectors based on configuration
 	if cfg.SlackEnabled() {
@@ -114,10 +119,11 @@ func main() {
 					kbReader = kbrepo.NewReader(cfg.KBRepoDir, logger)
 					logger.Info("kb repo reader enabled", "dir", cfg.KBRepoDir)
 				}
-				botHandler = bot.New(slackAPI, geminiClient, kbReader, authResp.UserID, cfg.SlackBotToken, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Location(), logger)
+				slackPlatform = bot.NewSlackPlatform(slackAPI, authResp.UserID, cfg.SlackBotToken, logger)
+				botHandler = bot.New(slackPlatform, geminiClient, kbReader, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Location(), logger)
 				botHandler.SetExtractor(ext)
 				slackConn.SetBot(botHandler, authResp.UserID)
-				botHandler.StartCleanup()
+				slackPlatform.StartCleanup()
 				logger.Info("slack bot enabled", "bot_user_id", authResp.UserID)
 			}
 		}
@@ -189,6 +195,47 @@ func main() {
 		logger.Info("notion connector disabled (missing credentials)")
 	}
 
+	if cfg.DiscordEnabled() {
+		discordConn, err := discordconn.NewConnector(cfg.DiscordBotToken, cfg.DiscordGuildID, engine, store, logger)
+		if err != nil {
+			logger.Error("failed to initialize discord connector", "error", err)
+		} else {
+			discordConn.SetExtractor(ext)
+			syncManager.AddConnector(discordConn)
+			scheduler.Register("discord", cfg.DiscordSyncInterval, discordConn.Sync)
+
+			// Set up Discord bot if Gemini is configured
+			if geminiClient != nil {
+				sess := discordConn.Session()
+				botUser, err := sess.User("@me")
+				if err != nil {
+					logger.Error("failed to get discord bot user", "error", err)
+				} else {
+					var kbReader *kbrepo.Reader
+					if cfg.KBRepoDir != "" {
+						kbReader = kbrepo.NewReader(cfg.KBRepoDir, logger)
+					}
+					discordPlatform = bot.NewDiscordPlatform(sess, botUser.ID, cfg.DiscordGuildID, logger)
+					discordBotHandler = bot.New(discordPlatform, geminiClient, kbReader, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Location(), logger)
+					discordBotHandler.SetExtractor(ext)
+					discordConn.SetBot(discordBotHandler, botUser.ID)
+					discordPlatform.StartCleanup()
+					logger.Info("discord bot enabled", "bot_user_id", botUser.ID)
+				}
+			}
+
+			go func() {
+				if err := discordConn.Start(done); err != nil {
+					logger.Error("discord connector failed", "error", err)
+					connErrors <- fmt.Errorf("discord: %w", err)
+				}
+			}()
+			logger.Info("discord connector enabled")
+		}
+	} else {
+		logger.Info("discord connector disabled (missing credentials)")
+	}
+
 	// Wire tool executor to bot after all connectors are initialized
 	if botHandler != nil {
 		var gw *tools.GoogleWriter
@@ -200,7 +247,8 @@ func main() {
 			nw = tools.NewNotionWriter(cfg.NotionAPIKey, logger)
 		}
 		ss := tools.NewScreenshotter(logger)
-		sm := tools.NewSchedulerManager(store, slack.New(cfg.SlackBotToken), cfg.Location(), logger)
+		slackPoster := tools.NewSlackMessagePoster(slack.New(cfg.SlackBotToken), logger)
+		sm := tools.NewSchedulerManager(store, slackPoster, slackPoster, cfg.Location(), logger)
 		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, sm, logger)
 		botHandler.SetToolExecutor(toolExecutor)
 		logger.Info("tool executor enabled",
@@ -209,8 +257,29 @@ func main() {
 		)
 
 		// Start job scheduler for scheduled messages
-		jobScheduler = worker.NewJobScheduler(store, slack.New(cfg.SlackBotToken), cfg.Location(), logger)
+		jobScheduler = worker.NewJobScheduler(store, slackPoster, cfg.Location(), logger)
 		jobScheduler.Start()
+	}
+
+	// Wire Discord tool executor
+	if discordBotHandler != nil {
+		var gw *tools.GoogleWriter
+		if googleConn != nil {
+			gw = tools.NewGoogleWriter(googleConn.DriveService(), googleConn.DocsService(), googleConn.SheetsService(), googleConn.SlidesService(), googleConn.CalendarService(), googleConn.TasksService(), googleConn.GmailService(), cfg.GoogleImpersonateEmail, logger)
+		}
+		var nw *tools.NotionWriter
+		if cfg.NotionEnabled() {
+			nw = tools.NewNotionWriter(cfg.NotionAPIKey, logger)
+		}
+		ss := tools.NewScreenshotter(logger)
+		discordPoster := bot.NewDiscordMessagePoster(discordPlatform.Session(), cfg.DiscordGuildID, logger)
+		discordSM := tools.NewSchedulerManager(store, discordPoster, discordPoster, cfg.Location(), logger)
+		discordToolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, discordSM, logger)
+		discordBotHandler.SetToolExecutor(discordToolExecutor)
+		logger.Info("discord tool executor enabled")
+
+		discordJobScheduler = worker.NewJobScheduler(store, discordPoster, cfg.Location(), logger)
+		discordJobScheduler.Start()
 	}
 
 	// Start scheduler
@@ -245,8 +314,14 @@ func main() {
 	if jobScheduler != nil {
 		jobScheduler.Stop()
 	}
-	if botHandler != nil {
-		botHandler.StopCleanup()
+	if slackPlatform != nil {
+		slackPlatform.StopCleanup()
+	}
+	if discordJobScheduler != nil {
+		discordJobScheduler.Stop()
+	}
+	if discordPlatform != nil {
+		discordPlatform.StopCleanup()
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

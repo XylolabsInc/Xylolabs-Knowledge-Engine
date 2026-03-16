@@ -158,8 +158,10 @@ func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
 		"google/README.md",
 		"notion/README.md",
 		"user-provided/README.md",
+		"discord/README.md",
 		"slack/channels/*/README.md",
 		"google/*/README.md",
+		"discord/channels/*/README.md",
 	}
 	for _, pattern := range readmePatterns {
 		matches, _ := filepath.Glob(filepath.Join(r.repoDir, pattern))
@@ -689,8 +691,10 @@ var synonyms = map[string][]string{
 	"slack":  {"슬랙", "channels"},
 	"구글":   {"google", "docs"},
 	"google": {"구글", "docs"},
-	"노션":   {"notion", "pages"},
-	"notion": {"노션", "pages"},
+	"노션":    {"notion", "pages"},
+	"notion":  {"노션", "pages"},
+	"디스코드":  {"discord", "channels"},
+	"discord": {"디스코드", "channels"},
 	// Content type mappings
 	"대화":   {"channels", "messages", "slack"},
 	"대화내용": {"channels", "messages", "slack"},

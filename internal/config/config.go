@@ -27,6 +27,10 @@ type Config struct {
 	GoogleImpersonateEmail  string
 	GoogleDefaultCalendarID string
 
+	// Discord
+	DiscordBotToken string
+	DiscordGuildID  string
+
 	// Notion
 	NotionAPIKey     string
 	NotionRootPages  []string
@@ -53,9 +57,10 @@ type Config struct {
 	ConsolePassword string
 
 	// Sync intervals
-	SlackSyncInterval  time.Duration
-	GoogleSyncInterval time.Duration
-	NotionSyncInterval time.Duration
+	SlackSyncInterval   time.Duration
+	GoogleSyncInterval  time.Duration
+	NotionSyncInterval  time.Duration
+	DiscordSyncInterval time.Duration
 
 	// Logging
 	LogLevel string
@@ -86,6 +91,9 @@ func Load() *Config {
 		GoogleImpersonateEmail:  os.Getenv("GOOGLE_IMPERSONATE_EMAIL"),
 		GoogleDefaultCalendarID: os.Getenv("GOOGLE_DEFAULT_CALENDAR_ID"),
 
+		DiscordBotToken: os.Getenv("DISCORD_BOT_TOKEN"),
+		DiscordGuildID:  os.Getenv("DISCORD_GUILD_ID"),
+
 		NotionAPIKey:    os.Getenv("NOTION_API_KEY"),
 		NotionRootPages: splitEnv("NOTION_ROOT_PAGES", nil),
 
@@ -107,7 +115,8 @@ func Load() *Config {
 
 		SlackSyncInterval:  envOrDefaultDuration("SLACK_SYNC_INTERVAL", 5*time.Minute),
 		GoogleSyncInterval: envOrDefaultDuration("GOOGLE_SYNC_INTERVAL", 15*time.Minute),
-		NotionSyncInterval: envOrDefaultDuration("NOTION_SYNC_INTERVAL", 10*time.Minute),
+		NotionSyncInterval:  envOrDefaultDuration("NOTION_SYNC_INTERVAL", 10*time.Minute),
+		DiscordSyncInterval: envOrDefaultDuration("DISCORD_SYNC_INTERVAL", 5*time.Minute),
 
 		LogLevel: envOrDefault("LOG_LEVEL", "info"),
 	}
@@ -122,6 +131,11 @@ func (c *Config) SlackEnabled() bool {
 // GoogleEnabled returns true if Google credentials are configured.
 func (c *Config) GoogleEnabled() bool {
 	return c.GoogleCredsFile != "" && fileExists(c.GoogleCredsFile)
+}
+
+// DiscordEnabled returns true if Discord credentials are configured.
+func (c *Config) DiscordEnabled() bool {
+	return c.DiscordBotToken != "" && c.DiscordGuildID != ""
 }
 
 // NotionEnabled returns true if Notion credentials are configured.
