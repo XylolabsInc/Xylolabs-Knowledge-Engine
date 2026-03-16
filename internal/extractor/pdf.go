@@ -36,6 +36,10 @@ func extractPDF(data []byte) (string, error) {
 	var sb strings.Builder
 	numPages := r.NumPage()
 
+	if numPages == 0 {
+		return "", fmt.Errorf("pdf: document has no pages")
+	}
+
 	for i := 1; i <= numPages; i++ {
 		page := r.Page(i)
 		if page.V.IsNull() {

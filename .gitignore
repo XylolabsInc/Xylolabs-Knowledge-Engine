@@ -52,3 +52,8 @@ coverage.html
 
 # Build
 /tmp/
+
+.omc/
+.omx/
+kb-gen
+screenshot-test

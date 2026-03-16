@@ -17,6 +17,13 @@ func (e *Extractor) extractImage(ctx context.Context, data []byte, mimeType stri
 		return "[Image]", nil
 	}
 
+	if len(data) == 0 {
+		if filename != "" {
+			return fmt.Sprintf("[Image: %s (empty)]", filename), nil
+		}
+		return "[Image (empty)]", nil
+	}
+
 	text, err := e.gemini.GenerateFromImage(ctx, imagePrompt, data, mimeType)
 	if err != nil {
 		return "", fmt.Errorf("image: generate from image: %w", err)
