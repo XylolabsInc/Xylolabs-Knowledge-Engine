@@ -572,6 +572,10 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 							"type":        "string",
 							"description": "Attendee email addresses (comma-separated, e.g. a@co.com,b@co.com)",
 						},
+						"google_meet": map[string]any{
+							"type":        "boolean",
+							"description": "Set to true to create a Google Meet video conference link (default: false)",
+						},
 					},
 					"required": []string{"summary", "start_time", "end_time"},
 				},
@@ -965,6 +969,28 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 						},
 					},
 					"required": []string{"job_id"},
+				},
+			},
+			gemini.FunctionDeclaration{
+				Name:        "send_message",
+				Description: "Send a message to a Slack channel immediately. Use when asked to post, share, or send something to a specific channel.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"channel": map[string]any{
+							"type":        "string",
+							"description": "Channel name (e.g. #general) or channel ID",
+						},
+						"message": map[string]any{
+							"type":        "string",
+							"description": "Message text (supports Slack mrkdwn formatting)",
+						},
+						"thread_ts": map[string]any{
+							"type":        "string",
+							"description": "Thread timestamp to reply in a specific thread (optional)",
+						},
+					},
+					"required": []string{"channel", "message"},
 				},
 			},
 		)
@@ -1492,11 +1518,16 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 				}
 			}
 		}
-		url, err := e.googleWriter.CreateEvent(ctx, calendarID, summary, description, location, startTime, endTime, attendees)
+		addMeet, _ := call.Args["google_meet"].(bool)
+		url, meetLink, err := e.googleWriter.CreateEvent(ctx, calendarID, summary, description, location, startTime, endTime, attendees, addMeet)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"url": url, "summary": summary}, nil
+		result := map[string]any{"url": url, "summary": summary}
+		if meetLink != "" {
+			result["meet_link"] = meetLink
+		}
+		return result, nil
 
 	case "edit_calendar_event":
 		if e.googleWriter == nil {
@@ -1791,6 +1822,18 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return nil, fmt.Errorf("job_id is required")
 		}
 		return e.schedulerManager.CancelJob(jobID)
+
+	case "send_message":
+		if e.schedulerManager == nil {
+			return nil, fmt.Errorf("scheduler is not configured")
+		}
+		channel, _ := call.Args["channel"].(string)
+		message, _ := call.Args["message"].(string)
+		threadTS, _ := call.Args["thread_ts"].(string)
+		if channel == "" || message == "" {
+			return nil, fmt.Errorf("channel and message are required")
+		}
+		return e.schedulerManager.SendMessage(channel, message, threadTS)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)

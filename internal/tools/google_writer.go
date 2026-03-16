@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
@@ -908,7 +909,7 @@ func (w *GoogleWriter) ExportPDF(ctx context.Context, fileID, fileName string) (
 }
 
 // CreateEvent creates a new Google Calendar event.
-func (w *GoogleWriter) CreateEvent(ctx context.Context, calendarID, summary, description, location, startTime, endTime string, attendees []string) (string, error) {
+func (w *GoogleWriter) CreateEvent(ctx context.Context, calendarID, summary, description, location, startTime, endTime string, attendees []string, addMeet bool) (string, string, error) {
 	if calendarID == "" {
 		calendarID = "primary"
 	}
@@ -931,12 +932,35 @@ func (w *GoogleWriter) CreateEvent(ctx context.Context, calendarID, summary, des
 	for _, email := range attendees {
 		event.Attendees = append(event.Attendees, &calendar.EventAttendee{Email: email})
 	}
-	created, err := w.calendarService.Events.Insert(calendarID, event).Context(ctx).SendUpdates("all").Do()
-	if err != nil {
-		return "", fmt.Errorf("create calendar event on %s: %w", calendarID, err)
+	if addMeet {
+		event.ConferenceData = &calendar.ConferenceData{
+			CreateRequest: &calendar.CreateConferenceRequest{
+				RequestId: uuid.New().String(),
+				ConferenceSolutionKey: &calendar.ConferenceSolutionKey{
+					Type: "hangoutsMeet",
+				},
+			},
+		}
 	}
-	w.logger.Info("created calendar event", "summary", summary, "id", created.Id, "url", created.HtmlLink)
-	return created.HtmlLink, nil
+	insertCall := w.calendarService.Events.Insert(calendarID, event).Context(ctx).SendUpdates("all")
+	if addMeet {
+		insertCall = insertCall.ConferenceDataVersion(1)
+	}
+	created, err := insertCall.Do()
+	if err != nil {
+		return "", "", fmt.Errorf("create calendar event on %s: %w", calendarID, err)
+	}
+	var meetLink string
+	if created.ConferenceData != nil {
+		for _, ep := range created.ConferenceData.EntryPoints {
+			if ep.EntryPointType == "video" {
+				meetLink = ep.Uri
+				break
+			}
+		}
+	}
+	w.logger.Info("created calendar event", "summary", summary, "id", created.Id, "url", created.HtmlLink, "meet_link", meetLink)
+	return created.HtmlLink, meetLink, nil
 }
 
 // EditEvent updates an existing Google Calendar event. Only non-empty fields are updated.
@@ -1034,6 +1058,15 @@ func (w *GoogleWriter) ListEvents(ctx context.Context, calendarID, timeMin, time
 		for _, a := range ev.Attendees {
 			attendeeEmails = append(attendeeEmails, a.Email)
 		}
+		var meetLink string
+		if ev.ConferenceData != nil {
+			for _, ep := range ev.ConferenceData.EntryPoints {
+				if ep.EntryPointType == "video" {
+					meetLink = ep.Uri
+					break
+				}
+			}
+		}
 		results = append(results, map[string]any{
 			"id":          ev.Id,
 			"summary":     ev.Summary,
@@ -1044,6 +1077,7 @@ func (w *GoogleWriter) ListEvents(ctx context.Context, calendarID, timeMin, time
 			"url":         ev.HtmlLink,
 			"attendees":   attendeeEmails,
 			"status":      ev.Status,
+			"meet_link":   meetLink,
 		})
 	}
 	w.logger.Info("listed calendar events", "calendar", calendarID, "count", len(results))

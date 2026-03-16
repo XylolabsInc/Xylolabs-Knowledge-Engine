@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -284,4 +285,95 @@ func (sm *SchedulerManager) parseTime(s string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unsupported time format: %s", s)
+}
+
+// SendMessage sends a message to a Slack channel immediately.
+func (sm *SchedulerManager) SendMessage(channel, message, threadTS string) (map[string]any, error) {
+	channelID, err := sm.resolveChannel(channel)
+	if err != nil {
+		return nil, fmt.Errorf("resolve channel %q: %w", channel, err)
+	}
+
+	// Build Block Kit section blocks, splitting long text at 3000 chars
+	const maxBlockTextLen = 3000
+	var blocks []slack.Block
+	text := message
+	for len(text) > 0 {
+		chunk := text
+		if len(chunk) > maxBlockTextLen {
+			cut := strings.LastIndex(chunk[:maxBlockTextLen], "\n\n")
+			if cut < maxBlockTextLen/2 {
+				cut = strings.LastIndex(chunk[:maxBlockTextLen], "\n")
+			}
+			if cut < maxBlockTextLen/2 {
+				cut = maxBlockTextLen
+			}
+			chunk = text[:cut]
+			text = strings.TrimLeft(text[cut:], "\n")
+		} else {
+			text = ""
+		}
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", chunk, false, false),
+			nil, nil,
+		))
+	}
+
+	fallback := message
+	if len(fallback) > 300 {
+		fallback = fallback[:297] + "..."
+	}
+
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(fallback, false),
+		slack.MsgOptionBlocks(blocks...),
+	}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+
+	_, ts, err := sm.slack.PostMessageContext(context.Background(), channelID, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("send message to %s: %w", channel, err)
+	}
+
+	channelName := sm.resolveChannelName(channelID)
+
+	sm.logger.Info("sent message", "channel_id", channelID, "channel_name", channelName, "timestamp", ts)
+
+	return map[string]any{
+		"channel_id":   channelID,
+		"channel_name": channelName,
+		"timestamp":    ts,
+		"status":       "sent",
+	}, nil
+}
+
+// resolveChannelName performs a reverse lookup from channel ID to channel name.
+func (sm *SchedulerManager) resolveChannelName(channelID string) string {
+	// Check cache (reverse lookup: find name where value == channelID)
+	sm.mu.RLock()
+	for name, id := range sm.channels {
+		if id == channelID {
+			sm.mu.RUnlock()
+			return "#" + name
+		}
+	}
+	sm.mu.RUnlock()
+
+	// Fallback: query Slack API
+	info, err := sm.slack.GetConversationInfoContext(context.Background(), &slack.GetConversationInfoInput{
+		ChannelID: channelID,
+	})
+	if err != nil {
+		sm.logger.Debug("failed to resolve channel name", "channel_id", channelID, "error", err)
+		return channelID
+	}
+
+	// Cache for future use
+	sm.mu.Lock()
+	sm.channels[info.Name] = channelID
+	sm.mu.Unlock()
+
+	return "#" + info.Name
 }
