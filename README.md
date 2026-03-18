@@ -38,33 +38,9 @@
 
 ## Architecture
 
-```
-                        ┌─────────────────┐
-        Users ◄────────►│   Bot Handler   │  User-facing
-                        │(Slack / Discord)│  conversational AI
-                        └────────┬────────┘
-                                 │ reads
-                                 ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-│  Slack   │  │ Discord  │  │  Google  │  │  Notion  │
-│Connector │  │Connector │  │Connector │  │Connector │  ◄── Extensible
-└────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘
-     │              │              │              │
-     └──────────────┴──────────────┴──────────────┘
-                    │
-     ┌──────────────┼──────────────┐
-     │              │              │
-┌────▼──────┐ ┌────▼──────┐ ┌─────▼─────┐
-│ KB Engine │ │ Extractor │ │  Storage  │
-│           │ │(PDF/IMG/  │ │ (SQLite)  │
-└─────┬─────┘ │Office/Web)│ └─────┬─────┘
-      │       └───────────┘       │
-      │                           │
-┌─────▼────────┐          ┌───────▼─────┐
-│  KB Repo     │          │    API      │
-│(Markdown/Git)│          │   (HTTP)    │
-└──────────────┘          └─────────────┘
-```
+<p align="center">
+  <img src="docs/architecture-diagram.svg" alt="Xylolabs Knowledge Engine Architecture" width="100%"/>
+</p>
 
 **Data flow:**
 
