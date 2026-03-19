@@ -355,6 +355,31 @@ main() {
         fi
     fi
 
+    # --- Rebuild Indexes ---
+    # Always rebuild indexes to ensure they're consistent with files on disk,
+    # even if no new documents were processed (fixes missing indexes from prior runs).
+    log "Rebuilding knowledge base indexes..."
+    local kb_gen_bin_idx=""
+    for candidate in \
+        "${PROJECT_DIR:-}/bin/kb-gen" \
+        "${REMOTE_DIR:-/opt/xylolabs-kb}/bin/kb-gen"; do
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            kb_gen_bin_idx="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$kb_gen_bin_idx" ]; then
+        if "$kb_gen_bin_idx" --rebuild-indexes --kb-dir "$KB_REPO_DIR" 2>&1; then
+            log "Index rebuild complete"
+            any_processed=true
+        else
+            log "WARNING: Index rebuild failed"
+        fi
+    else
+        log "WARNING: kb-gen binary not found, skipping index rebuild"
+    fi
+
     if [ "$any_processed" = true ]; then
         git_commit_push
     else

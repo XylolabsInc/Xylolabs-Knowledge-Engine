@@ -86,19 +86,20 @@ func parseRetryAfter(errMsg string) time.Duration {
 
 func main() {
 	var (
-		inputPath        string
-		source           string
-		kbDir            string
-		apiKey           string
-		model            string
-		thinkingLevel    string
-		maxDocs          int
-		dryRun           bool
-		force            bool
-		fetchPeople      bool
-		googleCredsFile  string
-		impersonateEmail string
-		domain           string
+		inputPath         string
+		source            string
+		kbDir             string
+		apiKey            string
+		model             string
+		thinkingLevel     string
+		maxDocs           int
+		dryRun            bool
+		force             bool
+		fetchPeople       bool
+		rebuildIndexesFlag bool
+		googleCredsFile   string
+		impersonateEmail  string
+		domain            string
 	)
 
 	flag.StringVar(&inputPath, "input", "", "Path to raw documents JSON file (required)")
@@ -111,6 +112,7 @@ func main() {
 	flag.BoolVar(&dryRun, "dry-run", false, "Print what would be written without writing files")
 	flag.BoolVar(&force, "force", false, "Force reprocessing of all documents, ignoring document map")
 	flag.BoolVar(&fetchPeople, "fetch-people", false, "Fetch Google Workspace directory and generate person knowledge files")
+	flag.BoolVar(&rebuildIndexesFlag, "rebuild-indexes", false, "Rebuild all index/README files from existing content and exit")
 	flag.StringVar(&googleCredsFile, "google-creds", "", "Path to Google service account credentials JSON (or GOOGLE_CREDS_FILE env)")
 	flag.StringVar(&impersonateEmail, "impersonate", "", "Email to impersonate for Admin SDK (or GOOGLE_IMPERSONATE_EMAIL env)")
 	flag.StringVar(&domain, "domain", "", "Google Workspace domain (or GOOGLE_DOMAIN env, e.g. xylolabs.com)")
@@ -160,6 +162,19 @@ func main() {
 		}
 		if err := fetchAndWritePeople(googleCredsFile, impersonateEmail, domain, kbDir, dryRun, logger); err != nil {
 			logger.Error("failed to fetch people", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Index rebuild mode — scans existing files and rebuilds all index/README files
+	if rebuildIndexesFlag {
+		if kbDir == "" {
+			fmt.Fprintf(os.Stderr, "Error: --kb-dir is required for --rebuild-indexes\n")
+			os.Exit(1)
+		}
+		if err := rebuildAllIndexes(kbDir, dryRun, logger); err != nil {
+			logger.Error("failed to rebuild indexes", "error", err)
 			os.Exit(1)
 		}
 		return
@@ -340,6 +355,11 @@ func main() {
 		if err := updateDocumentMap(kbDir, allDocMappings); err != nil {
 			logger.Error("failed to update document map", "error", err)
 		}
+	}
+
+	// Rebuild indexes for this source after batch processing
+	if err := rebuildSourceIndexes(kbDir, source, dryRun, logger); err != nil {
+		logger.Error("failed to rebuild indexes for source", "source", source, "error", err)
 	}
 
 	logger.Info("kb-gen complete",
