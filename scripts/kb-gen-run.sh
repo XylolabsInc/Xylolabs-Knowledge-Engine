@@ -14,7 +14,21 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 KB_DIR="${KB_REPO_DIR:-/opt/knowledge}"
 API_URL="${API_URL:-http://localhost:8080}"
-KB_GEN="${SCRIPT_DIR}/../kb-gen"
+# Find kb-gen binary: try bin/ first, then script sibling
+KB_GEN=""
+for candidate in \
+    "${SCRIPT_DIR}/../bin/kb-gen" \
+    "/opt/xylolabs-kb/bin/kb-gen" \
+    "${SCRIPT_DIR}/../kb-gen"; do
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+        KB_GEN="$candidate"
+        break
+    fi
+done
+if [ -z "$KB_GEN" ]; then
+    echo "ERROR: kb-gen binary not found" >&2
+    exit 1
+fi
 WORK_DIR="/tmp/kb-gen-work"
 SOURCES=("slack" "google" "notion")
 PAGE_SIZE=200
@@ -149,6 +163,10 @@ PYEOF
     # Clean up
     rm -f "$OUTPUT_FILE"
 done
+
+# Rebuild all index/README files from existing content
+echo "[kb-gen] Rebuilding indexes..."
+"$KB_GEN" --rebuild-indexes --kb-dir "$KB_DIR" || echo "[kb-gen] WARNING: index rebuild failed"
 
 # Git commit and push changes in KB repo
 if [ -d "$KB_DIR/.git" ]; then
