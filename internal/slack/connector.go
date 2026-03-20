@@ -29,6 +29,9 @@ type Connector struct {
 	userCache   map[string]*slack.User
 	userCacheMu sync.RWMutex
 
+	channelCache   map[string]string // channel ID → channel name
+	channelCacheMu sync.RWMutex
+
 	botToken string
 	appToken string
 
@@ -57,6 +60,7 @@ func NewConnector(botToken, appToken string, engine *kb.Engine, store kb.Storage
 		store:        store,
 		logger:       logger.With("component", "slack-connector"),
 		userCache:    make(map[string]*slack.User),
+		channelCache: make(map[string]string),
 		botToken:     botToken,
 		appToken:     appToken,
 		limiter:      rate.NewLimiter(rate.Limit(1), 1),
@@ -128,6 +132,13 @@ func (c *Connector) Sync() error {
 	c.joinAllChannels(ctx, channels)
 
 	c.logger.Info("syncing slack channels", "count", len(channels))
+
+	// Pre-populate channel name cache from sync data
+	c.channelCacheMu.Lock()
+	for _, ch := range channels {
+		c.channelCache[ch.ID] = ch.Name
+	}
+	c.channelCacheMu.Unlock()
 
 	var totalMessages int
 	for _, ch := range channels {
@@ -245,7 +256,8 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event slackevents.Event
 			}
 
 			user := c.resolveUser(ctx, ev.User)
-			doc := ConvertMessage(ev, user, "")
+			channelName := c.resolveChannelName(ctx, ev.Channel)
+			doc := ConvertMessage(ev, user, channelName)
 			// Extract content from file attachments and URLs
 			if c.extractor != nil && ev.Message != nil {
 				EnrichDocumentContent(ctx, &doc, ev.Message.Files, c.extractor, c.botToken)
@@ -482,4 +494,36 @@ func (c *Connector) resolveUser(ctx context.Context, userID string) *slack.User 
 	c.userCacheMu.Unlock()
 
 	return info
+}
+
+// resolveChannelName resolves a channel ID to its name, using a cache.
+func (c *Connector) resolveChannelName(ctx context.Context, channelID string) string {
+	if channelID == "" {
+		return ""
+	}
+
+	c.channelCacheMu.RLock()
+	name, ok := c.channelCache[channelID]
+	c.channelCacheMu.RUnlock()
+	if ok {
+		return name
+	}
+
+	if err := c.waitRateLimit(ctx); err != nil {
+		c.logger.Debug("rate limit wait failed", "channel_id", channelID, "error", err)
+		return channelID
+	}
+	info, err := c.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+		ChannelID: channelID,
+	})
+	if err != nil {
+		c.logger.Debug("failed to resolve channel name", "channel_id", channelID, "error", err)
+		return channelID
+	}
+
+	c.channelCacheMu.Lock()
+	c.channelCache[channelID] = info.Name
+	c.channelCacheMu.Unlock()
+
+	return info.Name
 }
