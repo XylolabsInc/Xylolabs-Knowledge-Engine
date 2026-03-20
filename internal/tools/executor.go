@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
+	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
 
 // ToolExecutor manages available tools and dispatches function calls.
@@ -18,20 +19,22 @@ type ToolExecutor struct {
 	logger            *slog.Logger
 	defaultCalendarID string
 	schedulerManager  *SchedulerManager
+	store             kb.Storage
 
 	mu          sync.Mutex
 	attachments map[string][]byte // file name → data, from Slack file downloads
 }
 
 // NewToolExecutor creates a ToolExecutor.
-// Either writer can be nil if not configured.
-func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, ss *Screenshotter, sm *SchedulerManager, logger *slog.Logger) *ToolExecutor {
+// Either writer can be nil if not configured. store can be nil if search is not needed.
+func NewToolExecutor(gw *GoogleWriter, nw *NotionWriter, defaultCalendarID string, ss *Screenshotter, sm *SchedulerManager, store kb.Storage, logger *slog.Logger) *ToolExecutor {
 	return &ToolExecutor{
 		googleWriter:      gw,
 		notionWriter:      nw,
 		screenshotter:     ss,
 		defaultCalendarID: defaultCalendarID,
 		schedulerManager:  sm,
+		store:             store,
 		logger:            logger.With("component", "tool-executor"),
 		attachments:       make(map[string][]byte),
 	}
@@ -996,6 +999,42 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		)
 	}
 
+	// --- Knowledge Base Search Tool ---
+	if e.store != nil {
+		decls = append(decls,
+			gemini.FunctionDeclaration{
+				Name:        "search_knowledge_base",
+				Description: "Search the knowledge base for messages, documents, and conversations using full-text search. Use when the user asks to find specific keywords, messages, or content across Slack, Google, and Notion.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{
+							"type":        "string",
+							"description": "Search keywords",
+						},
+						"source": map[string]any{
+							"type":        "string",
+							"description": "Filter by source (slack, google, notion, discord)",
+						},
+						"channel": map[string]any{
+							"type":        "string",
+							"description": "Filter by channel name",
+						},
+						"author": map[string]any{
+							"type":        "string",
+							"description": "Filter by author name",
+						},
+						"limit": map[string]any{
+							"type":        "number",
+							"description": "Max results (default 10, max 50)",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		)
+	}
+
 	return decls
 }
 
@@ -1834,6 +1873,59 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return nil, fmt.Errorf("channel and message are required")
 		}
 		return e.schedulerManager.SendMessage(channel, message, threadTS)
+
+	// --- Knowledge Base Search ---
+	case "search_knowledge_base":
+		if e.store == nil {
+			return nil, fmt.Errorf("knowledge base search is not configured")
+		}
+		query, _ := call.Args["query"].(string)
+		if query == "" {
+			return nil, fmt.Errorf("query is required")
+		}
+		source, _ := call.Args["source"].(string)
+		channel, _ := call.Args["channel"].(string)
+		author, _ := call.Args["author"].(string)
+		limit := 10
+		if v, ok := call.Args["limit"].(float64); ok && v > 0 {
+			limit = int(v)
+		}
+		if limit > 50 {
+			limit = 50
+		}
+
+		sq := kb.SearchQuery{
+			Query:   query,
+			Source:  kb.Source(source),
+			Channel: channel,
+			Author:  author,
+			Limit:   limit,
+		}
+		results, err := e.store.Search(sq)
+		if err != nil {
+			return nil, fmt.Errorf("search failed: %w", err)
+		}
+
+		var items []map[string]any
+		for _, r := range results {
+			item := map[string]any{
+				"author":    r.Document.Author,
+				"channel":   r.Document.Channel,
+				"source":    string(r.Document.Source),
+				"timestamp": r.Document.Timestamp.Format("2006-01-02 15:04"),
+				"snippet":   r.Snippet,
+				"score":     r.Score,
+			}
+			if r.Document.Title != "" {
+				item["title"] = r.Document.Title
+			}
+			if r.Document.URL != "" {
+				item["url"] = r.Document.URL
+			}
+			items = append(items, item)
+		}
+
+		return map[string]any{"results": items, "count": len(items), "query": query}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)
