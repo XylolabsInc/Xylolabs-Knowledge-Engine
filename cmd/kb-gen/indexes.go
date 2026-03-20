@@ -142,8 +142,68 @@ func rebuildChannelIndexes(kbDir, source string, dryRun bool, logger *slog.Logge
 	return generateSourceReadme(kbDir, source, channels, dryRun, logger)
 }
 
+// parseMarkdownSections splits a markdown file into sections by ## headers.
+// Returns a slice of {header, body} pairs. Content before the first ## header
+// is returned with an empty header string.
+type markdownSection struct {
+	Header string // e.g. "## Purpose" (empty for preamble)
+	Body   string
+}
+
+func parseMarkdownSections(content string) []markdownSection {
+	var sections []markdownSection
+	lines := strings.Split(content, "\n")
+	var currentHeader string
+	var currentBody strings.Builder
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			// Save previous section
+			sections = append(sections, markdownSection{
+				Header: currentHeader,
+				Body:   currentBody.String(),
+			})
+			currentHeader = line
+			currentBody.Reset()
+		} else {
+			if currentBody.Len() > 0 || line != "" {
+				if currentBody.Len() > 0 {
+					currentBody.WriteString("\n")
+				}
+				currentBody.WriteString(line)
+			}
+		}
+	}
+	// Save last section
+	sections = append(sections, markdownSection{
+		Header: currentHeader,
+		Body:   currentBody.String(),
+	})
+
+	return sections
+}
+
 // generateChannelReadme writes a README.md for a single channel.
+// It preserves existing hand-written or Gemini-generated sections (e.g. Purpose,
+// Recurring Topics) and only regenerates the frontmatter and Recent Activity table.
 func generateChannelReadme(kbDir, source string, ch channelSummary, dryRun bool, logger *slog.Logger) error {
+	relPath := filepath.Join(source, "channels", ch.Name, "README.md")
+	fullPath := filepath.Join(kbDir, relPath)
+
+	// Read existing file to preserve non-auto-generated sections
+	var preservedSections []markdownSection
+	if existing, err := os.ReadFile(fullPath); err == nil {
+		sections := parseMarkdownSections(string(existing))
+		for _, s := range sections {
+			headerName := strings.TrimSpace(strings.TrimPrefix(s.Header, "##"))
+			// Skip sections we regenerate: preamble (frontmatter+title), Recent Activity
+			if s.Header == "" || strings.EqualFold(headerName, "Recent Activity") {
+				continue
+			}
+			preservedSections = append(preservedSections, s)
+		}
+	}
+
 	// Aggregate participants and keywords across all digests
 	participantSet := make(map[string]struct{})
 	keywordSet := make(map[string]struct{})
@@ -178,6 +238,15 @@ func generateChannelReadme(kbDir, source string, ch channelSummary, dryRun bool,
 
 	sb.WriteString(fmt.Sprintf("# #%s\n\n", ch.Name))
 
+	// Write preserved sections (Purpose, Recurring Topics, etc.) before Recent Activity
+	for _, s := range preservedSections {
+		sb.WriteString(s.Header + "\n\n")
+		body := strings.TrimSpace(s.Body)
+		if body != "" {
+			sb.WriteString(body + "\n\n")
+		}
+	}
+
 	sb.WriteString("## Recent Activity\n\n")
 	sb.WriteString("| Date | Participants | Keywords |\n")
 	sb.WriteString("|------|-------------|----------|\n")
@@ -204,8 +273,6 @@ func generateChannelReadme(kbDir, source string, ch channelSummary, dryRun bool,
 	sb.WriteString("\n")
 
 	content := sb.String()
-	relPath := filepath.Join(source, "channels", ch.Name, "README.md")
-	fullPath := filepath.Join(kbDir, relPath)
 
 	if dryRun {
 		fmt.Printf("[dry-run] Would write index: %s (%d bytes)\n", relPath, len(content))
@@ -216,22 +283,132 @@ func generateChannelReadme(kbDir, source string, ch channelSummary, dryRun bool,
 	return writeFile(fullPath, content)
 }
 
+// parseSourceTableRow extracts channel name and extra columns from a markdown table row.
+// Returns channelName and a map of extra values keyed by column header.
+func parseSourceTableRow(row string, headers []string) (string, map[string]string) {
+	cells := strings.Split(strings.Trim(row, "|"), "|")
+	extras := make(map[string]string)
+	var channelName string
+
+	for i, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		if i == 0 {
+			// Extract channel name from "[#name](./channels/name/)" or plain "#name"
+			if idx := strings.Index(cell, "]("); idx > 0 {
+				channelName = strings.TrimPrefix(cell[:idx], "[#")
+			} else {
+				channelName = strings.TrimPrefix(cell, "#")
+			}
+		} else if i < len(headers) {
+			// Store extra columns (Purpose, Recent Topics, etc.) beyond the standard ones
+			header := strings.TrimSpace(headers[i])
+			if header != "Last Activity" && header != "Digests" {
+				extras[header] = cell
+			}
+		}
+	}
+	return channelName, extras
+}
+
 // generateSourceReadme writes the master README.md for a source (e.g., slack/README.md).
+// It preserves extra columns (Purpose, Recent Topics) and non-table sections from the existing file.
 func generateSourceReadme(kbDir, source string, channels []channelSummary, dryRun bool, logger *slog.Logger) error {
+	relPath := filepath.Join(source, "README.md")
+	fullPath := filepath.Join(kbDir, relPath)
+
+	// Read existing file to preserve extra table columns and non-Channels sections
+	existingExtras := make(map[string]map[string]string) // channelName → {colHeader → value}
+	var extraHeaders []string                             // extra column headers beyond standard ones
+	var preservedSections []markdownSection
+
+	if existing, err := os.ReadFile(fullPath); err == nil {
+		sections := parseMarkdownSections(string(existing))
+		for _, s := range sections {
+			headerName := strings.TrimSpace(strings.TrimPrefix(s.Header, "##"))
+			if strings.EqualFold(headerName, "Channels") {
+				// Parse the table to extract extra columns
+				lines := strings.Split(s.Body, "\n")
+				var tableHeaders []string
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" || strings.HasPrefix(line, "<!--") || line == "_No channels synced yet._" {
+						continue
+					}
+					if strings.Contains(line, "---") && strings.HasPrefix(line, "|") {
+						continue // separator row
+					}
+					if strings.HasPrefix(line, "|") {
+						if len(tableHeaders) == 0 {
+							// Parse header row
+							cells := strings.Split(strings.Trim(line, "|"), "|")
+							for _, c := range cells {
+								tableHeaders = append(tableHeaders, strings.TrimSpace(c))
+							}
+							// Identify extra headers beyond Channel, Last Activity, Digests
+							for _, h := range tableHeaders {
+								if h != "Channel" && h != "Last Activity" && h != "Digests" && h != "" {
+									extraHeaders = append(extraHeaders, h)
+								}
+							}
+						} else {
+							// Data row
+							chName, extras := parseSourceTableRow(line, tableHeaders)
+							if chName != "" && len(extras) > 0 {
+								existingExtras[chName] = extras
+							}
+						}
+					}
+				}
+			} else if s.Header != "" {
+				// Preserve non-Channels sections
+				preservedSections = append(preservedSections, s)
+			}
+		}
+	}
+
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("# %s\n\n", sourceDisplayName(source)))
 	sb.WriteString("Message digests organized by channel and date.\n\n")
+
+	// Write preserved sections before Channels
+	for _, s := range preservedSections {
+		sb.WriteString(s.Header + "\n\n")
+		body := strings.TrimSpace(s.Body)
+		if body != "" {
+			sb.WriteString(body + "\n\n")
+		}
+	}
+
 	sb.WriteString("## Channels\n\n")
 
 	if len(channels) == 0 {
 		sb.WriteString("_No channels synced yet._\n")
 	} else {
-		sb.WriteString("| Channel | Last Activity | Digests |\n")
-		sb.WriteString("|---------|--------------|--------|\n")
+		// Build header row with any extra columns
+		headerRow := "| Channel | Last Activity | Digests |"
+		sepRow := "|---------|--------------|--------|"
+		for _, h := range extraHeaders {
+			headerRow += fmt.Sprintf(" %s |", h)
+			sepRow += strings.Repeat("-", len(h)+2) + "|"
+		}
+		sb.WriteString(headerRow + "\n")
+		sb.WriteString(sepRow + "\n")
+
 		for _, ch := range channels {
-			sb.WriteString(fmt.Sprintf("| [#%s](./channels/%s/) | %s | %d |\n",
-				ch.Name, ch.Name, ch.LastDate, ch.FileCount))
+			row := fmt.Sprintf("| [#%s](./channels/%s/) | %s | %d |",
+				ch.Name, ch.Name, ch.LastDate, ch.FileCount)
+			// Carry forward extra column values from existing table
+			if extras, ok := existingExtras[ch.Name]; ok {
+				for _, h := range extraHeaders {
+					row += fmt.Sprintf(" %s |", extras[h])
+				}
+			} else {
+				for range extraHeaders {
+					row += " |"
+				}
+			}
+			sb.WriteString(row + "\n")
 		}
 	}
 
@@ -239,8 +416,6 @@ func generateSourceReadme(kbDir, source string, channels []channelSummary, dryRu
 		time.Now().UTC().Format(time.RFC3339)))
 
 	content := sb.String()
-	relPath := filepath.Join(source, "README.md")
-	fullPath := filepath.Join(kbDir, relPath)
 
 	if dryRun {
 		fmt.Printf("[dry-run] Would write index: %s (%d bytes)\n", relPath, len(content))
@@ -256,6 +431,7 @@ func generateSourceReadme(kbDir, source string, channels []channelSummary, dryRu
 }
 
 // rebuildDocSourceIndex rebuilds the README.md for a document source (google/notion).
+// It preserves extra table columns and non-Documents sections from the existing file.
 func rebuildDocSourceIndex(kbDir, source, subDir string, dryRun bool, logger *slog.Logger) error {
 	docsDir := filepath.Join(kbDir, source, subDir)
 
@@ -289,6 +465,74 @@ func rebuildDocSourceIndex(kbDir, source, subDir string, dryRun bool, logger *sl
 		return docs[i].Title < docs[j].Title
 	})
 
+	relPath := filepath.Join(source, "README.md")
+	fullPath := filepath.Join(kbDir, relPath)
+
+	// Read existing file to preserve extra table columns and non-Documents sections
+	existingDocExtras := make(map[string]map[string]string) // slug → {colHeader → value}
+	var extraHeaders []string
+	var preservedSections []markdownSection
+
+	if existing, err := os.ReadFile(fullPath); err == nil {
+		sections := parseMarkdownSections(string(existing))
+		for _, s := range sections {
+			headerName := strings.TrimSpace(strings.TrimPrefix(s.Header, "##"))
+			if strings.EqualFold(headerName, "Documents") {
+				// Parse table to extract extra columns
+				lines := strings.Split(s.Body, "\n")
+				var tableHeaders []string
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" || strings.HasPrefix(line, "<!--") || line == "_No documents synced yet._" {
+						continue
+					}
+					if strings.Contains(line, "---") && strings.HasPrefix(line, "|") {
+						continue
+					}
+					if strings.HasPrefix(line, "|") {
+						if len(tableHeaders) == 0 {
+							cells := strings.Split(strings.Trim(line, "|"), "|")
+							for _, c := range cells {
+								tableHeaders = append(tableHeaders, strings.TrimSpace(c))
+							}
+							for _, h := range tableHeaders {
+								if h != "Title" && h != "Author" && h != "Last Updated" && h != "" {
+									extraHeaders = append(extraHeaders, h)
+								}
+							}
+						} else {
+							// Extract slug from link "[title](./subDir/slug.md)"
+							cells := strings.Split(strings.Trim(line, "|"), "|")
+							var slug string
+							extras := make(map[string]string)
+							for i, cell := range cells {
+								cell = strings.TrimSpace(cell)
+								if i == 0 {
+									if start := strings.Index(cell, "](./"+subDir+"/"); start > 0 {
+										rest := cell[start+len("](./"+subDir+"/"):]
+										if end := strings.Index(rest, ".md)"); end > 0 {
+											slug = rest[:end]
+										}
+									}
+								} else if i < len(tableHeaders) {
+									header := strings.TrimSpace(tableHeaders[i])
+									if header != "Author" && header != "Last Updated" {
+										extras[header] = cell
+									}
+								}
+							}
+							if slug != "" && len(extras) > 0 {
+								existingDocExtras[slug] = extras
+							}
+						}
+					}
+				}
+			} else if s.Header != "" {
+				preservedSections = append(preservedSections, s)
+			}
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# %s\n\n", sourceDisplayName(source)))
 	switch source {
@@ -297,20 +541,47 @@ func rebuildDocSourceIndex(kbDir, source, subDir string, dryRun bool, logger *sl
 	case "notion":
 		sb.WriteString("Pages synced from Notion.\n\n")
 	}
+
+	// Write preserved sections before Documents
+	for _, s := range preservedSections {
+		sb.WriteString(s.Header + "\n\n")
+		body := strings.TrimSpace(s.Body)
+		if body != "" {
+			sb.WriteString(body + "\n\n")
+		}
+	}
+
 	sb.WriteString("## Documents\n\n")
 
 	if len(docs) == 0 {
 		sb.WriteString("_No documents synced yet._\n")
 	} else {
-		sb.WriteString("| Title | Author | Last Updated |\n")
-		sb.WriteString("|-------|--------|-------------|\n")
+		headerRow := "| Title | Author | Last Updated |"
+		sepRow := "|-------|--------|-------------|"
+		for _, h := range extraHeaders {
+			headerRow += fmt.Sprintf(" %s |", h)
+			sepRow += strings.Repeat("-", len(h)+2) + "|"
+		}
+		sb.WriteString(headerRow + "\n")
+		sb.WriteString(sepRow + "\n")
+
 		for _, doc := range docs {
 			title := doc.Title
 			if title == "" {
 				title = doc.Slug
 			}
-			sb.WriteString(fmt.Sprintf("| [%s](./%s/%s.md) | %s | %s |\n",
-				title, subDir, doc.Slug, doc.Author, doc.UpdatedAt))
+			row := fmt.Sprintf("| [%s](./%s/%s.md) | %s | %s |",
+				title, subDir, doc.Slug, doc.Author, doc.UpdatedAt)
+			if extras, ok := existingDocExtras[doc.Slug]; ok {
+				for _, h := range extraHeaders {
+					row += fmt.Sprintf(" %s |", extras[h])
+				}
+			} else {
+				for range extraHeaders {
+					row += " |"
+				}
+			}
+			sb.WriteString(row + "\n")
 		}
 	}
 
@@ -318,8 +589,6 @@ func rebuildDocSourceIndex(kbDir, source, subDir string, dryRun bool, logger *sl
 		time.Now().UTC().Format(time.RFC3339)))
 
 	content := sb.String()
-	relPath := filepath.Join(source, "README.md")
-	fullPath := filepath.Join(kbDir, relPath)
 
 	if dryRun {
 		fmt.Printf("[dry-run] Would write index: %s (%d bytes)\n", relPath, len(content))
