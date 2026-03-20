@@ -546,9 +546,9 @@ func (s *Server) handleKBDocTree(w http.ResponseWriter, r *http.Request) {
 
 	var tree []*node
 	for src, channels := range sourceMap {
-		srcNode := &node{Name: src, Path: "db/" + src, IsDir: true}
+		srcNode := &node{Name: src, Path: src, IsDir: true}
 		for ch, docs := range channels {
-			chNode := &node{Name: ch, Path: "db/" + src + "/" + ch, IsDir: true}
+			chNode := &node{Name: ch, Path: src + "/" + ch, IsDir: true}
 			for _, doc := range docs {
 				title := doc.Title
 				if title == "" {
