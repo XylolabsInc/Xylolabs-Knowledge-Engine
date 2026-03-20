@@ -139,6 +139,9 @@ type Storage interface {
 	// Search
 	Search(query SearchQuery) ([]SearchResult, error)
 
+	// Channel rename
+	RenameChannel(source Source, oldName, newName string) (int64, error)
+
 	// Sync state
 	GetSyncState(source Source) (*SyncState, error)
 	SetSyncState(state SyncState) error

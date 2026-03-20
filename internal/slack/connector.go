@@ -133,10 +133,20 @@ func (c *Connector) Sync() error {
 
 	c.logger.Info("syncing slack channels", "count", len(channels))
 
-	// Pre-populate channel name cache from sync data
+	// Pre-populate channel name cache and detect renames
 	c.channelCacheMu.Lock()
 	for _, ch := range channels {
-		c.channelCache[ch.ID] = ch.Name
+		normalizedName := kb.NormalizeChannel(ch.Name)
+		if oldName, exists := c.channelCache[ch.ID]; exists && oldName != normalizedName {
+			// Channel was renamed — update all existing documents
+			count, err := c.engine.RenameChannel(kb.SourceSlack, oldName, normalizedName)
+			if err != nil {
+				c.logger.Warn("failed to rename channel in DB", "old", oldName, "new", normalizedName, "error", err)
+			} else if count > 0 {
+				c.logger.Info("channel renamed in DB", "old", oldName, "new", normalizedName, "documents", count)
+			}
+		}
+		c.channelCache[ch.ID] = normalizedName
 	}
 	c.channelCacheMu.Unlock()
 
@@ -225,6 +235,24 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event slackevents.Event
 					c.logger.Info("auto-joined new channel", "channel", ev.Channel.Name)
 				}
 			}()
+		case *slackevents.ChannelRenameEvent:
+			newName := kb.NormalizeChannel(ev.Channel.Name)
+			c.channelCacheMu.Lock()
+			oldName := c.channelCache[ev.Channel.ID]
+			c.channelCache[ev.Channel.ID] = newName
+			c.channelCacheMu.Unlock()
+
+			if oldName != "" && oldName != newName {
+				c.logger.Info("channel renamed", "old", oldName, "new", newName, "channel_id", ev.Channel.ID)
+				go func() {
+					count, err := c.engine.RenameChannel(kb.SourceSlack, oldName, newName)
+					if err != nil {
+						c.logger.Warn("failed to rename channel in DB", "old", oldName, "new", newName, "error", err)
+					} else {
+						c.logger.Info("renamed channel in DB", "old", oldName, "new", newName, "documents", count)
+					}
+				}()
+			}
 		case *slackevents.MessageEvent:
 			if ev.BotID != "" || ev.SubType == "bot_message" {
 				return

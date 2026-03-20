@@ -94,6 +94,11 @@ func (e *Engine) Search(ctx context.Context, query SearchQuery) ([]SearchResult,
 	return results, nil
 }
 
+// RenameChannel updates all documents from oldName to newName for a source.
+func (e *Engine) RenameChannel(source Source, oldName, newName string) (int64, error) {
+	return e.store.RenameChannel(source, oldName, newName)
+}
+
 // GetDocument retrieves a document by its internal ID.
 func (e *Engine) GetDocument(ctx context.Context, id string) (*Document, error) {
 	doc, err := e.store.GetDocument(id)

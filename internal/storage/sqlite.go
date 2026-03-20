@@ -122,6 +122,18 @@ func (s *SQLiteStore) DeleteDocument(id string) error {
 	return nil
 }
 
+// RenameChannel updates all documents with oldName to newName for a given source.
+func (s *SQLiteStore) RenameChannel(source kb.Source, oldName, newName string) (int64, error) {
+	result, err := s.db.Exec(
+		"UPDATE documents SET channel = ? WHERE source = ? AND channel = ?",
+		newName, string(source), oldName,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("rename channel %s -> %s: %w", oldName, newName, err)
+	}
+	return result.RowsAffected()
+}
+
 // UpsertAttachment inserts or updates an attachment.
 func (s *SQLiteStore) UpsertAttachment(att kb.Attachment) error {
 	_, err := s.db.Exec(`
