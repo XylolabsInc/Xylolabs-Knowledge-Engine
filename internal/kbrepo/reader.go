@@ -389,6 +389,25 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		}
 	}
 
+	// Apply recency boost: files with more recent dates in their path get a bonus.
+	now := time.Now()
+	dateRe := regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
+	for path, score := range fileScores {
+		if m := dateRe.FindString(path); m != "" {
+			if fileDate, err := time.Parse("2006-01-02", m); err == nil {
+				daysSince := now.Sub(fileDate).Hours() / 24
+				switch {
+				case daysSince <= 7:
+					fileScores[path] = score * 3.0
+				case daysSince <= 30:
+					fileScores[path] = score * 2.0
+				case daysSince <= 90:
+					fileScores[path] = score * 1.5
+				}
+			}
+		}
+	}
+
 	// Sort by score and take top results
 	type scored struct {
 		path  string

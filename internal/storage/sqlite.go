@@ -210,7 +210,15 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) ([]kb.SearchResult, error) {
 		baseQuery += " AND " + strings.Join(conditions, " AND ")
 	}
 
-	baseQuery += " ORDER BY score LIMIT ? OFFSET ?"
+	// Blend BM25 relevance with recency: newer documents get a boost.
+	// bm25() returns negative scores (lower = more relevant), so we add a
+	// recency bonus that decays over 90 days. The result is still negative;
+	// ORDER BY ascending gives best results first.
+	baseQuery += ` ORDER BY (score + CASE
+		WHEN d.timestamp > datetime('now', '-7 days') THEN -5.0
+		WHEN d.timestamp > datetime('now', '-30 days') THEN -3.0
+		WHEN d.timestamp > datetime('now', '-90 days') THEN -1.0
+		ELSE 0.0 END) LIMIT ? OFFSET ?`
 	args = append(args, query.Limit, query.Offset)
 
 	rows, err := s.db.Query(baseQuery, args...)
