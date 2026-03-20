@@ -31,6 +31,9 @@ func (e *Engine) Index(ctx context.Context, doc Document) error {
 	if doc.UpdatedAt.IsZero() {
 		doc.UpdatedAt = doc.Timestamp
 	}
+	if doc.Channel != "" {
+		doc.Channel = NormalizeChannel(doc.Channel)
+	}
 
 	if err := e.store.UpsertDocument(doc); err != nil {
 		return fmt.Errorf("index document %s: %w", doc.ID, err)

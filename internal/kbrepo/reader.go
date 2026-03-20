@@ -663,21 +663,24 @@ func sanitizeMarkdownLinkText(s string) string {
 }
 
 // slugify converts a string to a URL/filesystem-safe slug.
+// Uses the same normalization logic as kb.NormalizeChannel: lowercase,
+// underscores/spaces → hyphens, preserves unicode letters, collapses hyphens.
 func slugify(s string) string {
-	s = strings.ToLower(s)
+	s = strings.ToLower(strings.TrimSpace(s))
 	var b strings.Builder
+	prevHyphen := false
 	for _, r := range s {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(r)
+			prevHyphen = false
 		} else if r == ' ' || r == '-' || r == '_' {
-			b.WriteByte('-')
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
 		}
 	}
 	slug := strings.Trim(b.String(), "-")
-	// Collapse multiple hyphens.
-	for strings.Contains(slug, "--") {
-		slug = strings.ReplaceAll(slug, "--", "-")
-	}
 	if len(slug) > 80 {
 		slug = slug[:80]
 	}

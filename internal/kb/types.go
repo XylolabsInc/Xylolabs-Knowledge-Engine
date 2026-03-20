@@ -1,6 +1,10 @@
 package kb
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode"
+)
 
 // Source identifies the origin system of a document.
 type Source string
@@ -12,6 +16,27 @@ const (
 	SourceDiscord Source = "discord"
 	SourceManual  Source = "manual"
 )
+
+// NormalizeChannel converts a channel name to a canonical form: lowercase,
+// underscores and spaces replaced with hyphens, collapsed and trimmed.
+// This ensures consistent naming between the DB, KB filesystem, and indexes.
+func NormalizeChannel(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			prevHyphen = false
+		} else if r == '-' || r == '_' || r == ' ' {
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
 
 // Document represents a single piece of content in the knowledge base.
 type Document struct {

@@ -191,7 +191,7 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) ([]kb.SearchResult, error) {
 	}
 	if query.Channel != "" {
 		conditions = append(conditions, "d.channel = ?")
-		args = append(args, query.Channel)
+		args = append(args, kb.NormalizeChannel(query.Channel))
 	}
 	if query.Author != "" {
 		conditions = append(conditions, "d.author = ?")

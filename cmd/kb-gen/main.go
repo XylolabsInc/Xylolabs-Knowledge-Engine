@@ -833,34 +833,42 @@ func updateDocumentMap(kbDir string, newMappings DocumentMap) error {
 	return nil
 }
 
-// normalizeFilePath normalizes underscores to hyphens in path segments
+// normalizeFilePath normalizes directory segments in a path using sanitizeSlug
 // to prevent duplicate folders (e.g., "02_rnd" vs "02-rnd").
 func normalizeFilePath(p string) string {
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
-		// Don't touch the filename (last segment) if it's a date-based .md file
+		// Don't touch the filename (last segment)
 		if i == len(parts)-1 {
 			break
 		}
-		parts[i] = strings.ReplaceAll(part, "_", "-")
+		parts[i] = sanitizeSlug(part)
 	}
 	return strings.Join(parts, "/")
 }
 
 // sanitizeSlug converts a string to a filesystem-safe slug.
+// Uses the same normalization logic as kb.NormalizeChannel: lowercase,
+// underscores/spaces → hyphens, preserves unicode letters.
 func sanitizeSlug(s string) string {
-	s = strings.ToLower(s)
+	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.TrimPrefix(s, "#")
-	s = strings.TrimSpace(s)
-	// Replace non-alphanumeric characters with hyphens
-	re := regexp.MustCompile(`[^a-z0-9-]+`)
-	s = re.ReplaceAllString(s, "-")
-	// Collapse multiple hyphens
-	re = regexp.MustCompile(`-{2,}`)
-	s = re.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if s == "" {
-		s = "general"
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r > 127 {
+			b.WriteRune(r)
+			prevHyphen = false
+		} else if r == '-' || r == '_' || r == ' ' {
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
 	}
-	return s
+	result := strings.Trim(b.String(), "-")
+	if result == "" {
+		result = "general"
+	}
+	return result
 }
