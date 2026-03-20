@@ -113,7 +113,7 @@ func Load() *Config {
 		ConsoleUsername: envOrDefault("CONSOLE_USERNAME", "admin"),
 		ConsolePassword: envOrDefault("CONSOLE_PASSWORD", ""),
 
-		SlackSyncInterval:  envOrDefaultDuration("SLACK_SYNC_INTERVAL", 5*time.Minute),
+		SlackSyncInterval:  envOrDefaultDuration("SLACK_SYNC_INTERVAL", 1*time.Hour),
 		GoogleSyncInterval: envOrDefaultDuration("GOOGLE_SYNC_INTERVAL", 15*time.Minute),
 		NotionSyncInterval:  envOrDefaultDuration("NOTION_SYNC_INTERVAL", 10*time.Minute),
 		DiscordSyncInterval: envOrDefaultDuration("DISCORD_SYNC_INTERVAL", 5*time.Minute),
