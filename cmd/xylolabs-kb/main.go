@@ -249,7 +249,7 @@ func main() {
 		ss := tools.NewScreenshotter(logger)
 		slackPoster := tools.NewSlackMessagePoster(slack.New(cfg.SlackBotToken), logger)
 		sm := tools.NewSchedulerManager(store, slackPoster, slackPoster, cfg.Location(), logger)
-		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, sm, logger)
+		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, sm, store, logger)
 		botHandler.SetToolExecutor(toolExecutor)
 		logger.Info("tool executor enabled",
 			"google_drive", gw != nil,
@@ -274,7 +274,7 @@ func main() {
 		ss := tools.NewScreenshotter(logger)
 		discordPoster := bot.NewDiscordMessagePoster(discordPlatform.Session(), cfg.DiscordGuildID, logger)
 		discordSM := tools.NewSchedulerManager(store, discordPoster, discordPoster, cfg.Location(), logger)
-		discordToolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, discordSM, logger)
+		discordToolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, discordSM, store, logger)
 		discordBotHandler.SetToolExecutor(discordToolExecutor)
 		logger.Info("discord tool executor enabled")
 
