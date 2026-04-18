@@ -148,7 +148,7 @@ func (c *Connector) Sync(ctx context.Context) error {
 			continue
 		}
 		totalMessages += count
-		if lastID > latestMsgID {
+		if snowflakeLess(latestMsgID, lastID) {
 			latestMsgID = lastID
 		}
 	}
