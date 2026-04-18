@@ -184,7 +184,7 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, files []goslac
 			continue
 		}
 
-		data, err := downloadFile(httpClient, fileURL, token)
+		data, err := downloadFile(ctx, httpClient, fileURL, token)
 		if err != nil {
 			continue // skip files we can't download
 		}
@@ -216,8 +216,8 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, files []goslac
 	}
 }
 
-func downloadFile(client *http.Client, url, token string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func downloadFile(ctx context.Context, client *http.Client, url, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("download file: new request: %w", err)
 	}
