@@ -853,6 +853,7 @@ func tokenize(s string) []string {
 // koreanMonthPattern matches Korean month references like "1월", "2월", "12월".
 var koreanMonthPattern = regexp.MustCompile(`(\d{1,2})월`)
 var datePathRe = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
+var yearPattern = regexp.MustCompile(`(20\d{2})년?`)
 
 // extractDatePatterns extracts date path patterns from a query string.
 // "2월" → ["2026-02"], "2025년 3월" → ["2025-03"], "3월" → ["2026-03"].

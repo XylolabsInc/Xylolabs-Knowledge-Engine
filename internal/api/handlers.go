@@ -17,6 +17,14 @@ import (
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
 
+func isValidSource(s kb.Source) bool {
+	switch s {
+	case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual, kb.SourceDiscord:
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := "ok"
 	checks := map[string]string{}
@@ -307,10 +315,7 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kbSource := kb.Source(source)
-	switch kbSource {
-	case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual, kb.SourceDiscord:
-		// valid
-	default:
+	if !isValidSource(kbSource) {
 		writeError(w, http.StatusBadRequest, "unknown source: "+source)
 		return
 	}
@@ -868,8 +873,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // truncateID returns id truncated to maxLen characters, or the full id if shorter.
-const defaultIDTruncLen = 12
-
 func truncateID(id string, maxLen int) string {
 	if len(id) <= maxLen {
 		return id
