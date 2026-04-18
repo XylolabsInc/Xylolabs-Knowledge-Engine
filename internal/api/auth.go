@@ -1,11 +1,8 @@
 package api
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -17,12 +14,12 @@ const (
 	cleanupInterval   = 15 * time.Minute
 
 	csrfTokenLength = 32
-	csrfCookieName  = "xke_csrf"
 	csrfHeaderName  = "X-CSRF-Token"
 )
 
 type session struct {
 	username  string
+	csrfToken string
 	createdAt time.Time
 }
 
@@ -79,26 +76,38 @@ func (am *authMiddleware) cleanup() {
 	}
 }
 
-func (am *authMiddleware) createSession(username string) (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+func (am *authMiddleware) createSession(username string) (string, string, error) {
+	id, err := randomHex(32)
+	if err != nil {
+		return "", "", err
 	}
-	id := hex.EncodeToString(b)
+	csrfToken, err := am.generateCSRFToken()
+	if err != nil {
+		return "", "", err
+	}
 	am.mu.Lock()
-	am.sessions[id] = &session{username: username, createdAt: time.Now()}
+	am.sessions[id] = &session{username: username, csrfToken: csrfToken, createdAt: time.Now()}
 	am.mu.Unlock()
-	return id, nil
+	return id, csrfToken, nil
 }
 
-func (am *authMiddleware) validateSession(id string) bool {
+func (am *authMiddleware) getSession(id string) (*session, bool) {
 	am.mu.RLock()
 	s, ok := am.sessions[id]
 	am.mu.RUnlock()
 	if !ok {
-		return false
+		return nil, false
 	}
-	return time.Since(s.createdAt) <= sessionTTL
+	if time.Since(s.createdAt) > sessionTTL {
+		am.deleteSession(id)
+		return nil, false
+	}
+	return s, true
+}
+
+func (am *authMiddleware) validateSession(id string) bool {
+	_, ok := am.getSession(id)
+	return ok
 }
 
 func (am *authMiddleware) deleteSession(id string) {
@@ -107,10 +116,8 @@ func (am *authMiddleware) deleteSession(id string) {
 	am.mu.Unlock()
 }
 
-func (am *authMiddleware) generateCSRFToken() string {
-	b := make([]byte, csrfTokenLength)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+func (am *authMiddleware) generateCSRFToken() (string, error) {
+	return randomHex(csrfTokenLength)
 }
 
 func (am *authMiddleware) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -119,11 +126,15 @@ func (am *authMiddleware) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -136,29 +147,22 @@ func (am *authMiddleware) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID, err := am.createSession(req.Username)
+	sessionID, csrfToken, err := am.createSession(req.Username)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
 
+	expiresAt := time.Now().Add(sessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(sessionTTL.Seconds()),
-	})
-
-	csrfToken := am.generateCSRFToken()
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: false, // JS needs to read this
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(sessionTTL.Seconds()),
+		Expires:  expiresAt,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "csrf_token": csrfToken})
@@ -173,6 +177,7 @@ func (am *authMiddleware) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
@@ -182,20 +187,32 @@ func (am *authMiddleware) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (am *authMiddleware) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	if !am.enabled {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"auth_required":  false,
+			"auth_required": false,
+			"authenticated": true,
+		})
+		return
+	}
+	if isTrustedLoopbackRequest(r) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"auth_required": true,
 			"authenticated": true,
 		})
 		return
 	}
 
 	authenticated := false
+	csrfToken := ""
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		authenticated = am.validateSession(cookie.Value)
+		if session, ok := am.getSession(cookie.Value); ok {
+			authenticated = true
+			csrfToken = session.csrfToken
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"auth_required":  true,
+		"auth_required": true,
 		"authenticated": authenticated,
+		"csrf_token":    csrfToken,
 	})
 }
 
@@ -206,9 +223,8 @@ func (am *authMiddleware) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Allow localhost access without auth (internal scripts)
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if host == "127.0.0.1" || host == "::1" {
+		// Allow only direct loopback requests without auth.
+		if isTrustedLoopbackRequest(r) {
 			next(w, r)
 			return
 		}
@@ -233,15 +249,19 @@ func (am *authMiddleware) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Allow localhost without CSRF (internal scripts)
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if host == "127.0.0.1" || host == "::1" {
+		// Allow only direct loopback requests without CSRF.
+		if isTrustedLoopbackRequest(r) {
 			next(w, r)
 			return
 		}
-		cookie, err := r.Cookie(csrfCookieName)
+		sessionCookie, err := r.Cookie(sessionCookieName)
 		if err != nil {
-			writeError(w, http.StatusForbidden, "CSRF token missing")
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		session, ok := am.getSession(sessionCookie.Value)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		headerToken := r.Header.Get(csrfHeaderName)
@@ -249,7 +269,7 @@ func (am *authMiddleware) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "CSRF token header missing")
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(headerToken)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(session.csrfToken), []byte(headerToken)) != 1 {
 			writeError(w, http.StatusForbidden, "CSRF token mismatch")
 			return
 		}
