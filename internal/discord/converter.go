@@ -91,7 +91,7 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, attachments []
 			continue
 		}
 
-		data, err := downloadDiscordFile(httpClient, att.URL)
+		data, err := downloadDiscordFile(ctx, httpClient, att.URL)
 		if err != nil {
 			continue
 		}
@@ -132,8 +132,12 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, attachments []
 	}
 }
 
-func downloadDiscordFile(client *http.Client, url string) ([]byte, error) {
-	resp, err := client.Get(url)
+func downloadDiscordFile(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("download discord file: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download discord file: %w", err)
 	}
