@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type Client struct {
 	apiKey     string
 	model      string
 	httpClient *http.Client
+	timeout    atomic.Int64
 	logger     *slog.Logger
 }
 
@@ -90,7 +92,7 @@ func NewClient(apiKey, model string, logger *slog.Logger) *Client {
 	if model == "" {
 		model = defaultModel
 	}
-	return &Client{
+	c := &Client{
 		apiKey: apiKey,
 		model:  model,
 		httpClient: &http.Client{
@@ -98,11 +100,15 @@ func NewClient(apiKey, model string, logger *slog.Logger) *Client {
 		},
 		logger: logger.With("component", "gemini-client"),
 	}
+	c.timeout.Store(httpTimeout.Nanoseconds())
+	return c
 }
 
 // SetTimeout overrides the default HTTP timeout for long-running requests
 // (e.g., KB generation with high thinking budgets).
 func (c *Client) SetTimeout(d time.Duration) {
+	ns := d.Nanoseconds()
+	c.timeout.Store(ns)
 	c.httpClient.Timeout = d
 }
 
@@ -155,6 +161,7 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+		c.httpClient.Timeout = time.Duration(c.timeout.Load())
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -177,7 +184,11 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		}
 
 		if resp.StatusCode >= 400 {
-			return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, string(respData))
+			errBody := string(respData)
+			if len(errBody) > 512 {
+				errBody = errBody[:512] + "... (truncated)"
+			}
+			return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, errBody)
 		}
 
 		result, err := parseResponse(respData)
