@@ -81,7 +81,7 @@ func (sm *SchedulerManager) ScheduleMessage(channel, message, sendAt, createdBy 
 		ID:        uuid.New().String(),
 		Type:      "once",
 		ChannelID: channelID,
-		Message:   message,
+		Message:   stripControlBlocks(message),
 		RunAt:     runAt.UTC(),
 		NextRun:   runAt.UTC(),
 		CreatedBy: createdBy,
