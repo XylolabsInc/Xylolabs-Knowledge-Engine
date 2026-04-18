@@ -78,6 +78,7 @@ tr:hover td { background: var(--bg-secondary); }
 .badge-slack { background: #4A154B; color: #fff; }
 .badge-google { background: #4285F4; color: #fff; }
 .badge-notion { background: #000000; color: #fff; }
+.badge-discord { background: #5865F2; color: #fff; }
 .badge-blue { background: var(--primary-light); color: var(--primary); }
 .badge-green { background: var(--success-light); color: var(--success); }
 .badge-default { background: var(--bg-tertiary); color: var(--text-secondary); }
@@ -749,6 +750,13 @@ let docList = [];
 let currentDocIndex = -1;
 let docBrowsePath = []; // e.g. [] = root, ['slack'] = source, ['slack','general'] = channel
 let docPageOffset = 0;
+let csrfToken = sessionStorage.getItem('xke_csrf_token') || '';
+
+function setCSRFToken(token) {
+  csrfToken = token || '';
+  if (csrfToken) sessionStorage.setItem('xke_csrf_token', csrfToken);
+  else sessionStorage.removeItem('xke_csrf_token');
+}
 
 /* ---- API Wrapper ---- */
 async function api(method, path, body) {
@@ -757,10 +765,7 @@ async function api(method, path, body) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  if (method !== 'GET') {
-    const csrf = document.cookie.split('; ').find(c => c.startsWith('xke_csrf='));
-    if (csrf) opts.headers['X-CSRF-Token'] = csrf.split('=')[1];
-  }
+  if (method !== 'GET' && csrfToken) opts.headers['X-CSRF-Token'] = csrfToken;
   const res = await fetch(path, opts);
   if (res.status === 401) {
     showLoginOverlay();
@@ -772,8 +777,7 @@ async function api(method, path, body) {
 
 async function apiMultipart(method, path, formData) {
   const opts = { method, body: formData, headers: {} };
-  const csrf = document.cookie.split('; ').find(c => c.startsWith('xke_csrf='));
-  if (csrf) opts.headers['X-CSRF-Token'] = csrf.split('=')[1];
+  if (csrfToken) opts.headers['X-CSRF-Token'] = csrfToken;
   const res = await fetch(path, opts);
   if (res.status === 401) {
     showLoginOverlay();
@@ -816,6 +820,76 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function jsStringLiteral(value) {
+  return JSON.stringify(String(value == null ? '' : value))
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function jsArrayLiteral(values) {
+  return '[' + (values || []).map(jsStringLiteral).join(',') + ']';
+}
+
+function sanitizeUrl(value) {
+  if (!value) return '#';
+  try {
+    const parsed = new URL(value, window.location.origin);
+    const allowed = ['http:', 'https:', 'mailto:'];
+    if (allowed.includes(parsed.protocol)) return parsed.href;
+    if (!parsed.protocol || parsed.protocol === ':') return parsed.pathname + parsed.search + parsed.hash;
+  } catch (e) {
+    return '#';
+  }
+  return '#';
+}
+
+function sanitizeHtml(html) {
+  const allowedTags = new Set(['h1','h2','h3','h4','h5','h6','p','br','hr','pre','code','strong','em','a','ul','ol','li','blockquote','table','thead','tbody','tr','th','td','div','span']);
+  const allowedAttrs = new Set(['href','target','rel','class']);
+
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  function walk(node) {
+    const children = Array.from(node.childNodes);
+    for (const child of children) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const tag = child.tagName.toLowerCase();
+        if (!allowedTags.has(tag)) {
+          const text = document.createTextNode(child.textContent);
+          node.replaceChild(text, child);
+          continue;
+        }
+        const attrs = Array.from(child.attributes);
+        for (const attr of attrs) {
+          const name = attr.name.toLowerCase();
+          if (name.startsWith('on')) {
+            child.removeAttribute(attr.name);
+            continue;
+          }
+          if ((name === 'href' || name === 'src') && /^\s*(javascript|data)\s*:/i.test(attr.value)) {
+            if (name === 'href') {
+              child.setAttribute('href', '#');
+            } else {
+              child.removeAttribute(attr.name);
+            }
+            continue;
+          }
+          if (!allowedAttrs.has(name)) {
+            child.removeAttribute(attr.name);
+          }
+        }
+        walk(child);
+      }
+    }
+  }
+
+  walk(container);
+  return container.innerHTML;
+}
+
 function truncate(str, len) {
   if (!str) return '';
   return str.length > len ? str.substring(0, len) + '...' : str;
@@ -823,7 +897,7 @@ function truncate(str, len) {
 
 function sourceBadge(source) {
   const s = (source || '').toLowerCase();
-  const cls = s === 'slack' ? 'badge-slack' : s === 'google' ? 'badge-google' : s === 'notion' ? 'badge-notion' : s === 'manual' ? 'badge-manual' : 'badge-default';
+  const cls = s === 'slack' ? 'badge-slack' : s === 'google' ? 'badge-google' : s === 'notion' ? 'badge-notion' : s === 'discord' ? 'badge-discord' : s === 'manual' ? 'badge-manual' : 'badge-default';
   return `<span class="badge ${cls}">${escapeHtml(source || 'unknown')}</span>`;
 }
 
@@ -832,6 +906,7 @@ function sourceColor(source) {
   if (s === 'slack') return '#4A154B';
   if (s === 'google') return '#4285F4';
   if (s === 'notion') return '#000000';
+  if (s === 'discord') return '#5865F2';
   if (s === 'manual') return '#0d9488';
   return '#6c757d';
 }
@@ -866,7 +941,8 @@ async function doLogin() {
     return;
   }
   try {
-    await api('POST', '/console/login', { username, password });
+    const data = await api('POST', '/console/login', { username, password });
+    setCSRFToken(data.csrf_token || '');
     hideLoginOverlay();
     loadDashboard();
   } catch (e) {
@@ -876,6 +952,7 @@ async function doLogin() {
 
 async function doLogout() {
   try { await api('POST', '/console/logout'); } catch (e) { /* ignore */ }
+  setCSRFToken('');
   showLoginOverlay();
 }
 
@@ -883,6 +960,7 @@ async function checkAuth() {
   try {
     const data = await api('GET', '/console/auth/check');
     authRequired = data.auth_required;
+    setCSRFToken(data.csrf_token || '');
     if (authRequired) {
       document.getElementById('logoutSection').style.display = '';
     }
@@ -1003,7 +1081,7 @@ function renderBreadcrumb() {
     html += '<span class="sep">/</span>';
     if (i < docBrowsePath.length - 1) {
       const subpath = docBrowsePath.slice(0, i + 1);
-      html += '<a href="#" onclick="event.preventDefault();navigateDocs(' + JSON.stringify(subpath) + ')">' + escapeHtml(docBrowsePath[i]) + '</a>';
+      html += '<a href="#" onclick="event.preventDefault();navigateDocs(' + jsArrayLiteral(subpath) + ')">' + escapeHtml(docBrowsePath[i]) + '</a>';
     } else {
       html += '<span class="current">' + escapeHtml(docBrowsePath[i]) + '</span>';
     }
@@ -1029,7 +1107,7 @@ async function renderDocBrowser() {
       }
       let html = '<div class="dir-grid">';
       for (const [src, count] of Object.entries(bySource)) {
-        html += '<div class="dir-item" onclick="navigateDocs([\'' + escapeHtml(src) + '\'])">'
+        html += '<div class="dir-item" onclick="navigateDocs(' + jsArrayLiteral([src]) + ')">'
           + '<div class="dir-icon" style="color:' + sourceColor(src) + '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></div>'
           + '<div>'
           + '<div class="dir-label" style="text-transform:capitalize">' + escapeHtml(src) + '</div>'
@@ -1065,7 +1143,7 @@ async function renderDocBrowser() {
 
       let html = '<div class="dir-grid">';
       for (const [ch, count] of sorted) {
-        html += '<div class="dir-item" onclick="navigateDocs([\'' + escapeHtml(source) + '\',\'' + escapeHtml(ch) + '\'])">'
+        html += '<div class="dir-item" onclick="navigateDocs(' + jsArrayLiteral([source, ch]) + ')">'
           + '<div class="dir-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></div>'
           + '<div>'
           + '<div class="dir-label">' + escapeHtml(ch) + '</div>'
@@ -1126,7 +1204,7 @@ async function renderDocBrowser() {
 
       for (const doc of pageDocs) {
         const title = doc.title || truncate(doc.content, 80) || '(Untitled)';
-        html += '<div class="doc-list-item" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">'
+        html += '<div class="doc-list-item" onclick="showDocument(' + jsStringLiteral(doc.id) + ')">'
           + '<div class="doc-list-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></div>'
           + '<div class="doc-list-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 80)) + '</div>'
           + '<div class="doc-list-meta">'
@@ -1196,13 +1274,14 @@ async function showDocument(id) {
       if (!value) continue;
       let display;
       if (label === 'URL') {
-        display = `<a href="${escapeHtml(value)}" target="_blank" rel="noopener" style="color:var(--primary)">${escapeHtml(value)}</a>`;
+        const safeUrl = sanitizeUrl(value);
+        display = `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener" style="color:var(--primary)">${escapeHtml(value)}</a>`;
       } else if (label === 'Source') {
         display = sourceBadge(value);
       } else if (label === 'Channel') {
-        display = `<a href="#" onclick="event.preventDefault();closeDocModal();filterByChannel('${escapeHtml(value)}')" style="color:var(--primary)">${escapeHtml(value)}</a>`;
+        display = `<a href="#" onclick="event.preventDefault();closeDocModal();filterByChannel(${jsStringLiteral(value)})" style="color:var(--primary)">${escapeHtml(value)}</a>`;
       } else if (label === 'Author') {
-        display = `<a href="#" onclick="event.preventDefault();closeDocModal();filterByAuthor('${escapeHtml(value)}')" style="color:var(--primary)">${escapeHtml(value)}</a>`;
+        display = `<a href="#" onclick="event.preventDefault();closeDocModal();filterByAuthor(${jsStringLiteral(value)})" style="color:var(--primary)">${escapeHtml(value)}</a>`;
       } else {
         display = escapeHtml(value);
       }
@@ -1211,7 +1290,7 @@ async function showDocument(id) {
 
     // Parent document link
     if (doc.parent_id) {
-      html += `<div class="modal-field"><div class="modal-field-label">Parent Document</div><div class="modal-field-value"><a href="#" onclick="event.preventDefault();showDocument('${escapeHtml(doc.parent_id)}')" style="color:var(--primary)">${escapeHtml(doc.parent_id)}</a></div></div>`;
+      html += `<div class="modal-field"><div class="modal-field-label">Parent Document</div><div class="modal-field-value"><a href="#" onclick="event.preventDefault();showDocument(${jsStringLiteral(doc.parent_id)})" style="color:var(--primary)">${escapeHtml(doc.parent_id)}</a></div></div>`;
     }
 
     if (doc.metadata && Object.keys(doc.metadata).length > 0) {
@@ -1294,7 +1373,7 @@ async function doSearch() {
 
       html += `
         <div class="search-result">
-          <div class="search-result-title" style="cursor:pointer" onclick="showDocument('${escapeHtml(r.id)}')">${escapeHtml(title)}</div>
+          <div class="search-result-title" style="cursor:pointer" onclick="showDocument(${jsStringLiteral(r.id)})">${escapeHtml(title)}</div>
           <div class="search-result-snippet">${snippet}</div>
           <div class="search-result-meta">
             ${sourceBadge(r.source)}
@@ -1342,7 +1421,7 @@ async function loadSources() {
         <div class="source-card" id="${cardId}">
           <div class="source-card-header">
             <div class="source-name">${escapeHtml(s.name)}</div>
-            <button class="btn btn-primary" onclick="triggerSync('${escapeHtml(s.name)}','${cardId}')">${t('syncNow')}</button>
+            <button class="btn btn-primary" onclick="triggerSync(${jsStringLiteral(s.name)},${jsStringLiteral(cardId)})">${t('syncNow')}</button>
           </div>
           <div class="source-stat"><span class="source-stat-label">${t('interval')}</span><span class="source-stat-value">${escapeHtml(s.interval || '-')}</span></div>
           <div class="source-stat"><span class="source-stat-label">${t('lastSync')}</span><span class="source-stat-value">${timeAgo(s.last_run)}</span></div>
@@ -1407,12 +1486,12 @@ async function loadManualDocs() {
       const date = doc.timestamp ? new Date(doc.timestamp).toLocaleDateString() : '-';
       const filename = (doc.metadata && doc.metadata.original_filename) ? ' <span style="font-size:0.75rem;color:var(--text-muted)">(' + escapeHtml(doc.metadata.original_filename) + ')</span>' : '';
       html += '<tr>'
-        + '<td style="cursor:pointer" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">' + escapeHtml(truncate(title, 60)) + filename + '</td>'
+        + '<td style="cursor:pointer" onclick="showDocument(' + jsStringLiteral(doc.id) + ')">' + escapeHtml(truncate(title, 60)) + filename + '</td>'
         + '<td>' + escapeHtml(category) + '</td>'
         + '<td>' + escapeHtml(author) + '</td>'
         + '<td>' + escapeHtml(date) + '</td>'
-        + '<td><button class="btn btn-outline btn-sm" onclick="editManualDoc(\'' + escapeHtml(doc.id) + '\')">' + t('edit') + '</button> '
-        + '<button class="btn btn-danger btn-sm" onclick="deleteManualDoc(\'' + escapeHtml(doc.id) + '\',\'' + escapeHtml(title.replace(/'/g, "\\'")) + '\')">' + t('delete') + '</button></td>'
+        + '<td><button class="btn btn-outline btn-sm" onclick="editManualDoc(' + jsStringLiteral(doc.id) + ')">' + t('edit') + '</button> '
+        + '<button class="btn btn-danger btn-sm" onclick="deleteManualDoc(' + jsStringLiteral(doc.id) + ',' + jsStringLiteral(title) + ')">' + t('delete') + '</button></td>'
         + '</tr>';
     }
     html += '</tbody></table>';
@@ -1665,7 +1744,7 @@ async function loadIndex() {
 
             // Show parent first if found
             if (parent) {
-              html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(parent.id) + '\')">';
+              html += '<div class="tree-doc" onclick="showDocument(' + jsStringLiteral(parent.id) + ')">';
               html += '<span class="tree-doc-title" title="' + escapeHtml(parentTitle) + '" style="font-weight:600">' + escapeHtml(truncate(parentTitle, 60)) + '</span>';
               html += '<span class="tree-doc-time">' + timeAgo(parent.timestamp) + '</span>';
               html += '</div>';
@@ -1674,7 +1753,7 @@ async function loadIndex() {
             replies.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
             for (const doc of replies) {
               const title = doc.title || truncate(doc.content, 50) || '(Reply)';
-              html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">';
+              html += '<div class="tree-doc" onclick="showDocument(' + jsStringLiteral(doc.id) + ')">';
               html += '<span class="tree-doc-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 60)) + '</span>';
               html += '<span class="tree-doc-time">' + timeAgo(doc.timestamp) + '</span>';
               html += '</div>';
@@ -1689,7 +1768,7 @@ async function loadIndex() {
           // Render standalone messages
           for (const doc of standalone) {
             const title = doc.title || truncate(doc.content, 50) || '(Untitled)';
-            html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">';
+            html += '<div class="tree-doc" onclick="showDocument(' + jsStringLiteral(doc.id) + ')">';
             html += '<span class="tree-doc-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 60)) + '</span>';
             html += '<span class="tree-doc-type">' + escapeHtml(doc.content_type || '') + '</span>';
             html += '<span class="tree-doc-time">' + timeAgo(doc.timestamp) + '</span>';
@@ -1699,7 +1778,7 @@ async function loadIndex() {
           // Non-slack: flat document list (existing behavior)
           for (const doc of chDocs) {
             const title = doc.title || truncate(doc.content, 50) || '(Untitled)';
-            html += '<div class="tree-doc" onclick="showDocument(\'' + escapeHtml(doc.id) + '\')">';
+            html += '<div class="tree-doc" onclick="showDocument(' + jsStringLiteral(doc.id) + ')">';
             html += '<span class="tree-doc-title" title="' + escapeHtml(title) + '">' + escapeHtml(truncate(title, 60)) + '</span>';
             html += '<span class="tree-doc-type">' + escapeHtml(doc.content_type || '') + '</span>';
             html += '<span class="tree-doc-time">' + timeAgo(doc.timestamp) + '</span>';
@@ -1764,13 +1843,13 @@ function renderKBBreadcrumb() {
     el.innerHTML = '<span class="current">' + t('root') + '</span>';
     return;
   }
-  let html = '<a href="#" onclick="event.preventDefault();navigateKB(\'\')\">' + t('root') + '</a>';
+  let html = '<a href="#" onclick="event.preventDefault();navigateKB(\'\')">' + t('root') + '</a>';
   const parts = kbCurrentPath.split('/');
   for (let i = 0; i < parts.length; i++) {
     html += '<span class="sep">/</span>';
     const subpath = parts.slice(0, i + 1).join('/');
     if (i < parts.length - 1) {
-      html += '<a href="#" onclick="event.preventDefault();navigateKB(\'' + escapeHtml(subpath) + '\')">' + escapeHtml(parts[i]) + '</a>';
+      html += '<a href="#" onclick="event.preventDefault();navigateKB(' + jsStringLiteral(subpath) + ')">' + escapeHtml(parts[i]) + '</a>';
     } else {
       html += '<span class="current">' + escapeHtml(parts[i]) + '</span>';
     }
@@ -1880,7 +1959,7 @@ function renderKBDirectory(container, items) {
     const icon = getKBIcon(item);
     const size = item.is_dir ? '' : formatBytes(item.size || 0);
     const cls = item.is_dir ? 'kb-tree-dir' : '';
-    html += '<div class="kb-tree-item ' + cls + '" onclick="navigateKB(\'' + escapeHtml(item.path) + '\')">';
+    html += '<div class="kb-tree-item ' + cls + '" onclick="navigateKB(' + jsStringLiteral(item.path) + ')">';
     html += '<span class="kb-tree-icon">' + icon + '</span>';
     html += '<span class="kb-tree-name">' + escapeHtml(item.name) + '</span>';
     if (size) html += '<span class="kb-tree-size">' + size + '</span>';
@@ -1969,7 +2048,7 @@ function renderMarkdown(md) {
   }
 
   // Simple markdown to HTML conversion
-  let html = content;
+  let html = escapeHtml(content);
 
   // Code blocks (must be before other processing)
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code) {
@@ -1992,7 +2071,9 @@ function renderMarkdown(md) {
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
   // Links: [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, link) {
+    return '<a href="' + escapeHtml(sanitizeUrl(link.replace(/&amp;/g, '&'))) + '" target="_blank" rel="noopener">' + text + '</a>';
+  });
 
   // Blockquotes
   html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
@@ -2019,7 +2100,7 @@ function renderMarkdown(md) {
     return '<p>' + block.replace(/\n/g, '<br>') + '</p>';
   }).join('\n');
 
-  return frontmatterHtml + html;
+  return frontmatterHtml + sanitizeHtml(html);
 }
 
 /* ---- Graph ---- */
