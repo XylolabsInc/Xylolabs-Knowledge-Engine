@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -311,7 +312,9 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 
 	// Run sync asynchronously
 	go func() {
-		if err := s.syncManager.SyncSource(kbSource); err != nil {
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err := s.syncManager.SyncSource(syncCtx, kbSource); err != nil {
 			s.logger.Warn("manual sync failed", "source", source, "error", err)
 		}
 	}()

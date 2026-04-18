@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"context"
 	"strings"
 	"time"
 	"unicode"
@@ -171,7 +172,7 @@ type Connector interface {
 	Start(done <-chan struct{}) error
 
 	// Sync performs a synchronization pass, fetching new/updated content.
-	Sync() error
+	Sync(ctx context.Context) error
 
 	// Stop gracefully shuts down the connector.
 	Stop() error

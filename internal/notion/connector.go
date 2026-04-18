@@ -70,8 +70,7 @@ const maxRecursionDepth = 10
 const maxAPIResponseSize = 50 << 20 // 50 MB
 
 // Sync fetches all pages from Notion, recursively traversing from root pages.
-func (c *Connector) Sync() error {
-	ctx := context.Background()
+func (c *Connector) Sync(ctx context.Context) error {
 	c.logger.Info("starting notion sync")
 
 	visited := make(map[string]bool)

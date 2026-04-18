@@ -109,8 +109,7 @@ func (c *Connector) Stop() error {
 }
 
 // Sync performs a historical backfill of all channels.
-func (c *Connector) Sync() error {
-	ctx := context.Background()
+func (c *Connector) Sync(ctx context.Context) error {
 	c.logger.Info("starting slack sync")
 
 	syncState, err := c.store.GetSyncState(kb.SourceSlack)

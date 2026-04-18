@@ -102,8 +102,7 @@ func (c *Connector) Stop() error {
 }
 
 // Sync performs a historical backfill of all text channels.
-func (c *Connector) Sync() error {
-	ctx := context.Background()
+func (c *Connector) Sync(ctx context.Context) error {
 	c.logger.Info("starting discord sync")
 
 	syncState, err := c.store.GetSyncState(kb.SourceDiscord)

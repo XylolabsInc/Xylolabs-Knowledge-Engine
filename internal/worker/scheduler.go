@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -10,7 +11,7 @@ import (
 type Job struct {
 	Name     string
 	Interval time.Duration
-	Fn       func() error
+	Fn       func(ctx context.Context) error
 
 	// Metrics
 	LastRun   time.Time
@@ -22,13 +23,13 @@ type Job struct {
 
 // JobStatus exposes metrics about a job.
 type JobStatus struct {
-	Name      string        `json:"name"`
-	Interval  string        `json:"interval"`
-	LastRun   time.Time     `json:"last_run,omitempty"`
-	LastError string        `json:"last_error,omitempty"`
-	Duration  string        `json:"last_duration,omitempty"`
-	RunCount  int64         `json:"run_count"`
-	ErrCount  int64         `json:"error_count"`
+	Name      string    `json:"name"`
+	Interval  string    `json:"interval"`
+	LastRun   time.Time `json:"last_run,omitempty"`
+	LastError string    `json:"last_error,omitempty"`
+	Duration  string    `json:"last_duration,omitempty"`
+	RunCount  int64     `json:"run_count"`
+	ErrCount  int64     `json:"error_count"`
 }
 
 // Scheduler manages periodic sync jobs.
@@ -49,7 +50,7 @@ func NewScheduler(logger *slog.Logger) *Scheduler {
 }
 
 // Register adds a sync job to the scheduler.
-func (s *Scheduler) Register(name string, interval time.Duration, fn func() error) {
+func (s *Scheduler) Register(name string, interval time.Duration, fn func(ctx context.Context) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -108,9 +109,10 @@ func (s *Scheduler) RunNow(name string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	ctx := context.Background()
 	for _, job := range s.jobs {
 		if job.Name == name {
-			return s.executeJob(job)
+			return s.executeJob(ctx, job)
 		}
 	}
 	return nil
@@ -119,8 +121,18 @@ func (s *Scheduler) RunNow(name string) error {
 func (s *Scheduler) runJob(job *Job) {
 	defer s.wg.Done()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		<-s.done
+		cancel()
+	}()
+
 	// Run once immediately at startup
-	s.executeJob(job)
+	if err := s.executeJob(ctx, job); err != nil {
+		s.logger.Warn("initial job run failed", "name", job.Name, "error", err)
+	}
 
 	ticker := time.NewTicker(job.Interval)
 	defer ticker.Stop()
@@ -130,16 +142,25 @@ func (s *Scheduler) runJob(job *Job) {
 		case <-s.done:
 			return
 		case <-ticker.C:
-			s.executeJob(job)
+			// Derive a fresh cancellable context per execution.
+			execCtx, execCancel := context.WithCancel(context.Background())
+			go func() {
+				<-s.done
+				execCancel()
+			}()
+			if err := s.executeJob(execCtx, job); err != nil {
+				s.logger.Warn("scheduled job run failed", "name", job.Name, "error", err)
+			}
+			execCancel()
 		}
 	}
 }
 
-func (s *Scheduler) executeJob(job *Job) error {
+func (s *Scheduler) executeJob(ctx context.Context, job *Job) error {
 	start := time.Now()
 	s.logger.Debug("running job", "name", job.Name)
 
-	err := job.Fn()
+	err := job.Fn(ctx)
 
 	s.mu.Lock()
 	job.LastRun = start

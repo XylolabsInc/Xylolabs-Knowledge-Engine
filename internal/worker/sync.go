@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -29,11 +30,11 @@ func (sm *SyncManager) AddConnector(c kb.Connector) {
 }
 
 // SyncAll runs sync on all registered connectors.
-func (sm *SyncManager) SyncAll() error {
+func (sm *SyncManager) SyncAll(ctx context.Context) error {
 	var firstErr error
 	for _, c := range sm.connectors {
 		sm.logger.Info("syncing source", "source", c.Name())
-		if err := c.Sync(); err != nil {
+		if err := c.Sync(ctx); err != nil {
 			sm.logger.Warn("sync failed", "source", c.Name(), "error", err)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("sync %s: %w", c.Name(), err)
@@ -44,10 +45,10 @@ func (sm *SyncManager) SyncAll() error {
 }
 
 // SyncSource runs sync on a specific source.
-func (sm *SyncManager) SyncSource(source kb.Source) error {
+func (sm *SyncManager) SyncSource(ctx context.Context, source kb.Source) error {
 	for _, c := range sm.connectors {
 		if c.Name() == source {
-			return c.Sync()
+			return c.Sync(ctx)
 		}
 	}
 	return fmt.Errorf("unknown source: %s", source)
@@ -66,7 +67,7 @@ func (sm *SyncManager) FullSync(source kb.Source) error {
 		return fmt.Errorf("reset sync state for %s: %w", source, err)
 	}
 
-	return sm.SyncSource(source)
+	return sm.SyncSource(context.Background(), source)
 }
 
 // GetConnectors returns all registered connectors.

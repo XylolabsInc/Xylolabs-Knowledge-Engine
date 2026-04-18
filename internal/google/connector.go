@@ -124,8 +124,7 @@ func (c *Connector) TasksService() *tasks.Service {
 }
 
 // Sync fetches new and updated files from Google Drive.
-func (c *Connector) Sync() error {
-	ctx := context.Background()
+func (c *Connector) Sync(ctx context.Context) error {
 	c.logger.Info("starting google sync")
 
 	syncState, err := c.store.GetSyncState(kb.SourceGoogle)
