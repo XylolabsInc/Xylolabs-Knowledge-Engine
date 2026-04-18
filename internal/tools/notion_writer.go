@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 )
 
 const (
@@ -31,9 +33,7 @@ type NotionWriter struct {
 func NewNotionWriter(apiKey string, logger *slog.Logger) *NotionWriter {
 	return &NotionWriter{
 		apiKey: apiKey,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient: extractor.NewRestrictedHTTPClient(30 * time.Second),
 		logger: logger.With("component", "notion-writer"),
 	}
 }

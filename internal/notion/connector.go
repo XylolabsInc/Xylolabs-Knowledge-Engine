@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
 
@@ -37,9 +38,7 @@ func NewConnector(apiKey string, rootPages []string, engine *kb.Engine, store kb
 	return &Connector{
 		apiKey:    apiKey,
 		rootPages: rootPages,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient: extractor.NewRestrictedHTTPClient(30 * time.Second),
 		engine:  engine,
 		store:   store,
 		logger:  logger.With("component", "notion-connector"),
@@ -460,7 +459,11 @@ func (c *Connector) apiRequest(ctx context.Context, method, path string, body an
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("notion API error %d: %s", resp.StatusCode, string(respData))
+		errBody := string(respData)
+		if len(errBody) > 512 {
+			errBody = errBody[:512] + "... (truncated)"
+		}
+		return nil, fmt.Errorf("notion API error %d: %s", resp.StatusCode, errBody)
 	}
 
 	var result map[string]any
