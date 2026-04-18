@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,7 +54,7 @@ type fileBlock struct {
 
 // batch groups documents for a single Gemini call.
 type batch struct {
-	Key       string     // grouping key (e.g., "general/2024-01-15")
+	Key       string // grouping key (e.g., "general/2024-01-15")
 	Documents []Document
 }
 
@@ -86,20 +87,20 @@ func parseRetryAfter(errMsg string) time.Duration {
 
 func main() {
 	var (
-		inputPath         string
-		source            string
-		kbDir             string
-		apiKey            string
-		model             string
-		thinkingLevel     string
-		maxDocs           int
-		dryRun            bool
-		force             bool
-		fetchPeople       bool
+		inputPath          string
+		source             string
+		kbDir              string
+		apiKey             string
+		model              string
+		thinkingLevel      string
+		maxDocs            int
+		dryRun             bool
+		force              bool
+		fetchPeople        bool
 		rebuildIndexesFlag bool
-		googleCredsFile   string
-		impersonateEmail  string
-		domain            string
+		googleCredsFile    string
+		impersonateEmail   string
+		domain             string
 	)
 
 	flag.StringVar(&inputPath, "input", "", "Path to raw documents JSON file (required)")
@@ -254,7 +255,7 @@ func main() {
 		totalFilesWritten int
 		totalTokensUsed   int
 		allDocMappings    = make(DocumentMap)
-		latestTimestamp    string
+		latestTimestamp   string
 	)
 
 	for i, b := range batches {
@@ -290,7 +291,10 @@ func main() {
 			wait := parseRetryAfter(errMsg)
 			if wait == 0 {
 				baseWait := time.Duration(1<<uint(attempt)) * 15 * time.Second // 15s, 30s, 60s, 120s
-				jitter := time.Duration(rand.IntN(int(baseWait / 4)))
+				jitter, jitterErr := cryptoJitter(baseWait / 4)
+				if jitterErr != nil {
+					logger.Warn("failed to generate retry jitter", "error", jitterErr, "batch", b.Key)
+				}
 				wait = baseWait + jitter
 			}
 			logger.Warn("rate limited, retrying", "batch", b.Key, "attempt", attempt+1, "wait", wait)
@@ -330,8 +334,17 @@ func main() {
 		// Map source_ids to generated file paths
 		for _, doc := range b.Documents {
 			if doc.SourceID != "" && len(blocks) > 0 {
-				// Map each document to the first relevant file block
-				allDocMappings[doc.SourceID] = blocks[0].Path
+				mapped := false
+				for _, block := range blocks {
+					if block.Path != "" {
+						allDocMappings[doc.SourceID] = block.Path
+						mapped = true
+						break
+					}
+				}
+				if !mapped {
+					allDocMappings[doc.SourceID] = blocks[0].Path
+				}
 			}
 		}
 
@@ -370,8 +383,20 @@ func main() {
 	)
 }
 
+func cryptoJitter(max time.Duration) (time.Duration, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(max.Nanoseconds()))
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(n.Int64()), nil
+}
+
 // readInput reads and parses the API response JSON file.
 func readInput(path string) (*APIResponse, error) {
+	// #nosec G304 -- CLI input path is supplied explicitly by the operator.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read input file: %w", err)
@@ -388,6 +413,7 @@ func readInput(path string) (*APIResponse, error) {
 // readCuratorInstructions reads CLAUDE.md from the KB repo root if it exists.
 func readCuratorInstructions(kbDir string, logger *slog.Logger) string {
 	claudeMD := filepath.Join(kbDir, "CLAUDE.md")
+	// #nosec G304 -- CLAUDE.md is read only from the operator-selected KB root.
 	data, err := os.ReadFile(claudeMD)
 	if err != nil {
 		logger.Info("no CLAUDE.md found in KB repo, using default instructions")
@@ -588,6 +614,7 @@ func isIndexFile(path string) bool {
 // loadDocumentMap reads the existing document map from _meta/document-map.json.
 func loadDocumentMap(kbDir string) DocumentMap {
 	mapFile := filepath.Join(kbDir, "_meta", "document-map.json")
+	// #nosec G304 -- document map path is derived from the operator-selected KB root.
 	data, err := os.ReadFile(mapFile)
 	if err != nil {
 		return make(DocumentMap)
@@ -754,11 +781,11 @@ func parseFileBlocks(text string) []fileBlock {
 // writeFile creates necessary directories and writes the file content.
 func writeFile(path, content string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write file %s: %w", path, err)
 	}
 
@@ -768,13 +795,14 @@ func writeFile(path, content string) error {
 // updateSyncState updates _meta/sync-state.json with the latest timestamp for the given source.
 func updateSyncState(kbDir, source, timestamp string) error {
 	metaDir := filepath.Join(kbDir, "_meta")
-	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+	if err := os.MkdirAll(metaDir, 0o750); err != nil {
 		return fmt.Errorf("create _meta dir: %w", err)
 	}
 
 	syncFile := filepath.Join(metaDir, "sync-state.json")
 
 	state := make(SyncState)
+	// #nosec G304 -- sync state path is derived from the operator-selected KB root.
 	if data, err := os.ReadFile(syncFile); err == nil {
 		if err := json.Unmarshal(data, &state); err != nil {
 			// If corrupt, start fresh
@@ -789,7 +817,7 @@ func updateSyncState(kbDir, source, timestamp string) error {
 		return fmt.Errorf("marshal sync state: %w", err)
 	}
 
-	if err := os.WriteFile(syncFile, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(syncFile, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write sync state: %w", err)
 	}
 
@@ -803,13 +831,14 @@ func updateDocumentMap(kbDir string, newMappings DocumentMap) error {
 	}
 
 	metaDir := filepath.Join(kbDir, "_meta")
-	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+	if err := os.MkdirAll(metaDir, 0o750); err != nil {
 		return fmt.Errorf("create _meta dir: %w", err)
 	}
 
 	mapFile := filepath.Join(metaDir, "document-map.json")
 
 	existing := make(DocumentMap)
+	// #nosec G304 -- document map path is derived from the operator-selected KB root.
 	if data, err := os.ReadFile(mapFile); err == nil {
 		if err := json.Unmarshal(data, &existing); err != nil {
 			existing = make(DocumentMap)
@@ -826,7 +855,7 @@ func updateDocumentMap(kbDir string, newMappings DocumentMap) error {
 		return fmt.Errorf("marshal document map: %w", err)
 	}
 
-	if err := os.WriteFile(mapFile, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(mapFile, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write document map: %w", err)
 	}
 
