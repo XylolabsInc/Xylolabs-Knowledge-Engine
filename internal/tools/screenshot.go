@@ -4,11 +4,92 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
 )
+
+// blockedMetadataHostnames are known cloud metadata endpoints that must never
+// be reached from a headless browser.
+var blockedMetadataHostnames = map[string]bool{
+	"metadata.google.internal": true,
+}
+
+// validateScreenshotURL ensures the given URL is safe for the headless browser
+// to navigate to. It rejects non-HTTP schemes, private/loopback/link-local IPs,
+// and known cloud metadata endpoints.
+func validateScreenshotURL(ctx context.Context, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("screenshot: invalid URL %q: %w", rawURL, err)
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("screenshot: unsupported scheme %q (only http and https are allowed)", u.Scheme)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("screenshot: URL has no hostname")
+	}
+
+	// Block known cloud metadata hostnames.
+	if blockedMetadataHostnames[strings.ToLower(host)] {
+		return fmt.Errorf("screenshot: blocked metadata hostname %q", host)
+	}
+
+	// If the host is an IP literal, validate it directly.
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.String() == "169.254.169.254" {
+			return fmt.Errorf("screenshot: blocked metadata IP 169.254.169.254")
+		}
+		if !isScreenshotPublicIP(ip) {
+			return fmt.Errorf("screenshot: refusing private or loopback address %q", host)
+		}
+		return nil
+	}
+
+	// Resolve the hostname and verify every resulting IP is public.
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("screenshot: resolve host %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("screenshot: host %q resolved to no addresses", host)
+	}
+
+	for _, ipAddr := range ips {
+		if ipAddr.IP.String() == "169.254.169.254" {
+			return fmt.Errorf("screenshot: host %q resolves to blocked metadata IP 169.254.169.254", host)
+		}
+		if !isScreenshotPublicIP(ipAddr.IP) {
+			return fmt.Errorf("screenshot: refusing non-public address for host %q", host)
+		}
+	}
+
+	return nil
+}
+
+// isScreenshotPublicIP reports whether ip is a publicly routable address.
+// It mirrors the isPublicIP check in internal/extractor/httpclient.go.
+func isScreenshotPublicIP(ip net.IP) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	return !addr.IsLoopback() &&
+		!addr.IsPrivate() &&
+		!addr.IsLinkLocalUnicast() &&
+		!addr.IsLinkLocalMulticast() &&
+		!addr.IsMulticast() &&
+		!addr.IsUnspecified()
+}
 
 // Screenshotter captures web page screenshots using headless Chromium.
 type Screenshotter struct {
@@ -24,6 +105,10 @@ func NewScreenshotter(logger *slog.Logger) *Screenshotter {
 // width/height set the viewport size in pixels (default 1280x960).
 // fullPage captures the full scrollable page when true, otherwise only the viewport.
 func (s *Screenshotter) Capture(ctx context.Context, url string, width, height int, fullPage bool) ([]byte, error) {
+	if err := validateScreenshotURL(ctx, url); err != nil {
+		return nil, err
+	}
+
 	if width <= 0 {
 		width = 1280
 	}
