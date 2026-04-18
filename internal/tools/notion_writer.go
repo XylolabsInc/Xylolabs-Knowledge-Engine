@@ -45,6 +45,9 @@ func (w *NotionWriter) CreatePage(ctx context.Context, title, content, parentPag
 	if parentPageID == "" {
 		parentPageID = defaultNotionParent
 	}
+	if err := validateNotionPageID(parentPageID); err != nil {
+		return "", err
+	}
 
 	body := map[string]any{
 		"parent": map[string]any{
@@ -81,6 +84,9 @@ func (w *NotionWriter) CreatePage(ctx context.Context, title, content, parentPag
 // AppendToPage appends content blocks to an existing Notion page.
 // Returns the URL of the page.
 func (w *NotionWriter) AppendToPage(ctx context.Context, pageID, content string) (string, error) {
+	if err := validateNotionPageID(pageID); err != nil {
+		return "", err
+	}
 	blocks := contentToBlocks(content)
 
 	body := map[string]any{
@@ -103,6 +109,15 @@ func (w *NotionWriter) AppendToPage(ctx context.Context, pageID, content string)
 	url, _ := pageResp["url"].(string)
 	w.logger.Info("appended to notion page", "page_id", pageID, "url", url)
 	return url, nil
+}
+
+var notionPageIDRe = regexp.MustCompile(`^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func validateNotionPageID(pageID string) error {
+	if !notionPageIDRe.MatchString(pageID) {
+		return fmt.Errorf("invalid notion page ID %q: must be 32-char hex or UUID format", pageID)
+	}
+	return nil
 }
 
 var numberedListRe = regexp.MustCompile(`^\d+\.\s+`)
