@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -32,6 +33,7 @@ type Bot struct {
 	logger       *slog.Logger
 	toolExecutor *tools.ToolExecutor
 	extractor    *extractor.Extractor
+	wg           sync.WaitGroup
 }
 
 // New creates a Bot handler backed by the given Platform.
@@ -77,6 +79,11 @@ func (b *Bot) SetToolExecutor(executor *tools.ToolExecutor) {
 // SetExtractor sets the content extractor for URL fetching.
 func (b *Bot) SetExtractor(ext *extractor.Extractor) {
 	b.extractor = ext
+}
+
+// Wait blocks until all background goroutines started by the bot have finished.
+func (b *Bot) Wait() {
+	b.wg.Wait()
 }
 
 // IsTrackedThread delegates to the platform.
@@ -356,7 +363,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	if b.toolExecutor != nil {
 		if screenshotData, ok := b.toolExecutor.PopScreenshot(); ok {
 			asyncCtx := context.WithoutCancel(ctx)
+			b.wg.Add(1)
 			go func(data []byte, channel, ts string) {
+				defer b.wg.Done()
 				uploadCtx, cancel := context.WithTimeout(asyncCtx, 60*time.Second)
 				defer cancel()
 				if err := b.platform.UploadFile(uploadCtx, channel, ts, "screenshot.png", data); err != nil {
@@ -387,11 +396,13 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 		for _, lb := range learnBlocks {
 			topic := strings.TrimSpace(lb[1])
 			content := strings.TrimSpace(lb[2])
-			go func(topic, content, author string) {
-				if err := b.kbReader.SaveFact(topic, content, author); err != nil {
-					b.logger.Warn("failed to save learned fact", "topic", topic, "error", err)
-				}
-			}(topic, content, author)
+			b.wg.Add(1)
+				go func(topic, content, author string) {
+					defer b.wg.Done()
+					if err := b.kbReader.SaveFact(topic, content, author); err != nil {
+						b.logger.Warn("failed to save learned fact", "topic", topic, "error", err)
+					}
+				}(topic, content, author)
 		}
 		responseText = reLearnBlock.ReplaceAllString(responseText, "")
 		responseText = strings.TrimSpace(responseText)
@@ -434,7 +445,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	// Add emoji reaction to the user's original message.
 	if reactEmoji != "" {
 		asyncCtx := context.WithoutCancel(ctx)
+		b.wg.Add(1)
 		go func(emoji string) {
+			defer b.wg.Done()
 			reactionCtx, cancel := context.WithTimeout(asyncCtx, 5*time.Second)
 			defer cancel()
 			if err := b.platform.AddReaction(reactionCtx, msg.Channel, msg.MessageID, emoji); err != nil {
