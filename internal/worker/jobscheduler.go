@@ -23,6 +23,8 @@ type JobStore interface {
 	UpdateNextRun(id string, nextRun time.Time) error
 }
 
+const jobPostTimeout = 30 * time.Second
+
 // JobScheduler polls for due scheduled jobs and posts messages to Slack.
 type JobScheduler struct {
 	store    JobStore
@@ -85,7 +87,9 @@ func (js *JobScheduler) poll() {
 	for _, job := range jobs {
 		js.logger.Info("executing scheduled job", "id", job.ID, "type", job.Type, "channel", job.ChannelID)
 
-		_, err := js.poster.PostMessage(context.Background(), job.ChannelID, job.Message, "")
+		postCtx, postCancel := context.WithTimeout(context.Background(), jobPostTimeout)
+			_, err := js.poster.PostMessage(postCtx, job.ChannelID, job.Message, "")
+			postCancel()
 		if err != nil {
 			js.logger.Error("failed to post scheduled message", "id", job.ID, "channel", job.ChannelID, "error", err)
 			continue
