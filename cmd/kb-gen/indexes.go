@@ -192,6 +192,7 @@ func generateChannelReadme(kbDir, source string, ch channelSummary, dryRun bool,
 
 	// Read existing file to preserve non-auto-generated sections
 	var preservedSections []markdownSection
+	// #nosec G304 -- fullPath is derived from the operator-selected KB root and generated channel path.
 	if existing, err := os.ReadFile(fullPath); err == nil {
 		sections := parseMarkdownSections(string(existing))
 		for _, s := range sections {
@@ -318,9 +319,10 @@ func generateSourceReadme(kbDir, source string, channels []channelSummary, dryRu
 
 	// Read existing file to preserve extra table columns and non-Channels sections
 	existingExtras := make(map[string]map[string]string) // channelName → {colHeader → value}
-	var extraHeaders []string                             // extra column headers beyond standard ones
+	var extraHeaders []string                            // extra column headers beyond standard ones
 	var preservedSections []markdownSection
 
+	// #nosec G304 -- fullPath is derived from the operator-selected KB root and generated source path.
 	if existing, err := os.ReadFile(fullPath); err == nil {
 		sections := parseMarkdownSections(string(existing))
 		for _, s := range sections {
@@ -422,7 +424,7 @@ func generateSourceReadme(kbDir, source string, channels []channelSummary, dryRu
 		return nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
@@ -473,6 +475,7 @@ func rebuildDocSourceIndex(kbDir, source, subDir string, dryRun bool, logger *sl
 	var extraHeaders []string
 	var preservedSections []markdownSection
 
+	// #nosec G304 -- fullPath is derived from the operator-selected KB root and generated source path.
 	if existing, err := os.ReadFile(fullPath); err == nil {
 		sections := parseMarkdownSections(string(existing))
 		for _, s := range sections {
@@ -595,7 +598,7 @@ func rebuildDocSourceIndex(kbDir, source, subDir string, dryRun bool, logger *sl
 		return nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
@@ -636,6 +639,7 @@ func parseDocFrontmatter(path string) docInfo {
 func readFrontmatterFields(path string) map[string]string {
 	fields := make(map[string]string)
 
+	// #nosec G304 -- path comes from files already discovered within the KB root.
 	f, err := os.Open(path)
 	if err != nil {
 		return fields
