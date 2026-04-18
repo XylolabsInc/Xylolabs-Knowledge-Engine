@@ -27,6 +27,8 @@ type Reader struct {
 	lastPull   time.Time
 	pullMinGap time.Duration
 
+	cacheMu       sync.RWMutex
+
 	indexCache    []fileEntry
 	indexCacheAt  time.Time
 	indexCacheTTL time.Duration
@@ -66,9 +68,11 @@ func (r *Reader) Pull() {
 	} else {
 		r.logger.Debug("git pull complete", "output", strings.TrimSpace(string(out)))
 		r.lastPull = time.Now()
+		r.cacheMu.Lock()
 		r.indexCache = nil       // invalidate cache on successful pull
 		r.detailFilesCache = nil
 		r.urlMapCache = nil
+		r.cacheMu.Unlock()
 	}
 }
 
@@ -138,9 +142,13 @@ type fileEntry struct {
 // loadIndexFiles loads all index and overview files from the repo.
 // These are always included: indexes/*, source READMEs, channel READMEs.
 func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
+	r.cacheMu.RLock()
 	if r.indexCache != nil && time.Since(r.indexCacheAt) < r.indexCacheTTL {
-		return r.indexCache, nil
+		cache := r.indexCache
+		r.cacheMu.RUnlock()
+		return cache, nil
 	}
+	r.cacheMu.RUnlock()
 
 	root, err := os.OpenRoot(r.repoDir)
 	if err != nil {
@@ -191,8 +199,12 @@ func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
 		}
 	}
 
+	r.cacheMu.Lock()
+	r.cacheMu.Lock()
 	r.indexCache = entries
 	r.indexCacheAt = time.Now()
+	r.cacheMu.Unlock()
+	r.cacheMu.Unlock()
 
 	return entries, nil
 }
@@ -222,9 +234,13 @@ func extractURL(content string) string {
 // buildURLMap scans all markdown files and maps relative paths to their source URLs.
 // Results are cached for indexCacheTTL duration and invalidated on git pull.
 func (r *Reader) buildURLMap() map[string]string {
+	r.cacheMu.RLock()
 	if r.urlMapCache != nil && time.Since(r.urlMapCacheAt) < r.indexCacheTTL {
-		return r.urlMapCache
+		cache := r.urlMapCache
+		r.cacheMu.RUnlock()
+		return cache
 	}
+	r.cacheMu.RUnlock()
 	urlMap := make(map[string]string)
 	root, err := os.OpenRoot(r.repoDir)
 	if err != nil {
@@ -251,8 +267,10 @@ func (r *Reader) buildURLMap() map[string]string {
 	}); err != nil {
 		r.logger.Warn("failed to build url map", "error", err)
 	}
+	r.cacheMu.Lock()
 	r.urlMapCache = urlMap
 	r.urlMapCacheAt = time.Now()
+	r.cacheMu.Unlock()
 	return urlMap
 }
 
@@ -467,9 +485,13 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 
 // listDetailFiles lists all non-index, non-README markdown files.
 func (r *Reader) listDetailFiles() []string {
+	r.cacheMu.RLock()
 	if r.detailFilesCache != nil && time.Since(r.detailFilesCacheAt) < r.indexCacheTTL {
-		return r.detailFilesCache
+		cache := r.detailFilesCache
+		r.cacheMu.RUnlock()
+		return cache
 	}
+	r.cacheMu.RUnlock()
 
 	root, err := os.OpenRoot(r.repoDir)
 	if err != nil {
@@ -503,8 +525,10 @@ func (r *Reader) listDetailFiles() []string {
 	}); err != nil {
 		r.logger.Warn("failed to list detail files", "error", err)
 	}
+	r.cacheMu.Lock()
 	r.detailFilesCache = files
 	r.detailFilesCacheAt = time.Now()
+	r.cacheMu.Unlock()
 	return files
 }
 
