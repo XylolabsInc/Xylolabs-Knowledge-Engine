@@ -18,6 +18,7 @@ func main() {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.WindowSize(1280, 960),
 		chromedp.Flag("disable-gpu", true),
+		// Required in Docker containers without kernel sandboxing support.
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-software-rasterizer", true),
@@ -51,7 +52,7 @@ func main() {
 	}
 
 	outPath := "/tmp/chromedp-test.png"
-	if err := os.WriteFile(outPath, buf, 0644); err != nil {
+	if err := os.WriteFile(outPath, buf, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "write error: %v\n", err)
 		os.Exit(1)
 	}

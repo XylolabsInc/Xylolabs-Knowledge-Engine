@@ -36,6 +36,8 @@ func (s *Screenshotter) Capture(ctx context.Context, url string, width, height i
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.WindowSize(width, height),
 		chromedp.Flag("disable-gpu", true),
+		// Required in Docker containers without kernel sandboxing support.
+		// The container runs as non-root with minimal capabilities (see Dockerfile).
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-software-rasterizer", true),
