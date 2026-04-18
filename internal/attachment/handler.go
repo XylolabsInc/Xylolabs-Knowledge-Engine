@@ -1,6 +1,7 @@
 package attachment
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +43,7 @@ func NewHandler(basePath string, store kb.Storage, logger *slog.Logger) *Handler
 }
 
 // Download fetches an attachment from its source URL and stores it locally.
-func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*kb.Attachment, error) {
+func (h *Handler) Download(ctx context.Context, att kb.Attachment, authHeaders map[string]string) (*kb.Attachment, error) {
 	if att.SourceURL == "" {
 		return nil, fmt.Errorf("attachment %s has no source URL", att.ID)
 	}
@@ -61,7 +62,7 @@ func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*k
 
 	var lastErr error
 	for attempt := range h.maxRetries {
-		err := h.downloadFile(att.SourceURL, localPath, authHeaders)
+		err := h.downloadFile(ctx, att.SourceURL, localPath, authHeaders)
 		if err == nil {
 			att.LocalPath = localPath
 			att.DownloadedAt = time.Now().UTC()
@@ -97,14 +98,18 @@ func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*k
 				delay = 10 * time.Second
 			}
 			jitter := time.Duration(rand.Int64N(int64(delay) / 2))
-			time.Sleep(delay + jitter)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay + jitter):
+			}
 	}
 
 	return nil, fmt.Errorf("download %s after %d attempts: %w", att.Filename, h.maxRetries, lastErr)
 }
 
-func (h *Handler) downloadFile(url, destPath string, headers map[string]string) error {
-	req, err := http.NewRequest("GET", url, nil)
+func (h *Handler) downloadFile(ctx context.Context, url, destPath string, headers map[string]string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
