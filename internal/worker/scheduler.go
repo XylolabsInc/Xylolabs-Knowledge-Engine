@@ -147,8 +147,8 @@ func (s *Scheduler) runJob(job *Job) {
 		case <-s.done:
 			return
 		case <-ticker.C:
-			// Derive a fresh cancellable context per execution.
 			execCtx, execCancel := context.WithCancel(context.Background())
+			defer execCancel()
 			go func() {
 				select {
 				case <-s.done:
@@ -159,7 +159,6 @@ func (s *Scheduler) runJob(job *Job) {
 			if err := s.executeJob(execCtx, job); err != nil {
 				s.logger.Warn("scheduled job run failed", "name", job.Name, "error", err)
 			}
-			execCancel()
 		}
 	}
 }
