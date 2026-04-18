@@ -12,13 +12,11 @@ func newTestExecutor() *ToolExecutor {
 func TestToolExecutorStaleAttachmentCleanup(t *testing.T) {
 	e := newTestExecutor()
 
-	// Manually set stale attachments
 	e.mu.Lock()
 	e.attachments = map[string][]byte{"stale.txt": []byte("old data")}
 	e.screenshotData = []byte("old screenshot")
 	e.mu.Unlock()
 
-	// Calling SetAttachments should replace the old ones
 	e.SetAttachments(map[string][]byte{"new.txt": []byte("new data")})
 
 	e.mu.Lock()
@@ -60,15 +58,12 @@ func TestToolExecutorSetClearAttachments(t *testing.T) {
 func TestToolExecutorScreenshotIsolation(t *testing.T) {
 	e := newTestExecutor()
 
-	// Set a user attachment named "screenshot.png"
 	e.SetAttachments(map[string][]byte{"screenshot.png": []byte("user screenshot")})
 
-	// Simulate screenshot_url setting screenshotData
 	e.mu.Lock()
 	e.screenshotData = []byte("tool screenshot")
 	e.mu.Unlock()
 
-	// User's attachment should still be there
 	e.mu.Lock()
 	if _, ok := e.attachments["screenshot.png"]; !ok {
 		t.Error("user's screenshot.png attachment should be preserved")
@@ -130,18 +125,7 @@ func TestToolExecutorStaleDetectionOnNextSession(t *testing.T) {
 	// Now a new session starts: SetAttachments again (incrementing epoch)
 	e.SetAttachments(map[string][]byte{"new.txt": []byte("new data")})
 
-	// The old lastSeenEpoch < new attachmentEpoch, but Execute hasn't run yet for
-	// the new session. When it runs, it should NOT clear because lastSeenEpoch
-	// equals the old epoch which is less than the current epoch — but that means
-	// stale data from the previous session. Let's verify it clears old and keeps new.
-
-	// Actually: the stale check only triggers if lastSeenEpoch > 0 AND
-	// lastSeenEpoch < attachmentEpoch. In this case that's true, so it would
-	// clear. But that's wrong — the new attachments are fresh.
-	// The design is: stale detection only matters if there was a PANIC between
-	// sessions where ClearAttachments was never called. In normal flow,
-	// ClearAttachments resets lastSeenEpoch.
-	// Let's test the normal flow:
+	// In normal flow, ClearAttachments resets lastSeenEpoch before the next session.
 	e.ClearAttachments()
 
 	e.SetAttachments(map[string][]byte{"fresh.txt": []byte("fresh data")})

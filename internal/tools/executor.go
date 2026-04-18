@@ -1263,7 +1263,6 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return nil, err
 		}
 
-		// Build column letter mapping so the model knows which column letter corresponds to which header
 		result := map[string]any{"data": data, "rows": len(data), "file_id": fileID}
 
 		if len(data) > 0 {

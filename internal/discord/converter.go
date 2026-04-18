@@ -73,9 +73,7 @@ func ConvertMessage(msg *discordgo.Message, channelName, guildID string) kb.Docu
 }
 
 func cleanDiscordText(text string) string {
-	// Replace user mentions with @userID (will be resolved later)
 	text = discordUserMentionRe.ReplaceAllString(text, "@$1")
-	// Replace channel mentions with #channelID
 	text = discordChannelRe.ReplaceAllString(text, "#$1")
 	return strings.TrimSpace(text)
 }
@@ -113,7 +111,6 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, attachments []
 		}
 	}
 
-	// Extract content from URLs in message
 	urls := discordURLRe.FindAllString(doc.Content, -1)
 	seen := make(map[string]bool)
 	for _, u := range urls {

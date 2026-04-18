@@ -59,7 +59,6 @@ func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*k
 
 	localPath := filepath.Join(dir, sanitizeFilename(att.Filename))
 
-	// Download with retry
 	var lastErr error
 	for attempt := range h.maxRetries {
 		err := h.downloadFile(att.SourceURL, localPath, authHeaders)
@@ -67,17 +66,14 @@ func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*k
 			att.LocalPath = localPath
 			att.DownloadedAt = time.Now().UTC()
 
-			// Detect content type if not set
 			if att.MimeType == "" {
 				att.MimeType = detectMimeType(localPath)
 			}
 
-			// Get file size
 			if info, err := os.Stat(localPath); err == nil {
 				att.Size = info.Size()
 			}
 
-			// Update in storage
 			if err := h.store.UpsertAttachment(att); err != nil {
 				h.logger.Warn("failed to update attachment record", "id", att.ID, "error", err)
 			}
@@ -148,7 +144,6 @@ func sanitizeFilename(name string) string {
 	if name == "" {
 		return "unnamed"
 	}
-	// Replace problematic characters
 	safe := make([]byte, 0, len(name))
 	for i := range len(name) {
 		c := name[i]
