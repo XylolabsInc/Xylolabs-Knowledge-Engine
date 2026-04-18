@@ -55,5 +55,6 @@ coverage.html
 
 .omc/
 .omx/
+/.context/
 /kb-gen
 /screenshot-test
