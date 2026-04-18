@@ -869,7 +869,6 @@ func extractDatePatterns(query string) []string {
 	var patterns []string
 
 	// Extract year if present (e.g., "2025년")
-	yearPattern := regexp.MustCompile(`(20\d{2})년?`)
 	yearMatches := yearPattern.FindStringSubmatch(query)
 	year := time.Now().Format("2006")
 	if len(yearMatches) >= 2 {

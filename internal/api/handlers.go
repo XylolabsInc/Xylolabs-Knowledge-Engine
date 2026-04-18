@@ -526,6 +526,10 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path must point to a markdown file")
 		return
 	}
+	if info.Size() > 1<<20 {
+		writeError(w, http.StatusBadRequest, "file too large (max 1 MB)")
+		return
+	}
 
 	data, err := root.ReadFile(cleaned)
 	if err != nil {
