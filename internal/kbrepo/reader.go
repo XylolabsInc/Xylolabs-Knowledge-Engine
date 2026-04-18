@@ -1,7 +1,9 @@
 package kbrepo
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -28,6 +30,9 @@ type Reader struct {
 	indexCache    []fileEntry
 	indexCacheAt  time.Time
 	indexCacheTTL time.Duration
+
+	urlMapCache   map[string]string
+	urlMapCacheAt time.Time
 }
 
 // NewReader creates a KB repo reader.
@@ -49,6 +54,7 @@ func (r *Reader) Pull() {
 		return
 	}
 
+	// #nosec G204 -- git pull is an intentional maintenance command scoped to the configured repo.
 	cmd := exec.Command("git", "-C", r.repoDir, "pull", "--rebase", "origin", "main")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -57,7 +63,8 @@ func (r *Reader) Pull() {
 	} else {
 		r.logger.Debug("git pull complete", "output", strings.TrimSpace(string(out)))
 		r.lastPull = time.Now()
-		r.indexCache = nil // invalidate cache on successful pull
+		r.indexCache = nil   // invalidate cache on successful pull
+		r.urlMapCache = nil
 	}
 }
 
@@ -131,24 +138,28 @@ func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
 		return r.indexCache, nil
 	}
 
+	root, err := os.OpenRoot(r.repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("open repo root: %w", err)
+	}
+	defer root.Close()
+
 	var entries []fileEntry
 
 	// Index files.
-	indexDir := filepath.Join(r.repoDir, "indexes")
-	if err := filepath.Walk(indexDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+	if err := fs.WalkDir(root.FS(), "indexes", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
-		rel, _ := filepath.Rel(r.repoDir, path)
-		data, err := os.ReadFile(path)
+		data, err := root.ReadFile(path)
 		if err != nil {
 			return nil
 		}
 		if content := strings.TrimSpace(string(data)); content != "" {
-			entries = append(entries, fileEntry{relPath: rel, content: content})
+			entries = append(entries, fileEntry{relPath: path, content: content})
 		}
 		return nil
-	}); err != nil && !os.IsNotExist(err) {
+	}); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		r.logger.Warn("failed to walk indexes", "error", err)
 	}
 
@@ -164,15 +175,14 @@ func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
 		"discord/channels/*/README.md",
 	}
 	for _, pattern := range readmePatterns {
-		matches, _ := filepath.Glob(filepath.Join(r.repoDir, pattern))
+		matches, _ := fs.Glob(root.FS(), pattern)
 		for _, path := range matches {
-			rel, _ := filepath.Rel(r.repoDir, path)
-			data, err := os.ReadFile(path)
+			data, err := root.ReadFile(path)
 			if err != nil {
 				continue
 			}
 			if content := strings.TrimSpace(string(data)); content != "" {
-				entries = append(entries, fileEntry{relPath: rel, content: content})
+				entries = append(entries, fileEntry{relPath: path, content: content})
 			}
 		}
 	}
@@ -206,25 +216,39 @@ func extractURL(content string) string {
 }
 
 // buildURLMap scans all markdown files and maps relative paths to their source URLs.
+// Results are cached for indexCacheTTL duration and invalidated on git pull.
 func (r *Reader) buildURLMap() map[string]string {
+	if r.urlMapCache != nil && time.Since(r.urlMapCacheAt) < r.indexCacheTTL {
+		return r.urlMapCache
+	}
 	urlMap := make(map[string]string)
-	filepath.Walk(r.repoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+	root, err := os.OpenRoot(r.repoDir)
+	if err != nil {
+		r.logger.Warn("failed to open repo root", "error", err)
+		return urlMap
+	}
+	defer root.Close()
+
+	if err := fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
 		if base := filepath.Base(path); base == "README.md" || base == "CLAUDE.md" {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := root.ReadFile(path)
 		if err != nil {
 			return nil
 		}
 		if url := extractURL(string(data)); url != "" {
-			rel, _ := filepath.Rel(r.repoDir, path)
-			urlMap[rel] = url
+			urlMap[path] = url
 		}
 		return nil
-	})
+	}); err != nil {
+		r.logger.Warn("failed to build url map", "error", err)
+	}
+	r.urlMapCache = urlMap
+	r.urlMapCacheAt = time.Now()
 	return urlMap
 }
 
@@ -440,35 +464,49 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 
 // listDetailFiles lists all non-index, non-README markdown files.
 func (r *Reader) listDetailFiles() []string {
+	root, err := os.OpenRoot(r.repoDir)
+	if err != nil {
+		r.logger.Warn("failed to open repo root", "error", err)
+		return nil
+	}
+	defer root.Close()
+
 	var files []string
-	filepath.Walk(r.repoDir, func(path string, info os.FileInfo, err error) error {
+	if err := fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			base := filepath.Base(path)
 			if strings.HasPrefix(base, ".") || base == "_meta" || base == "indexes" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(info.Name(), ".md") {
+		if !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
-		rel, _ := filepath.Rel(r.repoDir, path)
 		// Skip root-level meta files and README files.
-		switch filepath.Base(rel) {
+		switch filepath.Base(path) {
 		case "CLAUDE.md", "AGENTS.md", "README.md":
 			return nil
 		}
-		files = append(files, rel)
+		files = append(files, path)
 		return nil
-	})
+	}); err != nil {
+		r.logger.Warn("failed to list detail files", "error", err)
+	}
 	return files
 }
 
 // loadFiles reads the specified files from the repo.
 func (r *Reader) loadFiles(relPaths []string) ([]fileEntry, error) {
+	root, err := os.OpenRoot(r.repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("open repo root: %w", err)
+	}
+	defer root.Close()
+
 	var entries []fileEntry
 	seen := make(map[string]bool)
 
@@ -478,8 +516,7 @@ func (r *Reader) loadFiles(relPaths []string) ([]fileEntry, error) {
 		}
 		seen[rel] = true
 
-		path := filepath.Join(r.repoDir, rel)
-		data, err := os.ReadFile(path)
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			r.logger.Debug("skipping missing kb file", "path", rel, "error", err)
 			continue
@@ -541,7 +578,7 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 	fullPath := filepath.Join(r.repoDir, relPath)
 
 	// Ensure directory exists.
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
@@ -557,7 +594,8 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 	b.WriteString(content)
 	b.WriteString("\n")
 
-	if err := os.WriteFile(fullPath, []byte(b.String()), 0o644); err != nil {
+	// #nosec G304 -- fullPath is derived from a slugified topic beneath repoDir.
+	if err := os.WriteFile(fullPath, []byte(b.String()), 0o600); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -575,6 +613,7 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 		{"git", "-C", r.repoDir, "push"},
 	}
 	for _, args := range cmds {
+		// #nosec G204 -- git commands and arguments are intentionally constructed from fixed subcommands plus sanitized relative paths.
 		cmd := exec.Command(args[0], args[1:]...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -595,14 +634,16 @@ func (r *Reader) updateUserProvidedReadme(readmePath, topic, relPath, content st
 
 	// Create file with header if it doesn't exist.
 	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
-		if err := os.WriteFile(readmePath, []byte(header), 0o644); err != nil {
+		// #nosec G304 -- readmePath stays within repoDir/user-provided.
+		if err := os.WriteFile(readmePath, []byte(header), 0o600); err != nil {
 			r.logger.Warn("failed to create user-provided README", "error", err)
 			return
 		}
 	}
 
 	// Append entry with excerpt.
-	f, err := os.OpenFile(readmePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	// #nosec G304 -- readmePath stays within repoDir/user-provided.
+	f, err := os.OpenFile(readmePath, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		r.logger.Warn("failed to open user-provided README", "error", err)
 		return
@@ -644,7 +685,7 @@ func extractExcerpt(content string, maxLen int) string {
 // This ensures user-provided facts appear in the primary index search path.
 func (r *Reader) updateUserProvidedIndex(topic, relPath, content, author string) {
 	indexDir := filepath.Join(r.repoDir, "indexes")
-	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+	if err := os.MkdirAll(indexDir, 0o750); err != nil {
 		r.logger.Warn("failed to create indexes dir", "error", err)
 		return
 	}
@@ -653,13 +694,15 @@ func (r *Reader) updateUserProvidedIndex(topic, relPath, content, author string)
 	const header = "---\ntitle: \"User-Provided Facts Index\"\n---\n# User-Provided Facts\n\nFacts and knowledge contributed by team members.\n\n"
 
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		if err := os.WriteFile(indexPath, []byte(header), 0o644); err != nil {
+		// #nosec G304 -- indexPath stays within repoDir/indexes.
+		if err := os.WriteFile(indexPath, []byte(header), 0o600); err != nil {
 			r.logger.Warn("failed to create user-provided index", "error", err)
 			return
 		}
 	}
 
-	f, err := os.OpenFile(indexPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	// #nosec G304 -- indexPath stays within repoDir/indexes.
+	f, err := os.OpenFile(indexPath, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		r.logger.Warn("failed to open user-provided index", "error", err)
 		return
@@ -709,13 +752,13 @@ func slugify(s string) string {
 // synonyms maps common abbreviations and terms to their expansions.
 var synonyms = map[string][]string{
 	// Source type mappings (Korean ↔ English)
-	"슬랙":   {"slack", "channels"},
-	"slack":  {"슬랙", "channels"},
-	"구글":   {"google", "docs"},
-	"google": {"구글", "docs"},
-	"노션":    {"notion", "pages"},
+	"슬랙":      {"slack", "channels"},
+	"slack":   {"슬랙", "channels"},
+	"구글":      {"google", "docs"},
+	"google":  {"구글", "docs"},
+	"노션":      {"notion", "pages"},
 	"notion":  {"노션", "pages"},
-	"디스코드":  {"discord", "channels"},
+	"디스코드":    {"discord", "channels"},
 	"discord": {"디스코드", "channels"},
 	// Content type mappings
 	"대화":   {"channels", "messages", "slack"},
