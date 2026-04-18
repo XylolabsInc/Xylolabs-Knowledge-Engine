@@ -83,10 +83,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	if query.Source != "" {
 		switch query.Source {
-		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual:
+		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual, kb.SourceDiscord:
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, notion, or manual")
+			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, notion, discord, or manual")
 			return
 		}
 	}
@@ -170,10 +170,10 @@ func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	if query.Source != "" {
 		switch query.Source {
-		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual:
+		case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual, kb.SourceDiscord:
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, notion, or manual")
+			writeError(w, http.StatusBadRequest, "invalid source: must be slack, google, notion, discord, or manual")
 			return
 		}
 	}
@@ -243,7 +243,7 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	// Count KB repo markdown files
 	var kbFileCount int
 	if s.kbRepoDir != "" {
-		filepath.WalkDir(s.kbRepoDir, func(path string, d fs.DirEntry, err error) error {
+		if err := filepath.WalkDir(s.kbRepoDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
@@ -251,7 +251,9 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 				kbFileCount++
 			}
 			return nil
-		})
+		}); err != nil {
+			s.logger.Warn("failed to count kb repo files", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -283,7 +285,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		}
 		if syncState != nil {
 			source["last_sync"] = syncState.LastSyncAt
-			source["cursor"]    = syncState.Cursor
+			source["cursor"] = syncState.Cursor
 		}
 		sources = append(sources, source)
 	}
@@ -300,7 +302,7 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 
 	kbSource := kb.Source(source)
 	switch kbSource {
-	case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual:
+	case kb.SourceSlack, kb.SourceGoogle, kb.SourceNotion, kb.SourceManual, kb.SourceDiscord:
 		// valid
 	default:
 		writeError(w, http.StatusBadRequest, "unknown source: "+source)
@@ -315,8 +317,8 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":  "sync triggered",
-		"source":  source,
+		"status": "sync triggered",
+		"source": source,
 	})
 }
 
@@ -387,7 +389,7 @@ func (s *Server) handleKBTree(w http.ResponseWriter, r *http.Request) {
 	root := &fileNode{Name: "/", Path: "", IsDir: true}
 	nodeMap := map[string]*fileNode{"": root}
 
-	filepath.WalkDir(s.kbRepoDir, func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(s.kbRepoDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -444,7 +446,9 @@ func (s *Server) handleKBTree(w http.ResponseWriter, r *http.Request) {
 		}
 
 		return nil
-	})
+	}); err != nil {
+		s.logger.Warn("failed to build kb tree", "error", err)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"tree": root.Children})
 }
@@ -471,31 +475,33 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-
-	fullPath := filepath.Join(s.kbRepoDir, cleaned)
-
-	// Resolve symlinks to prevent escape
-	resolvedPath, err := filepath.EvalSymlinks(fullPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			writeError(w, http.StatusNotFound, "file not found")
-		} else {
-			writeError(w, http.StatusBadRequest, "invalid path")
-		}
+	if !isAllowedKBRepoPath(cleaned) {
+		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	resolvedRepo, err := filepath.EvalSymlinks(s.kbRepoDir)
+
+	root, err := os.OpenRoot(s.kbRepoDir)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "server configuration error")
 		return
 	}
-	if !strings.HasPrefix(resolvedPath, resolvedRepo) {
-		writeError(w, http.StatusBadRequest, "invalid path")
+	defer root.Close()
+
+	info, err := root.Stat(cleaned)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "file not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to stat file")
+		}
 		return
 	}
-	fullPath = resolvedPath
+	if info.IsDir() {
+		writeError(w, http.StatusBadRequest, "path must point to a markdown file")
+		return
+	}
 
-	data, err := os.ReadFile(fullPath)
+	data, err := root.ReadFile(cleaned)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeError(w, http.StatusNotFound, "file not found")
@@ -552,7 +558,7 @@ func (s *Server) handleKBDocTree(w http.ResponseWriter, r *http.Request) {
 			for _, doc := range docs {
 				title := doc.Title
 				if title == "" {
-					title = doc.ID[:12]
+					title = truncateID(doc.ID, 12)
 				}
 				docNode := &node{
 					Name:  title + ".md",
@@ -612,6 +618,8 @@ func (s *Server) handleKBDocFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 12<<20)
+	// #nosec G120 -- request body is hard-capped with MaxBytesReader immediately above.
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request: max 10MB")
 		return
@@ -724,6 +732,8 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 12<<20)
+	// #nosec G120 -- request body is hard-capped with MaxBytesReader immediately above.
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request: max 10MB")
 		return
@@ -761,6 +771,10 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 		data, err := io.ReadAll(io.LimitReader(file, 10<<20+1))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "failed to read file")
+			return
+		}
+		if int64(len(data)) > 10<<20 {
+			writeError(w, http.StatusBadRequest, "file too large (max 10MB)")
 			return
 		}
 		mimeType := header.Header.Get("Content-Type")
@@ -812,9 +826,22 @@ func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		// Response has already started; best effort only.
+		return
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// truncateID returns id truncated to maxLen characters, or the full id if shorter.
+const defaultIDTruncLen = 12
+
+func truncateID(id string, maxLen int) string {
+	if len(id) <= maxLen {
+		return id
+	}
+	return id[:maxLen]
 }
