@@ -159,12 +159,13 @@ func (c *Connector) Sync(ctx context.Context) error {
 		totalMessages += count
 	}
 
-	// Update sync state
+	// Update sync state — use full timestamp precision to avoid
+	// skipping messages that arrive within the same second as the cursor.
 	now := time.Now().UTC()
 	newState := kb.SyncState{
 		Source:     kb.SourceSlack,
 		LastSyncAt: now,
-		Cursor:     fmt.Sprintf("%d", now.Unix()),
+		Cursor:     fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000),
 		Metadata:   map[string]string{"channels_synced": fmt.Sprintf("%d", len(channels))},
 	}
 	if err := c.store.SetSyncState(newState); err != nil {

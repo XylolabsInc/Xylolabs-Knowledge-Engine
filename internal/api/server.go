@@ -42,7 +42,10 @@ type Server struct {
 	startedAt    time.Time
 	requestCount atomic.Int64
 	errorCount   atomic.Int64
-	asyncWg      sync.WaitGroup
+	asyncWg         sync.WaitGroup
+
+	kbStatsFileCount int
+	kbStatsCacheAt   time.Time
 }
 
 // NewServer creates an API server.

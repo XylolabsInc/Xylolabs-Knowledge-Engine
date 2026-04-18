@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,17 @@ func (c *Connector) SetExtractor(ext *extractor.Extractor) {
 
 func (c *Connector) waitRateLimit(ctx context.Context) error {
 	return c.limiter.Wait(ctx)
+}
+
+// snowflakeLess returns true if a < b numerically. Falls back to string
+// comparison if either value cannot be parsed as a uint64.
+func snowflakeLess(a, b string) bool {
+	ai, errA := strconv.ParseUint(a, 10, 64)
+	bi, errB := strconv.ParseUint(b, 10, 64)
+	if errA != nil || errB != nil {
+		return a < b
+	}
+	return ai < bi
 }
 
 // Name returns the source identifier.
@@ -195,7 +207,7 @@ func (c *Connector) syncChannel(ctx context.Context, ch *discordgo.Channel, afte
 				continue
 			}
 			count++
-			if msg.ID > lastID {
+			if snowflakeLess(lastID, msg.ID) {
 				lastID = msg.ID
 			}
 		}

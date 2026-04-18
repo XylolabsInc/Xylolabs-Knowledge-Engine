@@ -250,23 +250,29 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		syncTimes[string(k)] = v.Format(time.RFC3339)
 	}
 
-	// Count KB repo markdown files
+	// Count KB repo markdown files (cached for 30s to avoid walking on every request)
 	var kbFileCount int
 	if s.kbRepoDir != "" {
-		root, err := os.OpenRoot(s.kbRepoDir)
-		if err != nil {
-			s.logger.Warn("failed to open KB repo root", "error", err)
+		if time.Since(s.kbStatsCacheAt) < 30*time.Second {
+			kbFileCount = s.kbStatsFileCount
 		} else {
-			fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
-				if err != nil || d.IsDir() {
+			root, err := os.OpenRoot(s.kbRepoDir)
+			if err != nil {
+				s.logger.Warn("failed to open KB repo root", "error", err)
+			} else {
+				fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+					if err != nil || d.IsDir() {
+						return nil
+					}
+					if strings.HasSuffix(d.Name(), ".md") && !strings.HasPrefix(path, ".git") {
+						kbFileCount++
+					}
 					return nil
-				}
-				if strings.HasSuffix(d.Name(), ".md") && !strings.HasPrefix(path, ".git") {
-					kbFileCount++
-				}
-				return nil
-			})
-			root.Close()
+				})
+				root.Close()
+			}
+			s.kbStatsFileCount = kbFileCount
+			s.kbStatsCacheAt = time.Now()
 		}
 	}
 

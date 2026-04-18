@@ -172,7 +172,7 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, files []goslac
 		return
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := extractor.NewRestrictedHTTPClient(30 * time.Second)
 
 	// Extract content from file attachments
 	for _, f := range files {

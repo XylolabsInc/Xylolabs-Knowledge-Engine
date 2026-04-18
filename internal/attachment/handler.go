@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -96,7 +97,12 @@ func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*k
 			"url", att.SourceURL,
 			"error", err,
 		)
-		time.Sleep(time.Duration(attempt+1) * time.Second)
+		delay := 500*time.Millisecond * time.Duration(1<<uint(attempt))
+			if delay > 10*time.Second {
+				delay = 10 * time.Second
+			}
+			jitter := time.Duration(rand.Int64N(int64(delay) / 2))
+			time.Sleep(delay + jitter)
 	}
 
 	return nil, fmt.Errorf("download %s after %d attempts: %w", att.Filename, h.maxRetries, lastErr)

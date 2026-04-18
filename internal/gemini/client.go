@@ -9,14 +9,18 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const (
-	geminiAPIBase    = "https://generativelanguage.googleapis.com/v1beta/models"
-	defaultModel     = "gemini-3.1-flash-lite-preview"
+	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
+	defaultModel       = "gemini-3.1-flash-lite-preview"
 	httpTimeout         = 120 * time.Second
 	maxAPIResponseSize  = 50 << 20 // 50 MB
+	maxRetries          = 3
+	retryBaseDelay      = 1 * time.Second
 )
 
 // Client wraps the Gemini REST API.
@@ -103,6 +107,7 @@ func (c *Client) SetTimeout(d time.Duration) {
 }
 
 // Generate calls the Gemini generateContent endpoint and returns the response.
+// Retries on 429 and 5xx responses with exponential backoff.
 func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	model := c.model
 	if req.Model != "" {
@@ -118,41 +123,73 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 
 	url := fmt.Sprintf("%s/%s:generateContent", geminiAPIBase, model)
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("gemini: create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-goog-api-key", c.apiKey)
-
 	c.logger.Debug("calling gemini API", "model", model, "thinking_level", req.ThinkingLevel)
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
-	if err != nil {
-		return nil, fmt.Errorf("gemini: read response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		retryAfter := resp.Header.Get("Retry-After")
-		if retryAfter != "" {
-			return nil, fmt.Errorf("gemini: API error %d (retry-after: %s): %s", resp.StatusCode, retryAfter, string(respData))
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryBaseDelay * time.Duration(1<<uint(attempt-1))
+			retryAfter := ""
+			if lastErr != nil {
+				// Check if the previous error included a Retry-After hint
+				if parts := strings.SplitN(lastErr.Error(), "(retry-after: ", 2); len(parts) == 2 {
+					retryAfter = strings.TrimSuffix(parts[1], ")")
+				}
+			}
+			if retryAfter != "" {
+				if sec, parseErr := strconv.Atoi(retryAfter); parseErr == nil && sec > 0 {
+					delay = time.Duration(sec) * time.Second
+				}
+			}
+			c.logger.Warn("gemini API retryable error, retrying", "attempt", attempt, "delay", delay, "error", lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
 		}
-		return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, string(respData))
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("gemini: create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("gemini: do request: %w", err)
+		}
+
+		respData, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("gemini: read response: %w", err)
+		}
+
+		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			retryAfter := resp.Header.Get("Retry-After")
+			lastErr = fmt.Errorf("gemini: API error %d (retry-after: %s): %s", resp.StatusCode, retryAfter, string(respData))
+			if attempt < maxRetries-1 {
+				continue
+			}
+			return nil, lastErr
+		}
+
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, string(respData))
+		}
+
+		result, err := parseResponse(respData)
+		if err != nil {
+			return nil, fmt.Errorf("gemini: parse response: %w", err)
+		}
+
+		c.logger.Debug("gemini API call complete", "tokens_used", result.TokensUsed)
+		return result, nil
 	}
 
-	result, err := parseResponse(respData)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: parse response: %w", err)
-	}
-
-	c.logger.Debug("gemini API call complete", "tokens_used", result.TokensUsed)
-	return result, nil
+	return nil, fmt.Errorf("gemini: %w", lastErr)
 }
 
 // thinkingBudgetFor maps a level name to a token budget.
