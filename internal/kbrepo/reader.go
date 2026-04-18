@@ -33,6 +33,9 @@ type Reader struct {
 
 	urlMapCache   map[string]string
 	urlMapCacheAt time.Time
+
+	detailFilesCache   []string
+	detailFilesCacheAt time.Time
 }
 
 // NewReader creates a KB repo reader.
@@ -63,7 +66,8 @@ func (r *Reader) Pull() {
 	} else {
 		r.logger.Debug("git pull complete", "output", strings.TrimSpace(string(out)))
 		r.lastPull = time.Now()
-		r.indexCache = nil   // invalidate cache on successful pull
+		r.indexCache = nil       // invalidate cache on successful pull
+		r.detailFilesCache = nil
 		r.urlMapCache = nil
 	}
 }
@@ -415,9 +419,8 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 
 	// Apply recency boost: files with more recent dates in their path get a bonus.
 	now := time.Now()
-	dateRe := regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
 	for path, score := range fileScores {
-		if m := dateRe.FindString(path); m != "" {
+		if m := datePathRe.FindString(path); m != "" {
 			if fileDate, err := time.Parse("2006-01-02", m); err == nil {
 				daysSince := now.Sub(fileDate).Hours() / 24
 				switch {
@@ -464,6 +467,10 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 
 // listDetailFiles lists all non-index, non-README markdown files.
 func (r *Reader) listDetailFiles() []string {
+	if r.detailFilesCache != nil && time.Since(r.detailFilesCacheAt) < r.indexCacheTTL {
+		return r.detailFilesCache
+	}
+
 	root, err := os.OpenRoot(r.repoDir)
 	if err != nil {
 		r.logger.Warn("failed to open repo root", "error", err)
@@ -496,6 +503,8 @@ func (r *Reader) listDetailFiles() []string {
 	}); err != nil {
 		r.logger.Warn("failed to list detail files", "error", err)
 	}
+	r.detailFilesCache = files
+	r.detailFilesCacheAt = time.Now()
 	return files
 }
 
@@ -618,6 +627,13 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			r.logger.Warn("git command failed", "cmd", args, "error", err, "output", string(out))
+			// Clean up staged changes on commit/push failure to avoid orphaned index state.
+			if args[1] == "commit" || args[1] == "push" {
+				resetCmd := exec.Command("git", "-C", r.repoDir, "reset", "HEAD", relPath, "user-provided/README.md", "indexes/user-provided.md")
+				if resetOut, resetErr := resetCmd.CombinedOutput(); resetErr != nil {
+					r.logger.Warn("git reset failed", "error", resetErr, "output", string(resetOut))
+				}
+			}
 			return fmt.Errorf("git %s: %w", args[1], err)
 		}
 	}
@@ -836,6 +852,7 @@ func tokenize(s string) []string {
 
 // koreanMonthPattern matches Korean month references like "1월", "2월", "12월".
 var koreanMonthPattern = regexp.MustCompile(`(\d{1,2})월`)
+var datePathRe = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
 
 // extractDatePatterns extracts date path patterns from a query string.
 // "2월" → ["2026-02"], "2025년 3월" → ["2025-03"], "3월" → ["2026-03"].

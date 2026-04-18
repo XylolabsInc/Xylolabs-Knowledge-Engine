@@ -245,16 +245,20 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	// Count KB repo markdown files
 	var kbFileCount int
 	if s.kbRepoDir != "" {
-		if err := filepath.WalkDir(s.kbRepoDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+		root, err := os.OpenRoot(s.kbRepoDir)
+		if err != nil {
+			s.logger.Warn("failed to open KB repo root", "error", err)
+		} else {
+			fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return nil
+				}
+				if strings.HasSuffix(d.Name(), ".md") && !strings.HasPrefix(path, ".git") {
+					kbFileCount++
+				}
 				return nil
-			}
-			if strings.HasSuffix(d.Name(), ".md") && !strings.HasPrefix(path, filepath.Join(s.kbRepoDir, ".git")) {
-				kbFileCount++
-			}
-			return nil
-		}); err != nil {
-			s.logger.Warn("failed to count kb repo files", "error", err)
+			})
+			root.Close()
 		}
 	}
 

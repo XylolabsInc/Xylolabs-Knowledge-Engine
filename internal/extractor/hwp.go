@@ -97,7 +97,6 @@ func extractHWPXSectionText(xmlData []byte) (string, error) {
 	dec := xml.NewDecoder(bytes.NewReader(xmlData))
 	var sb strings.Builder
 	var paraBuilder strings.Builder
-	inCell := false
 
 	for {
 		tok, err := dec.Token()
@@ -122,7 +121,6 @@ func extractHWPXSectionText(xmlData []byte) (string, error) {
 				}
 			case "tc":
 				// Table cell: insert tab separator between cells.
-				inCell = true
 				if paraBuilder.Len() > 0 {
 					paraBuilder.WriteByte('\t')
 				}
@@ -135,12 +133,10 @@ func extractHWPXSectionText(xmlData []byte) (string, error) {
 			}
 		case xml.EndElement:
 			if t.Name.Local == "tc" {
-				inCell = false
 			}
 		}
 	}
 
-	_ = inCell // suppress unused variable warning
 
 	// Flush any trailing paragraph content.
 	if paraBuilder.Len() > 0 {
@@ -212,6 +208,12 @@ func extractHWPPython(data []byte) (string, error) {
 
 // runCommand runs an external command with context and returns its stdout output.
 func runCommand(ctx context.Context, name string, args ...string) (string, error) {
+	switch name {
+	case "hwp5txt", "python3":
+	default:
+		return "", fmt.Errorf("hwp: command %q is not allowed", name)
+	}
+	// #nosec G204 -- command name is restricted to a small allowlist above.
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

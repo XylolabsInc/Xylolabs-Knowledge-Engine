@@ -69,6 +69,11 @@ func NewGoogleWriter(driveService *drive.Service, docsService *docs.Service, she
 	}
 }
 
+// SenderEmail returns the configured sender email address.
+func (w *GoogleWriter) SenderEmail() string {
+	return w.senderEmail
+}
+
 // CreateDoc creates a new Google Doc with the given title and content.
 // Content is uploaded as text/plain and auto-converted to Google Docs format.
 // If folderID is empty, uses the default shared drive folder.

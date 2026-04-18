@@ -1750,6 +1750,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		if e.googleWriter == nil {
 			return nil, fmt.Errorf("Gmail is not configured")
 		}
+		if e.googleWriter.SenderEmail() == "" {
+			return nil, fmt.Errorf("send_email is not configured: sender email is not set")
+		}
 		to, _ := call.Args["to"].(string)
 		subject, _ := call.Args["subject"].(string)
 		body, _ := call.Args["body"].(string)
