@@ -191,6 +191,10 @@ func (p *SlackPlatform) PostReply(ctx context.Context, channel, threadID, text s
 		))
 	}
 
+	if len(blocks) == 0 {
+		return nil
+	}
+
 	fallback := blocks[0].(*slack.SectionBlock).Text.Text
 	if len(fallback) > 300 {
 		fallback = fallback[:297] + "..."
