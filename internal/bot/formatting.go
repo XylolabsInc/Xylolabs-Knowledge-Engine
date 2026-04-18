@@ -24,6 +24,7 @@ const (
 	maxKBContextChars    = 200000 // ~67k tokens for KB context
 	maxFileChars         = 24000  // ~8k tokens per attached file
 	maxSystemPromptChars = 250000
+	maxQueryBudget       = 50000 // aggregate char budget for user query + attachments
 )
 
 var (

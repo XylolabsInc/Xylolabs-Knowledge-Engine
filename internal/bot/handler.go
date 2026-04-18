@@ -161,7 +161,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 				result, err := b.extractor.ExtractFromBytes(ctx, data, mimeType, fileName)
 				if err != nil {
 					b.logger.Warn("PDF extraction failed, skipping inline", "file", fileName, "error", err)
-					query += fmt.Sprintf("\n\n[Attached PDF: %s (could not be read)]", fileName)
+					query = appendWithBudget(query, fmt.Sprintf("\n\n[Attached PDF: %s (could not be read)]", fileName), maxQueryBudget)
 				} else {
 					images = append(images, gemini.Image{MimeType: mimeType, Data: data})
 					if result.Text != "" && !strings.HasPrefix(result.Text, "[") {
@@ -169,7 +169,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 						if len(content) > 8000 {
 							content = content[:8000] + "\n..."
 						}
-						query += fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", fileName, content)
+						query = appendWithBudget(query, fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", fileName, content), maxQueryBudget)
 					}
 				}
 			} else {
@@ -182,7 +182,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 				if len(content) > 8000 {
 					content = content[:8000] + "\n..."
 				}
-				query += fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", fileName, content)
+				query = appendWithBudget(query, fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", fileName, content), maxQueryBudget)
 			}
 		}
 		fileAttachments[fileName] = data
@@ -203,7 +203,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 						if len(content) > 8000 {
 							content = content[:8000] + "\n..."
 						}
-						query += fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", name, content)
+						query = appendWithBudget(query, fmt.Sprintf("\n\n---\nFile: %s\n%s\n---", name, content), maxQueryBudget)
 					}
 				}
 			}
@@ -211,7 +211,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	}
 
 	if len(fileNames) > 0 {
-		query += "\n\n[Attached files: " + strings.Join(fileNames, ", ") + "]"
+		query = appendWithBudget(query, "\n\n[Attached files: "+strings.Join(fileNames, ", ")+"]", maxQueryBudget)
 	}
 
 	// Store file attachments for tool executor (upload_to_drive).
@@ -233,7 +233,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 				if len(content) > 5000 {
 					content = content[:5000] + "..."
 				}
-				query += fmt.Sprintf("\n\n---\nLink: %s\n%s\n---", u, content)
+				query = appendWithBudget(query, fmt.Sprintf("\n\n---\nLink: %s\n%s\n---", u, content), maxQueryBudget)
 			}
 		}
 	}
@@ -272,7 +272,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 					if len(content) > 5000 {
 						content = content[:5000] + "..."
 					}
-					query += fmt.Sprintf("\n\n---\nLink: %s\n%s\n---", u, content)
+					query = appendWithBudget(query, fmt.Sprintf("\n\n---\nLink: %s\n%s\n---", u, content), maxQueryBudget)
 				}
 			}
 		}
@@ -438,4 +438,17 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 			}
 		}(reactEmoji)
 	}
+}
+
+// appendWithBudget appends addition to query if it fits within budget.
+// If the addition would exceed budget, it is truncated with "..." or skipped.
+func appendWithBudget(query, addition string, budget int) string {
+	if len(query)+len(addition) <= budget {
+		return query + addition
+	}
+	remaining := budget - len(query)
+	if remaining <= 200 {
+		return query
+	}
+	return query + addition[:remaining-3] + "..."
 }
