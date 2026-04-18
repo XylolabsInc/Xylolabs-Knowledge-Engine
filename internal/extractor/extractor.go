@@ -6,14 +6,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	urlpkg "net/url"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	defaultMaxSize    = 10 * 1024 * 1024 // 10MB
-	fetchTimeout      = 15 * time.Second
+	defaultMaxSize  = 10 * 1024 * 1024 // 10MB
+	fetchTimeout    = 15 * time.Second
+	maxExtractDepth = 3
 )
 
 // GeminiClient is the interface for AI-powered extraction (image description).
@@ -39,17 +41,23 @@ type ExtractResult struct {
 // New creates an Extractor. gemini may be nil; image extraction will return a placeholder.
 func New(gemini GeminiClient, logger *slog.Logger) *Extractor {
 	return &Extractor{
-		gemini: gemini,
-		httpClient: &http.Client{
-			Timeout: fetchTimeout,
-		},
-		logger:  logger.With("component", "extractor"),
-		maxSize: defaultMaxSize,
+		gemini:     gemini,
+		httpClient: NewRestrictedHTTPClient(fetchTimeout),
+		logger:     logger.With("component", "extractor"),
+		maxSize:    defaultMaxSize,
 	}
 }
 
 // ExtractFromBytes extracts text from raw bytes given a MIME type and filename hint.
 func (e *Extractor) ExtractFromBytes(ctx context.Context, data []byte, mimeType string, filename string) (*ExtractResult, error) {
+	return e.extractFromBytes(ctx, data, mimeType, filename, 0)
+}
+
+func (e *Extractor) extractFromBytes(ctx context.Context, data []byte, mimeType string, filename string, depth int) (*ExtractResult, error) {
+	if depth > maxExtractDepth {
+		return nil, fmt.Errorf("extractor: recursion depth %d exceeds limit %d", depth, maxExtractDepth)
+	}
+
 	if int64(len(data)) > e.maxSize {
 		return nil, fmt.Errorf("extractor: extract from bytes: file size %d exceeds limit %d", len(data), e.maxSize)
 	}
@@ -119,7 +127,6 @@ func (e *Extractor) ExtractFromBytes(ctx context.Context, data []byte, mimeType 
 
 	case strings.HasPrefix(baseMIME, "video/"),
 		strings.HasPrefix(baseMIME, "audio/"):
-		// Videos and audio can't be extracted as text; store metadata only.
 		return &ExtractResult{
 			Text:     fmt.Sprintf("[%s file: %s]", baseMIME, filename),
 			MimeType: baseMIME,
@@ -131,7 +138,7 @@ func (e *Extractor) ExtractFromBytes(ctx context.Context, data []byte, mimeType 
 			detected := mimeFromFilename(filename)
 			if detected != "" && detected != baseMIME {
 				e.logger.Debug("falling back to extension-based MIME detection", "filename", filename, "detected", detected)
-				return e.ExtractFromBytes(ctx, data, detected, "")
+				return e.extractFromBytes(ctx, data, detected, "", depth+1)
 			}
 		}
 		// For truly unknown types, return a metadata placeholder rather than failing.
@@ -145,6 +152,13 @@ func (e *Extractor) ExtractFromBytes(ctx context.Context, data []byte, mimeType 
 
 // ExtractFromURL fetches a URL and extracts its text content.
 func (e *Extractor) ExtractFromURL(ctx context.Context, url string) (*ExtractResult, error) {
+	parsed, err := urlpkg.Parse(url)
+	if err != nil {
+		return nil, fmt.Errorf("extractor: parse url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("extractor: unsupported url scheme %q", parsed.Scheme)
+	}
 	return e.extractWebURL(ctx, url)
 }
 
@@ -195,9 +209,9 @@ func mimeFromFilename(filename string) string {
 
 // limitReader wraps an io.Reader with a hard size limit, returning an error if exceeded.
 type limitReader struct {
-	r       io.Reader
-	limit   int64
-	read    int64
+	r     io.Reader
+	limit int64
+	read  int64
 }
 
 func (lr *limitReader) Read(p []byte) (int, error) {
