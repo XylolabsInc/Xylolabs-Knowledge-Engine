@@ -25,6 +25,9 @@ type Connector struct {
 	store    kb.Storage
 	logger   *slog.Logger
 
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	userCache   map[string]*discordgo.Member
 	userCacheMu sync.RWMutex
 
@@ -47,6 +50,8 @@ func NewConnector(token, guildID string, engine *kb.Engine, store kb.Storage, lo
 		discordgo.IntentsMessageContent |
 		discordgo.IntentsGuilds
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &Connector{
 		session:   session,
 		guildID:   guildID,
@@ -55,6 +60,8 @@ func NewConnector(token, guildID string, engine *kb.Engine, store kb.Storage, lo
 		logger:    logger.With("component", "discord-connector"),
 		userCache: make(map[string]*discordgo.Member),
 		limiter:   rate.NewLimiter(rate.Limit(1), 1),
+		ctx:    ctx,
+		cancel: cancel,
 	}, nil
 }
 
@@ -109,6 +116,7 @@ func (c *Connector) Start(done <-chan struct{}) error {
 
 // Stop gracefully shuts down the connector.
 func (c *Connector) Stop() error {
+	c.cancel()
 	c.logger.Info("discord connector stopped")
 	return nil
 }
@@ -228,7 +236,8 @@ func (c *Connector) handleMessageCreate(s *discordgo.Session, m *discordgo.Messa
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Minute)
+	defer cancel()
 
 	// Bot routing
 	if c.botHandler != nil && c.botUserID != "" {
