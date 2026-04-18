@@ -215,10 +215,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 		query = appendWithBudget(query, "\n\n[Attached files: "+strings.Join(fileNames, ", ")+"]", maxQueryBudget)
 	}
 
-	// Store file attachments for tool executor (upload_to_drive).
+	// Store file attachments for tool executor (upload_to_drive) via context.
 	if b.toolExecutor != nil && len(fileAttachments) > 0 {
-		b.toolExecutor.SetAttachments(fileAttachments)
-		defer b.toolExecutor.ClearAttachments()
+		ctx = tools.ContextWithAttachments(ctx, fileAttachments)
 	}
 
 	// 2.5. Extract and fetch URLs from message text for context.

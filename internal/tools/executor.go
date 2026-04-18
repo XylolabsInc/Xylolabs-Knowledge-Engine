@@ -12,6 +12,22 @@ import (
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
 
+// attachmentsCtxKey is the context key for per-request file attachments.
+type attachmentsCtxKey struct{}
+
+// ContextWithAttachments returns a copy of ctx carrying the given file attachments.
+func ContextWithAttachments(ctx context.Context, att map[string][]byte) context.Context {
+	return context.WithValue(ctx, attachmentsCtxKey{}, att)
+}
+
+// attachmentsFromContext retrieves per-request file attachments from ctx.
+func attachmentsFromContext(ctx context.Context) map[string][]byte {
+	if att, ok := ctx.Value(attachmentsCtxKey{}).(map[string][]byte); ok {
+		return att
+	}
+	return nil
+}
+
 // ToolExecutor manages available tools and dispatches function calls.
 type ToolExecutor struct {
 	googleWriter      *GoogleWriter
@@ -1117,12 +1133,16 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		fileName, _ := call.Args["file_name"].(string)
 		folderID, _ := call.Args["folder_id"].(string)
 
-		e.mu.Lock()
-		allFiles := make(map[string][]byte)
-		for name, data := range e.attachments {
-			allFiles[name] = data
+		// Prefer per-request attachments from context; fall back to struct field.
+		allFiles := attachmentsFromContext(ctx)
+		if allFiles == nil {
+			e.mu.Lock()
+			allFiles = make(map[string][]byte, len(e.attachments))
+			for name, data := range e.attachments {
+				allFiles[name] = data
+			}
+			e.mu.Unlock()
 		}
-		e.mu.Unlock()
 
 		if len(allFiles) == 0 {
 			return nil, fmt.Errorf("no attached files")
