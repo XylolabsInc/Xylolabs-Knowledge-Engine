@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -29,7 +29,7 @@ type Client struct {
 	apiKey     string
 	model      string
 	httpClient *http.Client
-	timeout    atomic.Int64
+	mu         sync.Mutex
 	logger     *slog.Logger
 }
 
@@ -92,7 +92,7 @@ func NewClient(apiKey, model string, logger *slog.Logger) *Client {
 	if model == "" {
 		model = defaultModel
 	}
-	c := &Client{
+	return &Client{
 		apiKey: apiKey,
 		model:  model,
 		httpClient: &http.Client{
@@ -100,15 +100,13 @@ func NewClient(apiKey, model string, logger *slog.Logger) *Client {
 		},
 		logger: logger.With("component", "gemini-client"),
 	}
-	c.timeout.Store(httpTimeout.Nanoseconds())
-	return c
 }
 
 // SetTimeout overrides the default HTTP timeout for long-running requests
 // (e.g., KB generation with high thinking budgets).
 func (c *Client) SetTimeout(d time.Duration) {
-	ns := d.Nanoseconds()
-	c.timeout.Store(ns)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.httpClient.Timeout = d
 }
 
@@ -161,9 +159,10 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("x-goog-api-key", c.apiKey)
-		c.httpClient.Timeout = time.Duration(c.timeout.Load())
 
+		c.mu.Lock()
 		resp, err := c.httpClient.Do(httpReq)
+		c.mu.Unlock()
 		if err != nil {
 			return nil, fmt.Errorf("gemini: do request: %w", err)
 		}
@@ -176,7 +175,11 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			retryAfter := resp.Header.Get("Retry-After")
-			lastErr = fmt.Errorf("gemini: API error %d (retry-after: %s): %s", resp.StatusCode, retryAfter, string(respData))
+			errBody := string(respData)
+			if len(errBody) > 512 {
+				errBody = errBody[:512] + "... (truncated)"
+			}
+			lastErr = fmt.Errorf("gemini: API error %d (retry-after: %s): %s", resp.StatusCode, retryAfter, errBody)
 			if attempt < maxRetries-1 {
 				continue
 			}
