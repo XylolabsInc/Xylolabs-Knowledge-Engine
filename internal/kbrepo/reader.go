@@ -767,8 +767,9 @@ func slugify(s string) string {
 		}
 	}
 	slug := strings.Trim(b.String(), "-")
-	if len(slug) > 80 {
-		slug = slug[:80]
+	runes := []rune(slug)
+	if len(runes) > 80 {
+		slug = string(runes[:80])
 	}
 	return slug
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
@@ -420,7 +421,11 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	// 8. Format and post the response.
 	replyText := b.platform.FormatResponse(responseText)
 	if len(replyText) > maxReplyLength {
-		replyText = replyText[:maxReplyLength-3] + "..."
+		truncated := replyText[:maxReplyLength-3]
+		for len(truncated) > 0 && !utf8.RuneStart(truncated[len(truncated)-1]) {
+			truncated = truncated[:len(truncated)-1]
+		}
+		replyText = truncated + "..."
 	}
 
 	if err := b.platform.PostReply(ctx, msg.Channel, threadID, replyText); err != nil {
@@ -450,5 +455,9 @@ func appendWithBudget(query, addition string, budget int) string {
 	if remaining <= 200 {
 		return query
 	}
-	return query + addition[:remaining-3] + "..."
+	truncated := addition[:remaining-3]
+	for len(truncated) > 0 && !utf8.RuneStart(truncated[len(truncated)-1]) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return query + truncated + "..."
 }

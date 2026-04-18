@@ -889,8 +889,9 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // truncateID returns id truncated to maxLen characters, or the full id if shorter.
 func truncateID(id string, maxLen int) string {
-	if len(id) <= maxLen {
+	runes := []rune(id)
+	if len(runes) <= maxLen {
 		return id
 	}
-	return id[:maxLen]
+	return string(runes[:maxLen])
 }

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -136,7 +137,10 @@ func makeRichText(text string) []map[string]any {
 		chunk := text
 		if len(chunk) > 2000 {
 			chunk = text[:2000]
-			text = text[2000:]
+			for len(chunk) > 0 && !utf8.RuneStart(chunk[len(chunk)-1]) {
+				chunk = chunk[:len(chunk)-1]
+			}
+			text = text[len(chunk):]
 		} else {
 			text = ""
 		}
@@ -379,7 +383,10 @@ func makeParagraphBlock(text string) map[string]any {
 		chunk := text
 		if len(chunk) > 2000 {
 			chunk = text[:2000]
-			text = text[2000:]
+			for len(chunk) > 0 && !utf8.RuneStart(chunk[len(chunk)-1]) {
+				chunk = chunk[:len(chunk)-1]
+			}
+			text = text[len(chunk):]
 		} else {
 			text = ""
 		}
