@@ -30,6 +30,17 @@ const defaultDriveFolderID = ""
 
 const maxAPIResponseSize = 50 << 20 // 50 MB
 
+var driveQueryReplacer = strings.NewReplacer(
+	`'`, "",
+	`\`, "",
+	`"`, "",
+)
+
+// sanitizeDriveQuery strips characters that could break Drive API query syntax.
+func sanitizeDriveQuery(input string) string {
+	return driveQueryReplacer.Replace(input)
+}
+
 // GoogleWriter handles Google Workspace write/read operations.
 type GoogleWriter struct {
 	service         *drive.Service
@@ -325,7 +336,7 @@ func markdownToHTML(md string) string {
 
 // SearchDrive searches files by name/query in Google Drive.
 func (w *GoogleWriter) SearchDrive(ctx context.Context, query string) ([]map[string]any, error) {
-	q := fmt.Sprintf("name contains '%s' and trashed = false", strings.ReplaceAll(query, "'", "\\'"))
+	q := fmt.Sprintf("name contains '%s' and trashed = false", sanitizeDriveQuery(query))
 	fileList, err := w.service.Files.List().
 		Context(ctx).
 		Q(q).
@@ -730,7 +741,7 @@ func (w *GoogleWriter) CopyFile(ctx context.Context, fileID, newName, folderID s
 // ListFolder lists files in a Google Drive folder.
 // Returns a slice of maps with id, name, mime_type, url, modified_time.
 func (w *GoogleWriter) ListFolder(ctx context.Context, folderID string) ([]map[string]any, error) {
-	q := fmt.Sprintf("'%s' in parents and trashed = false", strings.ReplaceAll(folderID, "'", "\\'"))
+	q := fmt.Sprintf("'%s' in parents and trashed = false", sanitizeDriveQuery(folderID))
 	fileList, err := w.service.Files.List().
 		Context(ctx).
 		Q(q).
