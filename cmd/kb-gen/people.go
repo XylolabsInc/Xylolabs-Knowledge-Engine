@@ -41,7 +41,14 @@ func fetchAndWritePeople(credsFile, impersonateEmail, domain, kbDir string, dryR
 	)
 
 	// Read service account credentials
-	credBytes, err := os.ReadFile(credsFile)
+	credsPath := filepath.Clean(credsFile)
+	credsRoot, err := os.OpenRoot(filepath.Dir(credsPath))
+	if err != nil {
+		return fmt.Errorf("open credentials directory: %w", err)
+	}
+	defer credsRoot.Close()
+
+	credBytes, err := credsRoot.ReadFile(filepath.Base(credsPath))
 	if err != nil {
 		return fmt.Errorf("read credentials: %w", err)
 	}
@@ -173,11 +180,11 @@ func fetchAndWritePeople(credsFile, impersonateEmail, domain, kbDir string, dryR
 		}
 
 		fullPath := filepath.Join(kbDir, relPath)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
 			logger.Error("failed to create directory", "path", filepath.Dir(fullPath), "error", err)
 			continue
 		}
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
 			logger.Error("failed to write person file", "path", relPath, "error", err)
 			continue
 		}
@@ -191,10 +198,10 @@ func fetchAndWritePeople(credsFile, impersonateEmail, domain, kbDir string, dryR
 	if dryRun {
 		fmt.Printf("[dry-run] Would write: people/README.md (%d bytes)\n", len(indexContent))
 	} else {
-		if err := os.MkdirAll(peopleDir, 0o755); err != nil {
+		if err := os.MkdirAll(peopleDir, 0o750); err != nil {
 			return fmt.Errorf("create people dir: %w", err)
 		}
-		if err := os.WriteFile(indexPath, []byte(indexContent), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(indexContent), 0o600); err != nil {
 			return fmt.Errorf("write people index: %w", err)
 		}
 		filesWritten++
