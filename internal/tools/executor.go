@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 
@@ -1123,19 +1124,15 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			return map[string]any{"uploaded": results}, nil
 		}
 
-		// Single file upload: exact match → first available fallback
+		// Single file upload: exact match only
 		data, ok := allFiles[fileName]
 		if !ok {
-			// Fallback: use first available attachment
-			for name, d := range allFiles {
-				fileName = name
-				data = d
-				ok = true
-				break
+			available := make([]string, 0, len(allFiles))
+			for name := range allFiles {
+				available = append(available, name)
 			}
-			if !ok {
-				return nil, fmt.Errorf("no attachment found with name %q", fileName)
-			}
+			sort.Strings(available)
+			return nil, fmt.Errorf("no attachment found with name %q. Available files: %s", fileName, strings.Join(available, ", "))
 		}
 
 		mimeType := "application/octet-stream"
