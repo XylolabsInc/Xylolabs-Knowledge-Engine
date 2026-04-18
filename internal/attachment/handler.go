@@ -5,12 +5,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
+
+const maxAttachmentSize = 100 << 20 // 100 MB
 
 // Handler manages downloading and storing attachments.
 type Handler struct {
@@ -23,7 +26,7 @@ type Handler struct {
 
 // NewHandler creates an attachment handler.
 func NewHandler(basePath string, store kb.Storage, logger *slog.Logger) *Handler {
-	if err := os.MkdirAll(basePath, 0o755); err != nil {
+	if err := os.MkdirAll(basePath, 0o750); err != nil {
 		logger.Warn("failed to create attachment directory", "path", basePath, "error", err)
 	}
 
@@ -43,11 +46,14 @@ func (h *Handler) Download(att kb.Attachment, authHeaders map[string]string) (*k
 	if att.SourceURL == "" {
 		return nil, fmt.Errorf("attachment %s has no source URL", att.ID)
 	}
+	if err := validateSourceURL(att.SourceURL); err != nil {
+		return nil, fmt.Errorf("attachment %s has invalid source URL: %w", att.ID, err)
+	}
 
 	// Build local path: basePath/source/YYYY-MM/filename
 	now := time.Now().UTC()
-	dir := filepath.Join(h.basePath, att.DocumentID[:8], now.Format("2006-01"))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dir := filepath.Join(h.basePath, documentPrefix(att.DocumentID), now.Format("2006-01"))
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create directory %s: %w", dir, err)
 	}
 
@@ -116,14 +122,17 @@ func (h *Handler) downloadFile(url, destPath string, headers map[string]string) 
 		return fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, url)
 	}
 
-	f, err := os.Create(destPath)
+	// #nosec G304 -- destPath is constructed from sanitized attachment metadata beneath basePath.
+	f, err := os.OpenFile(destPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create file %s: %w", destPath, err)
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		os.Remove(destPath)
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, maxAttachmentSize)); err != nil {
+		if removeErr := os.Remove(destPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			h.logger.Warn("failed to remove partial attachment", "path", destPath, "error", removeErr)
+		}
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -148,7 +157,33 @@ func sanitizeFilename(name string) string {
 	return string(safe)
 }
 
+func validateSourceURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parse url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("missing host")
+	}
+	return nil
+}
+
+func documentPrefix(documentID string) string {
+	if documentID == "" {
+		return "unknown"
+	}
+	documentID = sanitizeFilename(documentID)
+	if len(documentID) < 8 {
+		return documentID
+	}
+	return documentID[:8]
+}
+
 func detectMimeType(path string) string {
+	// #nosec G304 -- path is an internally generated attachment path beneath basePath.
 	f, err := os.Open(path)
 	if err != nil {
 		return "application/octet-stream"
