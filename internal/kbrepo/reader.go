@@ -851,12 +851,19 @@ func extractDatePatterns(query string) []string {
 	}
 
 	// Extract months
+	now := time.Now()
+	currentMonth := int(now.Month())
 	monthMatches := koreanMonthPattern.FindAllStringSubmatch(query, -1)
 	for _, m := range monthMatches {
 		if len(m) >= 2 {
 			month, err := strconv.Atoi(m[1])
 			if err == nil && month >= 1 && month <= 12 {
 				patterns = append(patterns, fmt.Sprintf("%s-%02d", year, month))
+				// When no explicit year and the month is in the future while
+				// we're early in the year, also try the previous year.
+				if len(yearMatches) < 2 && month > currentMonth && currentMonth <= 3 {
+					patterns = append(patterns, fmt.Sprintf("%d-%02d", now.Year()-1, month))
+				}
 			}
 		}
 	}
