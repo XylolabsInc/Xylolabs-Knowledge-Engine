@@ -15,7 +15,8 @@ import (
 const (
 	geminiAPIBase    = "https://generativelanguage.googleapis.com/v1beta/models"
 	defaultModel     = "gemini-3.1-flash-lite-preview"
-	httpTimeout      = 120 * time.Second
+	httpTimeout         = 120 * time.Second
+	maxAPIResponseSize  = 50 << 20 // 50 MB
 )
 
 // Client wraps the Gemini REST API.
@@ -132,7 +133,7 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 	}
 	defer resp.Body.Close()
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: read response: %w", err)
 	}

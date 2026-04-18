@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"mime"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -25,6 +27,8 @@ import (
 )
 
 const defaultDriveFolderID = ""
+
+const maxAPIResponseSize = 50 << 20 // 50 MB
 
 // GoogleWriter handles Google Workspace write/read operations.
 type GoogleWriter struct {
@@ -174,10 +178,39 @@ var (
 
 // formatInline converts inline Markdown formatting to HTML.
 func formatInline(text string) string {
-	text = reMdLink.ReplaceAllString(text, `<a href="$2">$1</a>`)
+	text = html.EscapeString(text)
+	text = reMdLink.ReplaceAllStringFunc(text, func(match string) string {
+		parts := reMdLink.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		return fmt.Sprintf(`<a href="%s">%s</a>`, sanitizeGoogleHTMLURL(parts[2]), parts[1])
+	})
 	text = reMdBold.ReplaceAllString(text, "<strong>$1</strong>")
 	text = reMdInlineCode.ReplaceAllString(text, "<code>$1</code>")
 	return text
+}
+
+func sanitizeGoogleHTMLURL(raw string) string {
+	raw = strings.TrimSpace(html.UnescapeString(raw))
+	if raw == "" {
+		return "#"
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "#"
+	}
+	if parsed.Scheme == "" {
+		return html.EscapeString(raw)
+	}
+
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "mailto":
+		return html.EscapeString(parsed.String())
+	default:
+		return "#"
+	}
 }
 
 // markdownToHTML converts basic Markdown to HTML for Google Docs import.
@@ -209,7 +242,7 @@ func markdownToHTML(md string) string {
 			continue
 		}
 		if inCodeBlock {
-			sb.WriteString(strings.ReplaceAll(line, "<", "&lt;"))
+			sb.WriteString(html.EscapeString(line))
 			sb.WriteString("\n")
 			continue
 		}
@@ -309,10 +342,10 @@ func (w *GoogleWriter) SearchDrive(ctx context.Context, query string) ([]map[str
 	var results []map[string]any
 	for _, f := range fileList.Files {
 		results = append(results, map[string]any{
-			"id":           f.Id,
-			"name":         f.Name,
-			"mime_type":    f.MimeType,
-			"url":          f.WebViewLink,
+			"id":            f.Id,
+			"name":          f.Name,
+			"mime_type":     f.MimeType,
+			"url":           f.WebViewLink,
 			"modified_time": f.ModifiedTime,
 		})
 	}
@@ -894,7 +927,7 @@ func (w *GoogleWriter) ExportPDF(ctx context.Context, fileID, fileName string) (
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", fmt.Errorf("read pdf export body: %w", err)
 	}

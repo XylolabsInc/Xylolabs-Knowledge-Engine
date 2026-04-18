@@ -16,7 +16,7 @@ import (
 const (
 	notionAPIBase       = "https://api.notion.com/v1"
 	notionAPIVersion    = "2022-06-28"
-	defaultNotionParent = ""
+	defaultNotionParent  = ""
 )
 
 // NotionWriter handles Notion write operations.
@@ -423,7 +423,7 @@ func (w *NotionWriter) apiRequest(ctx context.Context, method, path string, body
 	}
 	defer resp.Body.Close()
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

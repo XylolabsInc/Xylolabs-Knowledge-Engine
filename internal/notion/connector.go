@@ -67,6 +67,8 @@ func (c *Connector) Stop() error {
 
 const maxRecursionDepth = 10
 
+const maxAPIResponseSize = 50 << 20 // 50 MB
+
 // Sync fetches all pages from Notion, recursively traversing from root pages.
 func (c *Connector) Sync() error {
 	ctx := context.Background()
@@ -453,7 +455,7 @@ func (c *Connector) apiRequest(ctx context.Context, method, path string, body an
 	}
 	defer resp.Body.Close()
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
