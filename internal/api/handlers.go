@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	urlParse "net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -753,15 +754,36 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if category := r.FormValue("category"); category != "" {
+		if len(category) > 200 {
+			writeError(w, http.StatusBadRequest, "category too long (max 200 characters)")
+			return
+		}
 		existing.Channel = category
 	}
 	if author := r.FormValue("author"); author != "" {
+		if len(author) > 200 {
+			writeError(w, http.StatusBadRequest, "author too long (max 200 characters)")
+			return
+		}
 		existing.Author = author
 	}
 	if url := r.FormValue("url"); url != "" {
+		if len(url) > 2000 {
+			writeError(w, http.StatusBadRequest, "url too long (max 2000 characters)")
+			return
+		}
+		parsed, err := urlParse.Parse(url)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			writeError(w, http.StatusBadRequest, "url must be http or https")
+			return
+		}
 		existing.URL = url
 	}
 	if ct := r.FormValue("content_type"); ct != "" {
+		if len(ct) > 100 {
+			writeError(w, http.StatusBadRequest, "content_type too long (max 100 characters)")
+			return
+		}
 		existing.ContentType = ct
 	}
 
