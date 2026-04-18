@@ -399,6 +399,12 @@ func (s *SQLiteStore) SetSyncState(state kb.SyncState) error {
 
 // GetStats returns aggregate knowledge base statistics.
 func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin stats read tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	stats := &kb.Stats{
 		DocumentsBySource: make(map[kb.Source]int64),
 		DocumentsByType:   make(map[string]int64),
@@ -406,12 +412,12 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 	}
 
 	// Total documents
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM documents").Scan(&stats.TotalDocuments); err != nil {
+	if err := tx.QueryRow("SELECT COUNT(*) FROM documents").Scan(&stats.TotalDocuments); err != nil {
 		return nil, fmt.Errorf("count documents: %w", err)
 	}
 
 	// By source
-	rows, err := s.db.Query("SELECT source, COUNT(*) FROM documents GROUP BY source")
+	rows, err := tx.Query("SELECT source, COUNT(*) FROM documents GROUP BY source")
 	if err != nil {
 		return nil, fmt.Errorf("count by source: %w", err)
 	}
@@ -431,7 +437,7 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 	}
 
 	// By type
-	rows, err = s.db.Query("SELECT content_type, COUNT(*) FROM documents GROUP BY content_type")
+	rows, err = tx.Query("SELECT content_type, COUNT(*) FROM documents GROUP BY content_type")
 	if err != nil {
 		return nil, fmt.Errorf("count by type: %w", err)
 	}
@@ -451,13 +457,13 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 	}
 
 	// Attachments
-	if err := s.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(size),0) FROM attachments").Scan(
+	if err := tx.QueryRow("SELECT COUNT(*), COALESCE(SUM(size),0) FROM attachments").Scan(
 		&stats.TotalAttachments, &stats.AttachmentSize); err != nil {
 		return nil, fmt.Errorf("count attachments: %w", err)
 	}
 
 	// Sync times
-	syncRows, err := s.db.Query("SELECT source, last_sync_at FROM sync_state WHERE last_sync_at IS NOT NULL")
+	syncRows, err := tx.Query("SELECT source, last_sync_at FROM sync_state WHERE last_sync_at IS NOT NULL")
 	if err != nil {
 		return nil, fmt.Errorf("get sync times: %w", err)
 	}
@@ -474,6 +480,10 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 	}
 	if closeErr := syncRows.Close(); closeErr != nil {
 		s.logger.Warn("failed to close sync rows", "error", closeErr)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit stats read tx: %w", err)
 	}
 
 	return stats, nil
