@@ -22,9 +22,11 @@ type ToolExecutor struct {
 	schedulerManager  *SchedulerManager
 	store             kb.Storage
 
-	mu             sync.Mutex
-	attachments    map[string][]byte // file name → data, from Slack file downloads
-	screenshotData []byte            // screenshot from screenshot_url tool, separate from user attachments
+	mu               sync.Mutex
+	attachments      map[string][]byte // file name → data, from Slack file downloads
+	screenshotData   []byte            // screenshot from screenshot_url tool, separate from user attachments
+	attachmentEpoch  int               // incremented by SetAttachments to detect stale state
+	lastSeenEpoch    int               // epoch seen by most recent Execute; detects panics between calls
 }
 
 // NewToolExecutor creates a ToolExecutor.
@@ -48,6 +50,7 @@ func (e *ToolExecutor) SetAttachments(attachments map[string][]byte) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.attachments = attachments
+	e.attachmentEpoch++
 }
 
 // ClearAttachments removes stored attachments after processing.
@@ -55,6 +58,7 @@ func (e *ToolExecutor) ClearAttachments() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.attachments = make(map[string][]byte)
+	e.lastSeenEpoch = 0
 }
 
 // PopScreenshot removes and returns the screenshot data if present.
@@ -1043,13 +1047,17 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 
 // Execute runs a function call and returns the result.
 func (e *ToolExecutor) Execute(ctx context.Context, call gemini.FunctionCall) gemini.FunctionResponse {
-	// Safety: clear stale attachments from a previous (panicked) call.
+	// Safety: detect stale state from a previous Execute that panicked
+	// before the bot handler could ClearAttachments. Only clear if the
+	// epoch doesn't match (i.e., attachments are from a prior session).
 	e.mu.Lock()
-	if len(e.attachments) > 0 || e.screenshotData != nil {
-		e.logger.Warn("stale attachments detected at start of Execute, clearing", "attachments", len(e.attachments))
+	if e.lastSeenEpoch > 0 && e.lastSeenEpoch < e.attachmentEpoch {
+		e.logger.Warn("stale attachments from previous session detected, clearing",
+			"last_seen_epoch", e.lastSeenEpoch, "current_epoch", e.attachmentEpoch)
 		e.attachments = nil
 		e.screenshotData = nil
 	}
+	e.lastSeenEpoch = e.attachmentEpoch
 	e.mu.Unlock()
 
 	e.logger.Info("executing tool", "name", call.Name, "args", call.Args)
