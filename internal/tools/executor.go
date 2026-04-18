@@ -22,8 +22,9 @@ type ToolExecutor struct {
 	schedulerManager  *SchedulerManager
 	store             kb.Storage
 
-	mu          sync.Mutex
-	attachments map[string][]byte // file name → data, from Slack file downloads
+	mu             sync.Mutex
+	attachments    map[string][]byte // file name → data, from Slack file downloads
+	screenshotData []byte            // screenshot from screenshot_url tool, separate from user attachments
 }
 
 // NewToolExecutor creates a ToolExecutor.
@@ -56,15 +57,16 @@ func (e *ToolExecutor) ClearAttachments() {
 	e.attachments = make(map[string][]byte)
 }
 
-// PopScreenshot removes and returns the screenshot attachment if present.
+// PopScreenshot removes and returns the screenshot data if present.
 func (e *ToolExecutor) PopScreenshot() ([]byte, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	data, ok := e.attachments["screenshot.png"]
-	if ok {
-		delete(e.attachments, "screenshot.png")
+	if e.screenshotData != nil {
+		data := e.screenshotData
+		e.screenshotData = nil
+		return data, true
 	}
-	return data, ok
+	return nil, false
 }
 
 // Declarations returns the function declarations for all available tools.
@@ -1807,7 +1809,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		}
 
 		e.mu.Lock()
-		e.attachments["screenshot.png"] = pngBytes
+		e.screenshotData = pngBytes
 		e.mu.Unlock()
 
 		return map[string]any{
