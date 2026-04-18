@@ -18,9 +18,10 @@ import (
 )
 
 var (
-	userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)>`)
-	channelRe     = regexp.MustCompile(`<#([A-Z0-9]+)\|([^>]+)>`)
-	urlRe         = regexp.MustCompile(`<(https?://[^|>]+)(?:\|([^>]+))?>`)
+	userMentionRe  = regexp.MustCompile(`<@([A-Z0-9]+)>`)
+	channelRe      = regexp.MustCompile(`<#([A-Z0-9]+)\|([^>]+)>`)
+	urlRe          = regexp.MustCompile(`<(https?://[^|>]+)(?:\|([^>]+))?>`)
+	slackHTTPClient = extractor.NewRestrictedHTTPClient(30 * time.Second)
 )
 
 // ConvertMessage converts a real-time Slack event message to a KB document.
@@ -172,8 +173,6 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, files []goslac
 		return
 	}
 
-	httpClient := extractor.NewRestrictedHTTPClient(30 * time.Second)
-
 	// Extract content from file attachments
 	for _, f := range files {
 		fileURL := f.URLPrivateDownload
@@ -184,7 +183,7 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, files []goslac
 			continue
 		}
 
-		data, err := downloadFile(ctx, httpClient, fileURL, token)
+		data, err := downloadFile(ctx, slackHTTPClient, fileURL, token)
 		if err != nil {
 			continue // skip files we can't download
 		}

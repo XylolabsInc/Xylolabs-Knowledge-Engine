@@ -19,6 +19,7 @@ var (
 	discordUserMentionRe = regexp.MustCompile(`<@!?(\d+)>`)
 	discordChannelRe     = regexp.MustCompile(`<#(\d+)>`)
 	discordURLRe         = regexp.MustCompile(`https?://[^\s<>"]+`)
+	discordHTTPClient    = extractor.NewRestrictedHTTPClient(30 * time.Second)
 )
 
 // ConvertMessage converts a Discord message to a KB document.
@@ -84,14 +85,12 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, attachments []
 		return
 	}
 
-	httpClient := extractor.NewRestrictedHTTPClient(30 * time.Second)
-
 	for _, att := range attachments {
 		if att.URL == "" {
 			continue
 		}
 
-		data, err := downloadDiscordFile(ctx, httpClient, att.URL)
+		data, err := downloadDiscordFile(ctx, discordHTTPClient, att.URL)
 		if err != nil {
 			continue
 		}
