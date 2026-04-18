@@ -55,7 +55,7 @@ func (sm *SyncManager) SyncSource(ctx context.Context, source kb.Source) error {
 }
 
 // FullSync resets sync state and performs a complete backfill.
-func (sm *SyncManager) FullSync(source kb.Source) error {
+func (sm *SyncManager) FullSync(ctx context.Context, source kb.Source) error {
 	// Reset sync state so connectors fetch everything
 	resetState := kb.SyncState{
 		Source:     source,
@@ -67,7 +67,7 @@ func (sm *SyncManager) FullSync(source kb.Source) error {
 		return fmt.Errorf("reset sync state for %s: %w", source, err)
 	}
 
-	return sm.SyncSource(context.Background(), source)
+	return sm.SyncSource(ctx, source)
 }
 
 // GetConnectors returns all registered connectors.
