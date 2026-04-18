@@ -86,7 +86,7 @@ func EnrichDocumentContent(ctx context.Context, doc *kb.Document, attachments []
 		return
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := extractor.NewRestrictedHTTPClient(30 * time.Second)
 
 	for _, att := range attachments {
 		if att.URL == "" {

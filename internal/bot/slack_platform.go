@@ -14,6 +14,7 @@ import (
 
 	"github.com/slack-go/slack"
 
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
 )
 
@@ -44,7 +45,7 @@ func NewSlackPlatform(client *slack.Client, botUserID, botToken string, logger *
 		botUserID:     botUserID,
 		botToken:      botToken,
 		logger:        logger.With("component", "slack-platform"),
-		http:          &http.Client{Timeout: 30 * time.Second},
+		http:          extractor.NewRestrictedHTTPClient(30 * time.Second),
 		trackedThreads: make(map[string]bool),
 		notBotThreads:  make(map[string]time.Time),
 		done:           make(chan struct{}),

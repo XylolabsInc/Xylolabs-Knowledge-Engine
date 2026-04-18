@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 )
 
@@ -33,9 +34,7 @@ func NewHandler(basePath string, store kb.Storage, logger *slog.Logger) *Handler
 
 	return &Handler{
 		basePath: basePath,
-		httpClient: &http.Client{
-			Timeout: 5 * time.Minute,
-		},
+		httpClient: extractor.NewRestrictedHTTPClient(5 * time.Minute),
 		store:      store,
 		logger:     logger.With("component", "attachment-handler"),
 		maxRetries: 3,

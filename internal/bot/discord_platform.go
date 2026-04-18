@@ -14,6 +14,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
 )
 
@@ -41,7 +42,7 @@ func NewDiscordPlatform(session *discordgo.Session, botUserID, guildID string, l
 		botUserID:      botUserID,
 		guildID:        guildID,
 		logger:         logger.With("component", "discord-platform"),
-		http:           &http.Client{Timeout: 30 * time.Second},
+		http:           extractor.NewRestrictedHTTPClient(30 * time.Second),
 		trackedThreads: make(map[string]bool),
 		notBotThreads:  make(map[string]time.Time),
 		done:           make(chan struct{}),
