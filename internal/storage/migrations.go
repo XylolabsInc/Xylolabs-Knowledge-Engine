@@ -182,12 +182,23 @@ func runMigrations(db *sql.DB) error {
 			continue
 		}
 
-		if _, err := db.Exec(m.sql); err != nil {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration %d: %w", m.version, err)
+		}
+
+		if _, err := tx.Exec(m.sql); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", m.version, err)
 		}
 
-		if _, err := db.Exec("INSERT INTO schema_migrations (version) VALUES (?)", m.version); err != nil {
+		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", m.version); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", m.version, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d: %w", m.version, err)
 		}
 	}
 	return nil

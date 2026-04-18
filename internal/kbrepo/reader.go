@@ -618,7 +618,7 @@ func (r *Reader) SaveFact(topic, content, author string) error {
 		{"git", "-C", r.repoDir, "add", relPath},
 		{"git", "-C", r.repoDir, "add", "user-provided/README.md"},
 		{"git", "-C", r.repoDir, "add", "indexes/user-provided.md"},
-		{"git", "-C", r.repoDir, "commit", "-m", fmt.Sprintf("fact(user): add unconfirmed fact — %s (by %s)", topic, author)},
+		{"git", "-C", r.repoDir, "commit", "-m", fmt.Sprintf("fact(user): add unconfirmed fact — %s (by %s)", sanitizeCommitString(topic), sanitizeCommitString(author))},
 		{"git", "-C", r.repoDir, "push"},
 	}
 	for _, args := range cmds {
@@ -738,6 +738,14 @@ func (r *Reader) updateUserProvidedIndex(topic, relPath, content, author string)
 func sanitizeMarkdownLinkText(s string) string {
 	r := strings.NewReplacer("[", "", "]", "", "<", "", ">", "")
 	return r.Replace(s)
+}
+
+// sanitizeCommitString strips newlines and carriage returns from strings
+// used in git commit messages to prevent injection of arbitrary commit metadata.
+func sanitizeCommitString(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
 }
 
 // slugify converts a string to a URL/filesystem-safe slug.

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -107,15 +108,19 @@ func (s *Scheduler) Status() []JobStatus {
 // RunNow triggers an immediate execution of a named job.
 func (s *Scheduler) RunNow(name string) error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	ctx := context.Background()
+	var target *Job
 	for _, job := range s.jobs {
 		if job.Name == name {
-			return s.executeJob(ctx, job)
+			target = job
+			break
 		}
 	}
-	return nil
+	s.mu.RUnlock()
+
+	if target == nil {
+		return fmt.Errorf("scheduler: job %q not found", name)
+	}
+	return s.executeJob(context.Background(), target)
 }
 
 func (s *Scheduler) runJob(job *Job) {

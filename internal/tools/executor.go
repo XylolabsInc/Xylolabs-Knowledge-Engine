@@ -1043,6 +1043,15 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 
 // Execute runs a function call and returns the result.
 func (e *ToolExecutor) Execute(ctx context.Context, call gemini.FunctionCall) gemini.FunctionResponse {
+	// Safety: clear stale attachments from a previous (panicked) call.
+	e.mu.Lock()
+	if len(e.attachments) > 0 || e.screenshotData != nil {
+		e.logger.Warn("stale attachments detected at start of Execute, clearing", "attachments", len(e.attachments))
+		e.attachments = nil
+		e.screenshotData = nil
+	}
+	e.mu.Unlock()
+
 	e.logger.Info("executing tool", "name", call.Name, "args", call.Args)
 
 	result, err := e.dispatch(ctx, call)

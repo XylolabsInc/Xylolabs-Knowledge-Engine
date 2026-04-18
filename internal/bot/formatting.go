@@ -114,8 +114,16 @@ func mergeConsecutiveRoles(messages []gemini.Message) []gemini.Message {
 	for _, msg := range messages[1:] {
 		last := &merged[len(merged)-1]
 		if msg.Role == last.Role {
-			last.Content += "\n\n" + msg.Content
+			if msg.Content != "" {
+				if last.Content != "" {
+					last.Content += "\n\n" + msg.Content
+				} else {
+					last.Content = msg.Content
+				}
+			}
 			last.Images = append(last.Images, msg.Images...)
+			last.FunctionCalls = append(last.FunctionCalls, msg.FunctionCalls...)
+			last.FunctionResponses = append(last.FunctionResponses, msg.FunctionResponses...)
 		} else {
 			merged = append(merged, msg)
 		}

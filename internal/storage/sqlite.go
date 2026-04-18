@@ -63,6 +63,8 @@ func (s *SQLiteStore) UpsertDocument(doc kb.Document) error {
 			author, author_email, channel, workspace, url, timestamp, updated_at, indexed_at, metadata)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
+			parent_id=excluded.parent_id,
+			source_id=excluded.source_id,
 			title=excluded.title,
 			content=excluded.content,
 			content_type=excluded.content_type,
