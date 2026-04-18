@@ -1,16 +1,15 @@
 package api
 
 import (
-	_ "embed"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +42,7 @@ type Server struct {
 	startedAt    time.Time
 	requestCount atomic.Int64
 	errorCount   atomic.Int64
+	asyncWg      sync.WaitGroup
 }
 
 // NewServer creates an API server.
@@ -90,12 +90,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.auth != nil {
 		s.auth.stop()
 	}
-	return s.httpServer.Shutdown(ctx)
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		return err
+	}
+	s.asyncWg.Wait()
+	return nil
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	mux.HandleFunc("GET /metrics", s.auth.requireAuth(s.handleMetrics))
 	mux.HandleFunc("GET /api/v1/search", s.auth.requireAuth(s.handleSearch))
 	mux.HandleFunc("GET /api/v1/documents", s.auth.requireAuth(s.handleListDocuments))
 	mux.HandleFunc("GET /api/v1/documents/{id}", s.auth.requireAuth(s.handleGetDocument))
@@ -133,7 +137,9 @@ func (s *Server) handleRootRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConsole(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(consoleHTML)
+	if _, err := w.Write(consoleHTML); err != nil {
+		s.logger.Warn("failed to write console HTML", "error", err)
+	}
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -152,23 +158,33 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		StartedAt:      s.startedAt,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Warn("failed to encode metrics response", "error", err)
+	}
 }
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Generate unique request ID
-		var buf [8]byte
-		rand.Read(buf[:])
-		requestID := hex.EncodeToString(buf[:])
+		requestID := newRequestID()
 
-		// CORS headers
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Same-origin CORS headers for the embedded console.
+		if origin := r.Header.Get("Origin"); isSameOrigin(r, origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token, X-Request-ID")
 		w.Header().Set("X-Request-ID", requestID)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		if requestWantsSecureCookies(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

@@ -311,7 +311,9 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Run sync asynchronously
+	s.asyncWg.Add(1)
 	go func() {
+		defer s.asyncWg.Done()
 		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		if err := s.syncManager.SyncSource(syncCtx, kbSource); err != nil {
