@@ -111,6 +111,12 @@ func (b *Bot) HandleDirectMessage(ctx context.Context, msg *IncomingMessage) {
 
 // respond loads KB context, builds the Gemini prompt, and posts the reply via the platform.
 func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error("panic recovered in respond", "panic", r)
+		}
+	}()
+
 	threadID := msg.ThreadID
 	if threadID == "" {
 		threadID = msg.MessageID
