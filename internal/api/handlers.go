@@ -798,7 +798,7 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 
 	existing.UpdatedAt = time.Now()
 
-	if err := s.store.UpsertDocument(*existing); err != nil {
+	if err := s.engine.Index(r.Context(), *existing); err != nil {
 		s.logger.Error("failed to update document", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update document")
 		return
