@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,7 +52,14 @@ func loadSystemPrompt(filePath string) string {
 	if filePath == "" {
 		return systemPromptTemplate
 	}
-	data, err := os.ReadFile(filePath)
+	root, err := os.OpenRoot(filepath.Dir(filepath.Clean(filePath)))
+	if err != nil {
+		slog.Warn("failed to open custom system prompt directory, using default", "path", filePath, "error", err)
+		return systemPromptTemplate
+	}
+	defer root.Close()
+
+	data, err := root.ReadFile(filepath.Base(filePath))
 	if err != nil {
 		slog.Warn("failed to load custom system prompt, using default", "path", filePath, "error", err)
 		return systemPromptTemplate
@@ -118,8 +126,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 
 	// Truncate KB context if it exceeds budget.
 	if len(kbContext) > maxKBContextChars {
+		originalLen := len(kbContext)
 		kbContext = kbContext[:maxKBContextChars] + "\n\n[... KB context truncated due to size ...]"
-		b.logger.Warn("kb context truncated", "original_length", len(kbContext), "max", maxKBContextChars)
+		b.logger.Warn("kb context truncated", "original_length", originalLen, "max", maxKBContextChars)
 	}
 
 	// 2. Download any attached files from the message.
@@ -346,8 +355,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	// 5.5. Upload screenshot attachments if any were produced by tools.
 	if b.toolExecutor != nil {
 		if screenshotData, ok := b.toolExecutor.PopScreenshot(); ok {
+			asyncCtx := context.WithoutCancel(ctx)
 			go func(data []byte, channel, ts string) {
-				uploadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				uploadCtx, cancel := context.WithTimeout(asyncCtx, 60*time.Second)
 				defer cancel()
 				if err := b.platform.UploadFile(uploadCtx, channel, ts, "screenshot.png", data); err != nil {
 					b.logger.Warn("failed to upload screenshot", "error", err, "size_bytes", len(data))
@@ -419,8 +429,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 
 	// Add emoji reaction to the user's original message.
 	if reactEmoji != "" {
+		asyncCtx := context.WithoutCancel(ctx)
 		go func(emoji string) {
-			reactionCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reactionCtx, cancel := context.WithTimeout(asyncCtx, 5*time.Second)
 			defer cancel()
 			if err := b.platform.AddReaction(reactionCtx, msg.Channel, msg.MessageID, emoji); err != nil {
 				b.logger.Warn("failed to add reaction", "emoji", emoji, "error", err)
