@@ -451,7 +451,11 @@ func (w *NotionWriter) apiRequest(ctx context.Context, method, path string, body
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("notion API error %d: %s", resp.StatusCode, string(respData))
+		errBody := string(respData)
+		if len(errBody) > 512 {
+			errBody = errBody[:512] + "... (truncated)"
+		}
+		return nil, fmt.Errorf("notion API error %d: %s", resp.StatusCode, errBody)
 	}
 
 	var result map[string]any
