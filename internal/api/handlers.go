@@ -253,9 +253,12 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	// Count KB repo markdown files (cached for 30s to avoid walking on every request)
 	var kbFileCount int
 	if s.kbRepoDir != "" {
+		s.kbStatsMu.Lock()
 		if time.Since(s.kbStatsCacheAt) < 30*time.Second {
 			kbFileCount = s.kbStatsFileCount
+			s.kbStatsMu.Unlock()
 		} else {
+			s.kbStatsMu.Unlock()
 			root, err := os.OpenRoot(s.kbRepoDir)
 			if err != nil {
 				s.logger.Warn("failed to open KB repo root", "error", err)
@@ -271,8 +274,10 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 				})
 				root.Close()
 			}
+			s.kbStatsMu.Lock()
 			s.kbStatsFileCount = kbFileCount
 			s.kbStatsCacheAt = time.Now()
+			s.kbStatsMu.Unlock()
 		}
 	}
 

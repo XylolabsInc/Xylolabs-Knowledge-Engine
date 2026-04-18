@@ -44,6 +44,7 @@ type Server struct {
 	errorCount   atomic.Int64
 	asyncWg         sync.WaitGroup
 
+	kbStatsMu        sync.Mutex
 	kbStatsFileCount int
 	kbStatsCacheAt   time.Time
 }
