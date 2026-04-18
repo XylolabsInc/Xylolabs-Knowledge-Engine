@@ -83,15 +83,15 @@ func (e *Engine) IndexBatch(ctx context.Context, docs []Document) error {
 }
 
 // Search queries the knowledge base.
-func (e *Engine) Search(ctx context.Context, query SearchQuery) ([]SearchResult, error) {
+func (e *Engine) Search(ctx context.Context, query SearchQuery) (*SearchResponse, error) {
 	if query.Limit <= 0 {
 		query.Limit = 20
 	}
-	results, err := e.store.Search(query)
+	resp, err := e.store.Search(query)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
-	return results, nil
+	return resp, nil
 }
 
 // RenameChannel updates all documents from oldName to newName for a source.

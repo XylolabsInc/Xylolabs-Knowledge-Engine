@@ -1906,7 +1906,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		}
 
 		var items []map[string]any
-		for _, r := range results {
+		for _, r := range results.Results {
 			item := map[string]any{
 				"author":    r.Document.Author,
 				"channel":   r.Document.Channel,

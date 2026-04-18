@@ -78,6 +78,12 @@ type SearchResult struct {
 	Snippet  string  `json:"snippet"`
 }
 
+// SearchResponse contains search results with total count for pagination.
+type SearchResponse struct {
+	Results []SearchResult
+	Total   int
+}
+
 // SearchQuery specifies filters and parameters for a search.
 type SearchQuery struct {
 	Query    string
@@ -137,7 +143,7 @@ type Storage interface {
 	GetAttachments(documentID string) ([]Attachment, error)
 
 	// Search
-	Search(query SearchQuery) ([]SearchResult, error)
+	Search(query SearchQuery) (*SearchResponse, error)
 
 	// Channel rename
 	RenameChannel(source Source, oldName, newName string) (int64, error)

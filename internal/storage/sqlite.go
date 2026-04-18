@@ -29,7 +29,9 @@ func New(dsn string, logger *slog.Logger) (*SQLiteStore, error) {
 	db.SetMaxOpenConns(1) // SQLite is single-writer
 
 	if err := runMigrations(db); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			logger.Warn("failed to close sqlite db after migration error", "error", closeErr)
+		}
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
@@ -182,16 +184,11 @@ func (s *SQLiteStore) GetAttachments(documentID string) ([]kb.Attachment, error)
 }
 
 // Search performs a full-text search with optional filters.
-func (s *SQLiteStore) Search(query kb.SearchQuery) ([]kb.SearchResult, error) {
+func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 	var conditions []string
 	var args []any
 
-	baseQuery := `SELECT d.id, d.source, d.source_id, d.parent_id, d.title, d.content,
-		d.content_type, d.author, d.author_email, d.channel, d.workspace, d.url,
-		d.timestamp, d.updated_at, d.indexed_at,
-		snippet(fts_documents, 1, '<b>', '</b>', '...', 32) AS snippet,
-		bm25(fts_documents, 5.0, 1.0, 2.0, 2.0) AS score
-		FROM fts_documents fts
+	fromClause := `FROM fts_documents fts
 		JOIN documents d ON d.rowid = fts.rowid
 		WHERE fts_documents MATCH ?`
 
@@ -218,22 +215,41 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) ([]kb.SearchResult, error) {
 		args = append(args, query.DateTo.UTC())
 	}
 
+	whereClause := ""
 	if len(conditions) > 0 {
-		baseQuery += " AND " + strings.Join(conditions, " AND ")
+		// #nosec G202 -- conditions are selected from hardcoded SQL fragments above.
+		whereClause = " AND " + strings.Join(conditions, " AND ")
 	}
+
+	// Count total matching documents (ignoring limit/offset).
+	countArgs := make([]any, len(args))
+	copy(countArgs, args)
+	var total int
+	countQuery := `SELECT COUNT(*) ` + fromClause + whereClause
+	if err := s.db.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("search count: %w", err)
+	}
+
+	// Build data query with relevance scoring and pagination.
+	dataQuery := `SELECT d.id, d.source, d.source_id, d.parent_id, d.title, d.content,
+		d.content_type, d.author, d.author_email, d.channel, d.workspace, d.url,
+		d.timestamp, d.updated_at, d.indexed_at,
+		snippet(fts_documents, 1, '<b>', '</b>', '...', 32) AS snippet,
+		bm25(fts_documents, 5.0, 1.0, 2.0, 2.0) AS score
+		` + fromClause + whereClause
 
 	// Blend BM25 relevance with recency: newer documents get a boost.
 	// bm25() returns negative scores (lower = more relevant), so we add a
 	// recency bonus that decays over 90 days. The result is still negative;
 	// ORDER BY ascending gives best results first.
-	baseQuery += ` ORDER BY (score + CASE
+	dataQuery += ` ORDER BY (score + CASE
 		WHEN d.timestamp > datetime('now', '-7 days') THEN -5.0
 		WHEN d.timestamp > datetime('now', '-30 days') THEN -3.0
 		WHEN d.timestamp > datetime('now', '-90 days') THEN -1.0
 		ELSE 0.0 END) LIMIT ? OFFSET ?`
 	args = append(args, query.Limit, query.Offset)
 
-	rows, err := s.db.Query(baseQuery, args...)
+	rows, err := s.db.Query(dataQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -260,8 +276,9 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) ([]kb.SearchResult, error) {
 		r.Document.IndexedAt = indexedAt
 		results = append(results, r)
 	}
-	return results, rows.Err()
+	return &kb.SearchResponse{Results: results, Total: total}, rows.Err()
 }
+
 
 // ListDocuments returns a paginated list of documents with optional filters.
 func (s *SQLiteStore) ListDocuments(query kb.ListDocumentsQuery) (*kb.ListDocumentsResult, error) {
@@ -400,12 +417,16 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 		var src string
 		var count int64
 		if err := rows.Scan(&src, &count); err != nil {
-			rows.Close()
+			if closeErr := rows.Close(); closeErr != nil {
+				s.logger.Warn("failed to close source stats rows after scan error", "error", closeErr)
+			}
 			return nil, fmt.Errorf("scan source count: %w", err)
 		}
 		stats.DocumentsBySource[kb.Source(src)] = count
 	}
-	rows.Close()
+	if closeErr := rows.Close(); closeErr != nil {
+		s.logger.Warn("failed to close source stats rows", "error", closeErr)
+	}
 
 	// By type
 	rows, err = s.db.Query("SELECT content_type, COUNT(*) FROM documents GROUP BY content_type")
@@ -416,12 +437,16 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 		var ct string
 		var count int64
 		if err := rows.Scan(&ct, &count); err != nil {
-			rows.Close()
+			if closeErr := rows.Close(); closeErr != nil {
+				s.logger.Warn("failed to close type stats rows after scan error", "error", closeErr)
+			}
 			return nil, fmt.Errorf("scan type count: %w", err)
 		}
 		stats.DocumentsByType[ct] = count
 	}
-	rows.Close()
+	if closeErr := rows.Close(); closeErr != nil {
+		s.logger.Warn("failed to close type stats rows", "error", closeErr)
+	}
 
 	// Attachments
 	if err := s.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(size),0) FROM attachments").Scan(
@@ -438,12 +463,16 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 		var src string
 		var t time.Time
 		if err := syncRows.Scan(&src, &t); err != nil {
-			syncRows.Close()
+			if closeErr := syncRows.Close(); closeErr != nil {
+				s.logger.Warn("failed to close sync rows after scan error", "error", closeErr)
+			}
 			return nil, fmt.Errorf("scan sync time: %w", err)
 		}
 		stats.LastSyncTimes[kb.Source(src)] = t
 	}
-	syncRows.Close()
+	if closeErr := syncRows.Close(); closeErr != nil {
+		s.logger.Warn("failed to close sync rows", "error", closeErr)
+	}
 
 	return stats, nil
 }

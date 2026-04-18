@@ -123,8 +123,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Metadata    map[string]string `json:"metadata,omitempty"`
 	}
 
-	items := make([]resultItem, 0, len(results))
-	for _, r := range results {
+	items := make([]resultItem, 0, len(results.Results))
+	for _, r := range results.Results {
 		items = append(items, resultItem{
 			ID:          r.Document.ID,
 			Source:      string(r.Document.Source),
@@ -143,7 +143,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"query":   queryText,
 		"results": items,
-		"total":   len(items),
+		"total":   results.Total,
 		"limit":   limit,
 		"offset":  offset,
 	})
