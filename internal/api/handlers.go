@@ -331,19 +331,31 @@ func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	full := r.URL.Query().Get("full") == "true"
+
 	// Run sync asynchronously
 	s.asyncWg.Add(1)
 	go func() {
 		defer s.asyncWg.Done()
-		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		if err := s.syncManager.SyncSource(syncCtx, kbSource); err != nil {
-			s.logger.Warn("manual sync failed", "source", source, "error", err)
+		var err error
+		if full {
+			err = s.syncManager.FullSync(syncCtx, kbSource)
+		} else {
+			err = s.syncManager.SyncSource(syncCtx, kbSource)
+		}
+		if err != nil {
+			s.logger.Warn("manual sync failed", "source", source, "full", full, "error", err)
 		}
 	}()
 
+	status := "sync triggered"
+	if full {
+		status = "full sync triggered"
+	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "sync triggered",
+		"status": status,
 		"source": source,
 	})
 }

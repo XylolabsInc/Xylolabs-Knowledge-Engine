@@ -331,19 +331,22 @@ func main() {
 			totalFilesWritten++
 		}
 
-		// Map source_ids to generated file paths
-		for _, doc := range b.Documents {
-			if doc.SourceID != "" && len(blocks) > 0 {
-				mapped := false
-				for _, block := range blocks {
-					if block.Path != "" {
-						allDocMappings[doc.SourceID] = block.Path
-						mapped = true
-						break
+		// Map source_ids to generated file paths — only when content files
+		// were actually written (not when all blocks were index-only).
+		if totalFilesWritten > batchWritesBefore {
+			for _, doc := range b.Documents {
+				if doc.SourceID != "" {
+					mapped := false
+					for _, block := range blocks {
+						if block.Path != "" && !isIndexFile(block.Path) {
+							allDocMappings[doc.SourceID] = block.Path
+							mapped = true
+							break
+						}
 					}
-				}
-				if !mapped {
-					allDocMappings[doc.SourceID] = blocks[0].Path
+					if !mapped {
+						allDocMappings[doc.SourceID] = "unmapped"
+					}
 				}
 			}
 		}

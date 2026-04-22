@@ -200,10 +200,8 @@ func (r *Reader) loadIndexFiles() ([]fileEntry, error) {
 	}
 
 	r.cacheMu.Lock()
-	r.cacheMu.Lock()
 	r.indexCache = entries
 	r.indexCacheAt = time.Now()
-	r.cacheMu.Unlock()
 	r.cacheMu.Unlock()
 
 	return entries, nil

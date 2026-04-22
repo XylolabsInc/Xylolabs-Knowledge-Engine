@@ -341,7 +341,7 @@ func (c *Connector) listAllChannels(ctx context.Context) ([]slack.Channel, error
 			Types:           []string{"public_channel", "private_channel"},
 			Limit:           200,
 			Cursor:          cursor,
-			ExcludeArchived: true,
+			ExcludeArchived: false,
 		}
 		if err := c.waitRateLimit(ctx); err != nil {
 			return nil, fmt.Errorf("rate limit: %w", err)
@@ -475,8 +475,8 @@ func (c *Connector) joinAllChannels(ctx context.Context, channels []slack.Channe
 		if ch.IsMember {
 			continue
 		}
-		// Only join public channels (skip private)
-		if ch.IsPrivate {
+		// Only join public, non-archived channels
+		if ch.IsPrivate || ch.IsArchived {
 			continue
 		}
 		if err := c.waitRateLimit(ctx); err != nil {
