@@ -11,31 +11,30 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
 	defaultModel       = "gemini-3.1-flash-lite-preview"
-	httpTimeout         = 120 * time.Second
-	maxAPIResponseSize  = 50 << 20 // 50 MB
-	maxRetries          = 3
-	retryBaseDelay      = 1 * time.Second
+	httpTimeout        = 120 * time.Second
+	maxAPIResponseSize = 50 << 20 // 50 MB
+	maxRetries         = 3
+	retryBaseDelay     = 1 * time.Second
 )
 
 // Client wraps the Gemini REST API.
 type Client struct {
 	apiKey     string
 	model      string
-	httpClient *http.Client
-	mu         sync.Mutex
+	httpClient atomic.Pointer[http.Client]
 	logger     *slog.Logger
 }
 
 // Message represents a conversation turn.
 type Message struct {
-	Role              string             // "user" or "model"
+	Role              string // "user" or "model"
 	Content           string
 	Images            []Image            // inline images
 	FunctionCalls     []FunctionCall     // model's tool calls (for history)
@@ -50,7 +49,7 @@ type Image struct {
 
 // GenerateRequest holds all parameters for a generation call.
 type GenerateRequest struct {
-	Model         string                // model override (empty = use client default)
+	Model         string // model override (empty = use client default)
 	SystemPrompt  string
 	Messages      []Message
 	ThinkingLevel string                // "none", "low", "medium", "high"
@@ -92,22 +91,23 @@ func NewClient(apiKey, model string, logger *slog.Logger) *Client {
 	if model == "" {
 		model = defaultModel
 	}
-	return &Client{
+	c := &Client{
 		apiKey: apiKey,
 		model:  model,
-		httpClient: &http.Client{
-			Timeout: httpTimeout,
-		},
 		logger: logger.With("component", "gemini-client"),
 	}
+	c.httpClient.Store(&http.Client{Timeout: httpTimeout})
+	return c
 }
 
 // SetTimeout overrides the default HTTP timeout for long-running requests
 // (e.g., KB generation with high thinking budgets).
 func (c *Client) SetTimeout(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.httpClient.Timeout = d
+	old := c.httpClient.Load()
+	c.httpClient.Store(&http.Client{
+		Timeout:   d,
+		Transport: old.Transport,
+	})
 }
 
 // Generate calls the Gemini generateContent endpoint and returns the response.
@@ -160,9 +160,7 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
-		c.mu.Lock()
-		resp, err := c.httpClient.Do(httpReq)
-		c.mu.Unlock()
+		resp, err := c.httpClient.Load().Do(httpReq)
 		if err != nil {
 			return nil, fmt.Errorf("gemini: do request: %w", err)
 		}
@@ -285,11 +283,11 @@ type apiToolConfig struct {
 }
 
 type apiRequest struct {
-	Contents            []apiContent         `json:"contents"`
-	SystemInstruction   *apiSystemInstruction `json:"systemInstruction,omitempty"`
-	GenerationConfig    apiGenerationConfig   `json:"generationConfig"`
-	Tools               []apiTool             `json:"tools,omitempty"`
-	ToolConfig          *apiToolConfig        `json:"toolConfig,omitempty"`
+	Contents          []apiContent          `json:"contents"`
+	SystemInstruction *apiSystemInstruction `json:"systemInstruction,omitempty"`
+	GenerationConfig  apiGenerationConfig   `json:"generationConfig"`
+	Tools             []apiTool             `json:"tools,omitempty"`
+	ToolConfig        *apiToolConfig        `json:"toolConfig,omitempty"`
 }
 
 func buildRequestBody(req GenerateRequest, thinkingBudget int) ([]byte, error) {
