@@ -148,7 +148,6 @@ func (s *Scheduler) runJob(job *Job) {
 			return
 		case <-ticker.C:
 			execCtx, execCancel := context.WithCancel(context.Background())
-			defer execCancel()
 			go func() {
 				select {
 				case <-s.done:
@@ -159,6 +158,7 @@ func (s *Scheduler) runJob(job *Job) {
 			if err := s.executeJob(execCtx, job); err != nil {
 				s.logger.Warn("scheduled job run failed", "name", job.Name, "error", err)
 			}
+			execCancel() // Cancel immediately after execution to avoid context leak.
 		}
 	}
 }
