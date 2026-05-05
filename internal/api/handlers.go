@@ -633,7 +633,12 @@ func (s *Server) handleKBDocFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	doc, err := s.engine.GetDocument(r.Context(), docID)
-	if err != nil || doc == nil {
+	if err != nil {
+		s.logger.Warn("get kb doc failed", "id", docID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get document")
+		return
+	}
+	if doc == nil {
 		writeError(w, http.StatusNotFound, "document not found")
 		return
 	}
