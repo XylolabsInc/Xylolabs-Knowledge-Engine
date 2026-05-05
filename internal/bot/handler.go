@@ -238,6 +238,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	// Store file attachments for tool executor (upload_to_drive) via context.
 	if b.toolExecutor != nil && len(fileAttachments) > 0 {
 		ctx = tools.ContextWithAttachments(ctx, fileAttachments)
+		defer b.toolExecutor.ClearAttachments()
 	}
 
 	// 2.5. Extract and fetch URLs from message text for context.
