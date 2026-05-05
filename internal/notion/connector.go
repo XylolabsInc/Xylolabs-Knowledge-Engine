@@ -36,13 +36,13 @@ type Connector struct {
 // NewConnector creates a Notion connector.
 func NewConnector(apiKey string, rootPages []string, engine *kb.Engine, store kb.Storage, logger *slog.Logger) *Connector {
 	return &Connector{
-		apiKey:    apiKey,
-		rootPages: rootPages,
+		apiKey:     apiKey,
+		rootPages:  rootPages,
 		httpClient: extractor.NewRestrictedHTTPClient(30 * time.Second),
-		engine:  engine,
-		store:   store,
-		logger:  logger.With("component", "notion-connector"),
-		limiter: rate.NewLimiter(rate.Limit(3), 3),
+		engine:     engine,
+		store:      store,
+		logger:     logger.With("component", "notion-connector"),
+		limiter:    rate.NewLimiter(rate.Limit(3), 3),
 	}
 }
 

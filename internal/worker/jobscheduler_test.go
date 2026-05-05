@@ -10,9 +10,9 @@ import (
 )
 
 type mockJobStore struct {
-	jobs     []storage.ScheduledJob
-	deleted  []string
-	updated  map[string]time.Time
+	jobs    []storage.ScheduledJob
+	deleted []string
+	updated map[string]time.Time
 }
 
 func (m *mockJobStore) GetDueJobs(now time.Time) ([]storage.ScheduledJob, error) {

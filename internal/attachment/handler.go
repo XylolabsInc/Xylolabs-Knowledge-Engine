@@ -34,7 +34,7 @@ func NewHandler(basePath string, store kb.Storage, logger *slog.Logger) *Handler
 	}
 
 	return &Handler{
-		basePath: basePath,
+		basePath:   basePath,
 		httpClient: extractor.NewRestrictedHTTPClient(5 * time.Minute),
 		store:      store,
 		logger:     logger.With("component", "attachment-handler"),
@@ -93,16 +93,16 @@ func (h *Handler) Download(ctx context.Context, att kb.Attachment, authHeaders m
 			"url", att.SourceURL,
 			"error", err,
 		)
-		delay := 500*time.Millisecond * time.Duration(1<<uint(attempt))
-			if delay > 10*time.Second {
-				delay = 10 * time.Second
-			}
-			jitter := time.Duration(rand.Int64N(int64(delay) / 2))
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay + jitter):
-			}
+		delay := 500 * time.Millisecond * time.Duration(1<<uint(attempt))
+		if delay > 10*time.Second {
+			delay = 10 * time.Second
+		}
+		jitter := time.Duration(rand.Int64N(int64(delay) / 2))
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay + jitter):
+		}
 	}
 
 	return nil, fmt.Errorf("download %s after %d attempts: %w", att.Filename, h.maxRetries, lastErr)

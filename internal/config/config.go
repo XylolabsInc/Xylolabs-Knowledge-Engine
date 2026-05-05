@@ -11,19 +11,19 @@ import (
 // Config holds all application configuration.
 type Config struct {
 	// Database
-	DBPath          string
-	AttachmentPath  string
+	DBPath         string
+	AttachmentPath string
 
 	// Slack
-	SlackBotToken    string
-	SlackAppToken    string
-	SlackSignSecret  string
+	SlackBotToken   string
+	SlackAppToken   string
+	SlackSignSecret string
 
 	// Google Workspace
-	GoogleCredsFile        string
-	GoogleTokenFile        string
-	GoogleScopes           []string
-	GoogleDriveFolders     []string
+	GoogleCredsFile         string
+	GoogleTokenFile         string
+	GoogleScopes            []string
+	GoogleDriveFolders      []string
 	GoogleImpersonateEmail  string
 	GoogleDefaultCalendarID string
 
@@ -32,8 +32,8 @@ type Config struct {
 	DiscordGuildID  string
 
 	// Notion
-	NotionAPIKey     string
-	NotionRootPages  []string
+	NotionAPIKey    string
+	NotionRootPages []string
 
 	// Gemini AI
 	GeminiAPIKey   string
@@ -79,7 +79,7 @@ func Load() *Config {
 		GoogleCredsFile:    envOrDefault("GOOGLE_CREDENTIALS_FILE", "credentials.json"),
 		GoogleTokenFile:    envOrDefault("GOOGLE_TOKEN_FILE", "token.json"),
 		GoogleDriveFolders: splitEnv("GOOGLE_DRIVE_FOLDERS", nil),
-		GoogleScopes:       splitEnv("GOOGLE_SCOPES", []string{
+		GoogleScopes: splitEnv("GOOGLE_SCOPES", []string{
 			"https://www.googleapis.com/auth/drive",
 			"https://www.googleapis.com/auth/documents",
 			"https://www.googleapis.com/auth/spreadsheets",
@@ -113,8 +113,8 @@ func Load() *Config {
 		ConsoleUsername: envOrDefault("CONSOLE_USERNAME", "admin"),
 		ConsolePassword: envOrDefault("CONSOLE_PASSWORD", ""),
 
-		SlackSyncInterval:  envOrDefaultDuration("SLACK_SYNC_INTERVAL", 1*time.Hour),
-		GoogleSyncInterval: envOrDefaultDuration("GOOGLE_SYNC_INTERVAL", 15*time.Minute),
+		SlackSyncInterval:   envOrDefaultDuration("SLACK_SYNC_INTERVAL", 1*time.Hour),
+		GoogleSyncInterval:  envOrDefaultDuration("GOOGLE_SYNC_INTERVAL", 15*time.Minute),
 		NotionSyncInterval:  envOrDefaultDuration("NOTION_SYNC_INTERVAL", 10*time.Minute),
 		DiscordSyncInterval: envOrDefaultDuration("DISCORD_SYNC_INTERVAL", 5*time.Minute),
 

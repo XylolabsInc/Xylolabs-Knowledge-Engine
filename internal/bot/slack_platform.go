@@ -41,11 +41,11 @@ type SlackPlatform struct {
 // NewSlackPlatform creates a SlackPlatform.
 func NewSlackPlatform(client *slack.Client, botUserID, botToken string, logger *slog.Logger) *SlackPlatform {
 	return &SlackPlatform{
-		client:        client,
-		botUserID:     botUserID,
-		botToken:      botToken,
-		logger:        logger.With("component", "slack-platform"),
-		http:          extractor.NewRestrictedHTTPClient(30 * time.Second),
+		client:         client,
+		botUserID:      botUserID,
+		botToken:       botToken,
+		logger:         logger.With("component", "slack-platform"),
+		http:           extractor.NewRestrictedHTTPClient(30 * time.Second),
 		trackedThreads: make(map[string]bool),
 		notBotThreads:  make(map[string]time.Time),
 		done:           make(chan struct{}),

@@ -76,7 +76,7 @@ type Attachment struct {
 type SearchResult struct {
 	Document Document `json:"document"`
 	Score    float64  `json:"score"`
-	Snippet  string  `json:"snippet"`
+	Snippet  string   `json:"snippet"`
 }
 
 // SearchResponse contains search results with total count for pagination.

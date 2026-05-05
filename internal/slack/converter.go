@@ -18,9 +18,9 @@ import (
 )
 
 var (
-	userMentionRe  = regexp.MustCompile(`<@([A-Z0-9]+)>`)
-	channelRe      = regexp.MustCompile(`<#([A-Z0-9]+)\|([^>]+)>`)
-	urlRe          = regexp.MustCompile(`<(https?://[^|>]+)(?:\|([^>]+))?>`)
+	userMentionRe   = regexp.MustCompile(`<@([A-Z0-9]+)>`)
+	channelRe       = regexp.MustCompile(`<#([A-Z0-9]+)\|([^>]+)>`)
+	urlRe           = regexp.MustCompile(`<(https?://[^|>]+)(?:\|([^>]+))?>`)
 	slackHTTPClient = extractor.NewRestrictedHTTPClient(30 * time.Second)
 )
 

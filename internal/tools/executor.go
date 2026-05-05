@@ -38,11 +38,11 @@ type ToolExecutor struct {
 	schedulerManager  *SchedulerManager
 	store             kb.Storage
 
-	mu               sync.Mutex
-	attachments      map[string][]byte // file name → data, from Slack file downloads
-	screenshotData   []byte            // screenshot from screenshot_url tool, separate from user attachments
-	attachmentEpoch  int               // incremented by SetAttachments to detect stale state
-	lastSeenEpoch    int               // epoch seen by most recent Execute; detects panics between calls
+	mu              sync.Mutex
+	attachments     map[string][]byte // file name → data, from Slack file downloads
+	screenshotData  []byte            // screenshot from screenshot_url tool, separate from user attachments
+	attachmentEpoch int               // incremented by SetAttachments to detect stale state
+	lastSeenEpoch   int               // epoch seen by most recent Execute; detects panics between calls
 }
 
 // NewToolExecutor creates a ToolExecutor.
@@ -717,7 +717,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 				Name:        "list_calendars",
 				Description: "List accessible Google Calendars.",
 				Parameters: map[string]any{
-					"type": "object",
+					"type":       "object",
 					"properties": map[string]any{},
 				},
 			},
@@ -821,7 +821,7 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 				Name:        "list_task_lists",
 				Description: "List Google Tasks task lists.",
 				Parameters: map[string]any{
-					"type": "object",
+					"type":       "object",
 					"properties": map[string]any{},
 				},
 			},

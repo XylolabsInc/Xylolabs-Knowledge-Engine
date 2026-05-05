@@ -137,7 +137,6 @@ func extractHWPXSectionText(xmlData []byte) (string, error) {
 		}
 	}
 
-
 	// Flush any trailing paragraph content.
 	if paraBuilder.Len() > 0 {
 		if sb.Len() > 0 {

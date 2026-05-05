@@ -6,9 +6,9 @@ import (
 
 func TestTruncateID(t *testing.T) {
 	tests := []struct {
-		id      string
-		maxLen  int
-		want    string
+		id     string
+		maxLen int
+		want   string
 	}{
 		{"", 12, ""},
 		{"a", 12, "a"},

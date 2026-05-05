@@ -42,7 +42,7 @@ type Server struct {
 	startedAt    time.Time
 	requestCount atomic.Int64
 	errorCount   atomic.Int64
-	asyncWg         sync.WaitGroup
+	asyncWg      sync.WaitGroup
 
 	kbStatsMu        sync.Mutex
 	kbStatsFileCount int

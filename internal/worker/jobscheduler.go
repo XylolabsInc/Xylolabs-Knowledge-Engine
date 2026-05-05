@@ -88,8 +88,8 @@ func (js *JobScheduler) poll() {
 		js.logger.Info("executing scheduled job", "id", job.ID, "type", job.Type, "channel", job.ChannelID)
 
 		postCtx, postCancel := context.WithTimeout(context.Background(), jobPostTimeout)
-			_, err := js.poster.PostMessage(postCtx, job.ChannelID, job.Message, "")
-			postCancel()
+		_, err := js.poster.PostMessage(postCtx, job.ChannelID, job.Message, "")
+		postCancel()
 		if err != nil {
 			js.logger.Error("failed to post scheduled message", "id", job.ID, "channel", job.ChannelID, "error", err)
 			continue

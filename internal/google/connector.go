@@ -27,21 +27,21 @@ import (
 
 // Connector manages Google Workspace integration.
 type Connector struct {
-	driveService    *drive.Service
-	calendarService *calendar.Service
-	docsService     *docs.Service
-	sheetsService   *sheets.Service
-	slidesService   *slides.Service
-	gmailService    *gmail.Service
-	tasksService    *tasks.Service
-	engine          *kb.Engine
-	store           kb.Storage
-	logger          *slog.Logger
-	credsFile       string
-	tokenFile       string
-	scopes          []string
-	extractor       *extractor.Extractor
-	driveFolders    []string
+	driveService     *drive.Service
+	calendarService  *calendar.Service
+	docsService      *docs.Service
+	sheetsService    *sheets.Service
+	slidesService    *slides.Service
+	gmailService     *gmail.Service
+	tasksService     *tasks.Service
+	engine           *kb.Engine
+	store            kb.Storage
+	logger           *slog.Logger
+	credsFile        string
+	tokenFile        string
+	scopes           []string
+	extractor        *extractor.Extractor
+	driveFolders     []string
 	impersonateEmail string
 }
 

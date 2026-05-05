@@ -37,9 +37,9 @@ type Connector struct {
 
 	limiter *rate.Limiter
 
-	botHandler bot.BotHandler      // may be nil if Gemini not configured
-	extractor *extractor.Extractor // may be nil
-	botUserID string
+	botHandler bot.BotHandler       // may be nil if Gemini not configured
+	extractor  *extractor.Extractor // may be nil
+	botUserID  string
 }
 
 // NewConnector creates a Slack connector.

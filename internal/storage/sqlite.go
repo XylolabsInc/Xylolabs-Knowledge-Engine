@@ -281,7 +281,6 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 	return &kb.SearchResponse{Results: results, Total: total}, rows.Err()
 }
 
-
 // ListDocuments returns a paginated list of documents with optional filters.
 func (s *SQLiteStore) ListDocuments(query kb.ListDocumentsQuery) (*kb.ListDocumentsResult, error) {
 	var conditions []string

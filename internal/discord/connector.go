@@ -19,11 +19,11 @@ import (
 
 // Connector handles real-time and historical Discord message ingestion.
 type Connector struct {
-	session  *discordgo.Session
-	guildID  string
-	engine   *kb.Engine
-	store    kb.Storage
-	logger   *slog.Logger
+	session *discordgo.Session
+	guildID string
+	engine  *kb.Engine
+	store   kb.Storage
+	logger  *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -60,8 +60,8 @@ func NewConnector(token, guildID string, engine *kb.Engine, store kb.Storage, lo
 		logger:    logger.With("component", "discord-connector"),
 		userCache: make(map[string]*discordgo.Member),
 		limiter:   rate.NewLimiter(rate.Limit(1), 1),
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:       ctx,
+		cancel:    cancel,
 	}, nil
 }
 
