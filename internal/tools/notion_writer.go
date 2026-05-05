@@ -19,7 +19,7 @@ import (
 const (
 	notionAPIBase       = "https://api.notion.com/v1"
 	notionAPIVersion    = "2022-06-28"
-	defaultNotionParent  = ""
+	defaultNotionParent = ""
 )
 
 // NotionWriter handles Notion write operations.
@@ -32,9 +32,9 @@ type NotionWriter struct {
 // NewNotionWriter creates a NotionWriter.
 func NewNotionWriter(apiKey string, logger *slog.Logger) *NotionWriter {
 	return &NotionWriter{
-		apiKey: apiKey,
+		apiKey:     apiKey,
 		httpClient: extractor.NewRestrictedHTTPClient(30 * time.Second),
-		logger: logger.With("component", "notion-writer"),
+		logger:     logger.With("component", "notion-writer"),
 	}
 }
 
@@ -111,7 +111,7 @@ func (w *NotionWriter) AppendToPage(ctx context.Context, pageID, content string)
 	return url, nil
 }
 
-var notionPageIDRe = regexp.MustCompile(`^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var notionPageIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func validateNotionPageID(pageID string) error {
 	if !notionPageIDRe.MatchString(pageID) {
