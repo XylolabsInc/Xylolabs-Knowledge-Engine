@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ type Reader struct {
 	lastPull   time.Time
 	pullMinGap time.Duration
 
-	cacheMu       sync.RWMutex
+	cacheMu sync.RWMutex
 
 	indexCache    []fileEntry
 	indexCacheAt  time.Time
@@ -69,7 +70,7 @@ func (r *Reader) Pull() {
 		r.logger.Debug("git pull complete", "output", strings.TrimSpace(string(out)))
 		r.lastPull = time.Now()
 		r.cacheMu.Lock()
-		r.indexCache = nil       // invalidate cache on successful pull
+		r.indexCache = nil // invalidate cache on successful pull
 		r.detailFilesCache = nil
 		r.urlMapCache = nil
 		r.cacheMu.Unlock()
@@ -451,7 +452,7 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		}
 	}
 
-	// Sort by score and take top results
+	// Sort by score descending and take top results
 	type scored struct {
 		path  string
 		score float64
@@ -460,13 +461,15 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 	for path, score := range fileScores {
 		ranked = append(ranked, scored{path, score})
 	}
-	for i := 0; i < len(ranked); i++ {
-		for j := i + 1; j < len(ranked); j++ {
-			if ranked[j].score > ranked[i].score {
-				ranked[i], ranked[j] = ranked[j], ranked[i]
-			}
+	slices.SortFunc(ranked, func(a, b scored) int {
+		if a.score > b.score {
+			return -1
 		}
-	}
+		if a.score < b.score {
+			return 1
+		}
+		return 0
+	})
 
 	maxFiles := 15
 	if len(ranked) < maxFiles {
