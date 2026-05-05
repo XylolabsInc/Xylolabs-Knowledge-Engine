@@ -263,7 +263,7 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				s.logger.Warn("failed to open KB repo root", "error", err)
 			} else {
-				fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+				walkErr := fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 					if err != nil || d.IsDir() {
 						return nil
 					}
@@ -272,6 +272,9 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 					}
 					return nil
 				})
+				if walkErr != nil {
+					s.logger.Warn("failed to walk KB repo", "error", walkErr)
+				}
 				root.Close()
 			}
 			s.kbStatsMu.Lock()

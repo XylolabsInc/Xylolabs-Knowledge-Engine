@@ -402,7 +402,7 @@ func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("begin stats read tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stats := &kb.Stats{
 		DocumentsBySource: make(map[kb.Source]int64),

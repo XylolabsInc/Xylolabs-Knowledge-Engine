@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -28,8 +27,7 @@ type Connector struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	userCache   map[string]*discordgo.Member
-	userCacheMu sync.RWMutex
+	userCache map[string]*discordgo.Member
 
 	limiter *rate.Limiter
 

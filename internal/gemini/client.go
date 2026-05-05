@@ -303,13 +303,9 @@ func buildRequestBody(req GenerateRequest, thinkingBudget int) ([]byte, error) {
 	// with custom tools (function calling) in the same request.
 	// Prioritize function calling when both are requested.
 	if len(req.Tools) > 0 {
-		var decls []apiFunctionDeclaration
-		for _, t := range req.Tools {
-			decls = append(decls, apiFunctionDeclaration{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			})
+		decls := make([]apiFunctionDeclaration, len(req.Tools))
+		for i, t := range req.Tools {
+			decls[i] = apiFunctionDeclaration(t)
 		}
 		ar.Tools = []apiTool{{FunctionDeclarations: decls}}
 		ar.ToolConfig = &apiToolConfig{

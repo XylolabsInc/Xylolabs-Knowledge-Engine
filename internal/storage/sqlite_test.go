@@ -95,7 +95,9 @@ func TestGetDocumentBySourceID(t *testing.T) {
 		UpdatedAt: now,
 		IndexedAt: now,
 	}
-	store.UpsertDocument(doc)
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
 
 	got, err := store.GetDocumentBySourceID(kb.SourceGoogle, "G456")
 	if err != nil {
@@ -113,7 +115,9 @@ func TestDeleteDocument(t *testing.T) {
 		ID: "del-1", Source: kb.SourceSlack, SourceID: "D1",
 		Timestamp: now, UpdatedAt: now, IndexedAt: now,
 	}
-	store.UpsertDocument(doc)
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
 	if err := store.DeleteDocument("del-1"); err != nil {
 		t.Fatalf("DeleteDocument() error = %v", err)
 	}
@@ -136,7 +140,9 @@ func TestListDocuments(t *testing.T) {
 			UpdatedAt: now,
 			IndexedAt: now,
 		}
-		store.UpsertDocument(doc)
+		if err := store.UpsertDocument(doc); err != nil {
+			t.Fatalf("UpsertDocument() error = %v", err)
+		}
 	}
 
 	result, err := store.ListDocuments(kb.ListDocumentsQuery{Limit: 3})
@@ -166,7 +172,9 @@ func TestListDocumentsWithSourceFilter(t *testing.T) {
 			UpdatedAt: now,
 			IndexedAt: now,
 		}
-		store.UpsertDocument(doc)
+		if err := store.UpsertDocument(doc); err != nil {
+			t.Fatalf("UpsertDocument() error = %v", err)
+		}
 		now = now.Add(time.Second)
 	}
 
@@ -212,7 +220,9 @@ func TestGetStats(t *testing.T) {
 		ID: "stats-1", Source: kb.SourceSlack, SourceID: "ST1",
 		ContentType: "message", Timestamp: now, UpdatedAt: now, IndexedAt: now,
 	}
-	store.UpsertDocument(doc)
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
 
 	stats, err := store.GetStats()
 	if err != nil {
@@ -266,11 +276,15 @@ func TestUpsertDocumentUpdate(t *testing.T) {
 		Title: "Original", Content: "content",
 		Timestamp: now, UpdatedAt: now, IndexedAt: now,
 	}
-	store.UpsertDocument(doc)
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
 
 	doc.Title = "Updated"
 	doc.UpdatedAt = now.Add(time.Hour)
-	store.UpsertDocument(doc)
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() update error = %v", err)
+	}
 
 	got, _ := store.GetDocument("upsert-1")
 	if got.Title != "Updated" {

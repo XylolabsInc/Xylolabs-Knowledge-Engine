@@ -1097,7 +1097,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 	switch call.Name {
 	case "create_google_doc":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		title, _ := call.Args["title"].(string)
 		content, _ := call.Args["content"].(string)
@@ -1113,7 +1113,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "create_drive_folder":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		name, _ := call.Args["name"].(string)
 		parentFolderID, _ := call.Args["parent_folder_id"].(string)
@@ -1128,7 +1128,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "upload_to_drive":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileName, _ := call.Args["file_name"].(string)
 		folderID, _ := call.Args["folder_id"].(string)
@@ -1183,7 +1183,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "delete_drive_file":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		if fileID == "" {
@@ -1196,7 +1196,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "rename_drive_file":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		newName, _ := call.Args["new_name"].(string)
@@ -1214,7 +1214,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "edit_google_doc":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		content, _ := call.Args["content"].(string)
@@ -1229,7 +1229,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "search_drive":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		query, _ := call.Args["query"].(string)
 		if query == "" {
@@ -1243,7 +1243,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "get_drive_file_info":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		if fileID == "" {
@@ -1257,7 +1257,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "read_google_doc":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		if fileID == "" {
@@ -1271,7 +1271,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "read_google_sheet":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		readRange, _ := call.Args["range"].(string)
@@ -1303,7 +1303,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "create_google_sheet":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		title, _ := call.Args["title"].(string)
 		dataJSON, _ := call.Args["data"].(string)
@@ -1319,7 +1319,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "edit_google_sheet":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		writeRange, _ := call.Args["range"].(string)
@@ -1340,7 +1340,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "append_google_sheet":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		appendRange, _ := call.Args["range"].(string)
@@ -1361,7 +1361,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "read_google_slides":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		if fileID == "" {
@@ -1375,7 +1375,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "create_google_slides":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		title, _ := call.Args["title"].(string)
 		folderID, _ := call.Args["folder_id"].(string)
@@ -1390,7 +1390,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "add_slide":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		title, _ := call.Args["title"].(string)
@@ -1405,7 +1405,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "move_drive_file":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		newFolderID, _ := call.Args["new_folder_id"].(string)
@@ -1423,7 +1423,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "copy_drive_file":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		newName, _ := call.Args["new_name"].(string)
@@ -1439,7 +1439,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "list_drive_folder":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		folderID, _ := call.Args["folder_id"].(string)
 		if folderID == "" {
@@ -1453,7 +1453,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "append_to_google_doc":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		content, _ := call.Args["content"].(string)
@@ -1470,7 +1470,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "get_sheet_metadata":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		if fileID == "" {
@@ -1484,7 +1484,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "clear_google_sheet":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		clearRange, _ := call.Args["range"].(string)
@@ -1501,7 +1501,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "share_drive_file":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		email, _ := call.Args["email"].(string)
@@ -1519,7 +1519,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "delete_slide":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		slideID, _ := call.Args["slide_id"].(string)
@@ -1533,7 +1533,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "add_sheet_tab":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		tabName, _ := call.Args["tab_name"].(string)
@@ -1550,7 +1550,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "export_as_pdf":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Drive is not configured")
+			return nil, fmt.Errorf("google drive is not configured")
 		}
 		fileID, _ := call.Args["file_id"].(string)
 		fileName, _ := call.Args["file_name"].(string)
@@ -1566,7 +1566,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 	// --- Calendar ---
 	case "create_calendar_event":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Calendar is not configured")
+			return nil, fmt.Errorf("google calendar is not configured")
 		}
 		summary, _ := call.Args["summary"].(string)
 		startTime, _ := call.Args["start_time"].(string)
@@ -1605,7 +1605,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "edit_calendar_event":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Calendar is not configured")
+			return nil, fmt.Errorf("google calendar is not configured")
 		}
 		eventID, _ := call.Args["event_id"].(string)
 		calendarID, _ := call.Args["calendar_id"].(string)
@@ -1637,7 +1637,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "delete_calendar_event":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Calendar is not configured")
+			return nil, fmt.Errorf("google calendar is not configured")
 		}
 		eventID, _ := call.Args["event_id"].(string)
 		calendarID, _ := call.Args["calendar_id"].(string)
@@ -1654,7 +1654,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "list_calendar_events":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Calendar is not configured")
+			return nil, fmt.Errorf("google calendar is not configured")
 		}
 		calendarID, _ := call.Args["calendar_id"].(string)
 		if calendarID == "" {
@@ -1674,7 +1674,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "add_event_attendees":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Calendar is not configured")
+			return nil, fmt.Errorf("google calendar is not configured")
 		}
 		eventID, _ := call.Args["event_id"].(string)
 		attendeesStr, _ := call.Args["attendees"].(string)
@@ -1698,7 +1698,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "list_calendars":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Calendar is not configured")
+			return nil, fmt.Errorf("google calendar is not configured")
 		}
 		calendars, err := e.googleWriter.ListCalendars(ctx)
 		if err != nil {
@@ -1709,7 +1709,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 	// --- Tasks ---
 	case "create_task":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Tasks is not configured")
+			return nil, fmt.Errorf("google tasks is not configured")
 		}
 		title, _ := call.Args["title"].(string)
 		taskListID, _ := call.Args["task_list_id"].(string)
@@ -1726,7 +1726,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "edit_task":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Tasks is not configured")
+			return nil, fmt.Errorf("google tasks is not configured")
 		}
 		taskID, _ := call.Args["task_id"].(string)
 		taskListID, _ := call.Args["task_list_id"].(string)
@@ -1744,7 +1744,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "delete_task":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Tasks is not configured")
+			return nil, fmt.Errorf("google tasks is not configured")
 		}
 		taskID, _ := call.Args["task_id"].(string)
 		taskListID, _ := call.Args["task_list_id"].(string)
@@ -1758,7 +1758,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "list_tasks":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Tasks is not configured")
+			return nil, fmt.Errorf("google tasks is not configured")
 		}
 		taskListID, _ := call.Args["task_list_id"].(string)
 		maxResults := 20
@@ -1773,7 +1773,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "list_task_lists":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Google Tasks is not configured")
+			return nil, fmt.Errorf("google tasks is not configured")
 		}
 		lists, err := e.googleWriter.ListTaskLists(ctx)
 		if err != nil {
@@ -1784,7 +1784,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 	// --- Gmail ---
 	case "send_email":
 		if e.googleWriter == nil {
-			return nil, fmt.Errorf("Gmail is not configured")
+			return nil, fmt.Errorf("gmail is not configured")
 		}
 		if e.googleWriter.SenderEmail() == "" {
 			return nil, fmt.Errorf("send_email is not configured: sender email is not set")
@@ -1803,7 +1803,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "create_notion_page":
 		if e.notionWriter == nil {
-			return nil, fmt.Errorf("Notion is not configured")
+			return nil, fmt.Errorf("notion is not configured")
 		}
 		title, _ := call.Args["title"].(string)
 		content, _ := call.Args["content"].(string)
@@ -1819,7 +1819,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 	case "update_notion_page":
 		if e.notionWriter == nil {
-			return nil, fmt.Errorf("Notion is not configured")
+			return nil, fmt.Errorf("notion is not configured")
 		}
 		pageID, _ := call.Args["page_id"].(string)
 		content, _ := call.Args["content"].(string)

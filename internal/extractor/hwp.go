@@ -132,8 +132,7 @@ func extractHWPXSectionText(xmlData []byte) (string, error) {
 				paraBuilder.WriteString(text)
 			}
 		case xml.EndElement:
-			if t.Name.Local == "tc" {
-			}
+			// tc end element needs no action; tab insertion handled at StartElement.
 		}
 	}
 
