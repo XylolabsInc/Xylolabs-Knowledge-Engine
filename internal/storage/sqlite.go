@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -398,7 +399,7 @@ func (s *SQLiteStore) SetSyncState(state kb.SyncState) error {
 
 // GetStats returns aggregate knowledge base statistics.
 func (s *SQLiteStore) GetStats() (*kb.Stats, error) {
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("begin stats read tx: %w", err)
 	}
