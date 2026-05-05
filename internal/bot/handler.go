@@ -114,6 +114,13 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error("panic recovered in respond", "panic", r)
+			threadID := msg.ThreadID
+			if threadID == "" {
+				threadID = msg.MessageID
+			}
+			if err := b.platform.PostReply(ctx, msg.Channel, threadID, "An internal error occurred. Please try again."); err != nil {
+				b.logger.Warn("failed to post panic recovery reply", "error", err)
+			}
 		}
 	}()
 
@@ -403,12 +410,12 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 			topic := strings.TrimSpace(lb[1])
 			content := strings.TrimSpace(lb[2])
 			b.wg.Add(1)
-				go func(topic, content, author string) {
-					defer b.wg.Done()
-					if err := b.kbReader.SaveFact(topic, content, author); err != nil {
-						b.logger.Warn("failed to save learned fact", "topic", topic, "error", err)
-					}
-				}(topic, content, author)
+			go func(topic, content, author string) {
+				defer b.wg.Done()
+				if err := b.kbReader.SaveFact(topic, content, author); err != nil {
+					b.logger.Warn("failed to save learned fact", "topic", topic, "error", err)
+				}
+			}(topic, content, author)
 		}
 		responseText = reLearnBlock.ReplaceAllString(responseText, "")
 		responseText = strings.TrimSpace(responseText)
