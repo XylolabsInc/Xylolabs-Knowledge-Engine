@@ -82,11 +82,12 @@ func (p *SlackPlatform) StopCleanup() {
 func (p *SlackPlatform) cleanupCaches() {
 	p.trackedThreadsMu.Lock()
 	if len(p.trackedThreads) > maxTrackedThreads {
+		target := len(p.trackedThreads) / 2
 		count := 0
 		for k := range p.trackedThreads {
 			delete(p.trackedThreads, k)
 			count++
-			if count >= len(p.trackedThreads)/2 {
+			if count >= target {
 				break
 			}
 		}
@@ -101,11 +102,12 @@ func (p *SlackPlatform) cleanupCaches() {
 		}
 	}
 	if len(p.notBotThreads) > maxNotBotThreads {
+		target := len(p.notBotThreads) / 2
 		count := 0
 		for k := range p.notBotThreads {
 			delete(p.notBotThreads, k)
 			count++
-			if count >= len(p.notBotThreads)/2 {
+			if count >= target {
 				break
 			}
 		}
