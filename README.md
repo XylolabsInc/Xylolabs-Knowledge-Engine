@@ -461,7 +461,7 @@ To deploy with nginx:
 
 This will:
 1. Build the Go binary for linux/arm64
-2. Upload to the OCI server
+2. Upload to the AWS server
 3. Copy the nginx configuration to `/etc/nginx/sites-available/`
 4. Enable the site and reload nginx
 5. Verify the service is healthy
@@ -710,12 +710,12 @@ xylolabs-kb uses **SQLite** with the **FTS5** extension for full-text search.
 
 ```
 scripts/
-├── deploy.sh          # Build + upload + restart on OCI server
+├── deploy.sh          # Build + upload + restart on AWS server
 ├── generate-kb.sh     # Incremental KB generation (cron job)
 └── regenerate-kb.sh   # Full KB rebuild (weekly)
 ```
 
-**`scripts/deploy.sh`** — Builds Go binaries for linux/arm64, uploads to the OCI server, restarts the systemd service, and verifies health.
+**`scripts/deploy.sh`** — Builds Go binaries for linux/arm64, uploads to the AWS server, restarts the systemd service, and verifies health.
 
 ```bash
 ./scripts/deploy.sh              # Build, upload, restart
@@ -751,7 +751,7 @@ Log rotation is configured with the `json-file` driver (max-size 50m, max-file 5
 
 The service exposes port `8080` by default.
 
-> **Note:** The Dockerfile builds for `linux/amd64`. For ARM64 deployments (e.g., Oracle Cloud ARM instances), use `scripts/deploy.sh` which builds natively for `linux/arm64`.
+> **Note:** The Dockerfile builds for `linux/amd64`. For ARM64 deployments (e.g., AWS Graviton instances), use `scripts/deploy.sh` which builds natively for `linux/arm64`.
 
 ## Development
 

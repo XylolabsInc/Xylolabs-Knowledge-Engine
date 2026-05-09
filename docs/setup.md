@@ -354,7 +354,7 @@ The `scripts/deploy.sh` script automates the full deployment cycle:
 
 This script:
 1. Cross-compiles `xylolabs-kb` and `kb-gen` for linux/arm64
-2. Uploads binaries and scripts to the OCI server
+2. Uploads binaries and scripts to the AWS server
 3. Installs the systemd service file
 4. Restarts the service and verifies health
 

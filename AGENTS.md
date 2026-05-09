@@ -236,7 +236,7 @@ Global settings use no prefix: `LOG_LEVEL`, `DB_PATH`, `ATTACHMENT_PATH`, `API_H
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/deploy.sh` | Build ARM64 binaries, upload to OCI server, restart service |
+| `scripts/deploy.sh` | Build ARM64 binaries, upload to AWS server, restart service |
 | `scripts/generate-kb.sh` | Incremental KB generation via Gemini (falls back to Claude CLI) |
 | `scripts/regenerate-kb.sh` | Full KB rebuild — resets sync state and re-processes all documents |
 

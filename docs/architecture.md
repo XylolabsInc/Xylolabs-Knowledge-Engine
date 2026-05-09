@@ -264,7 +264,7 @@ Configurable via CLI flags or environment variables (`KB_GEN_MODEL`, `KB_GEN_THI
 
 | Script | Purpose |
 |--------|---------|
-| `deploy.sh` | Build ARM64 binaries, upload to OCI server (your-server-ip), restart systemd service, verify health |
+| `deploy.sh` | Build ARM64 binaries, upload to AWS server (bots.xylolabs.com), restart systemd service, verify health |
 | `generate-kb.sh` | Incremental KB generation: fetch new documents from API, process with Gemini (kb-gen), fall back to Claude CLI on quota errors, commit + push to KB repo |
 | `regenerate-kb.sh` | Full rebuild: reset sync state to epoch, run generate-kb.sh iteratively (up to 10 passes) |
 

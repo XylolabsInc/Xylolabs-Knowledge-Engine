@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# deploy.sh — Deploy xylolabs-kb to OCI server
+# deploy.sh — Deploy xylolabs-kb to AWS server
 #
 # Builds the Go binary for ARM64, uploads to server, restarts the service,
 # and verifies health.
@@ -12,9 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Server config
-SERVER_HOST="${SERVER_HOST:-129.154.207.107}"
+SERVER_HOST="${SERVER_HOST:-brain.internal.xylolabs.com}"
 SERVER_USER="${SERVER_USER:-ubuntu}"
-SSH_KEY="${SSH_KEY:-$PROJECT_DIR/key.pem}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/xylolabs-bots.pem}"
 REMOTE_DIR="/opt/xylolabs-kb"
 REMOTE_KB_DIR="/opt/knowledge"
 
