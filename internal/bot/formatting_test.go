@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
@@ -135,5 +136,34 @@ func TestIsComplexQuery(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isComplexQuery(%q) = %v, want %v", tt.query, got, tt.want)
 		}
+	}
+}
+
+// TestReactBlockStripsToEmpty pins down the regression where a model response
+// containing only a REACT block strips down to an empty string. Before the
+// fix, the bot would still call PostReply with this empty payload, Slack
+// would silently drop it, and the user would see nothing. The handler must
+// detect this case and avoid posting empty messages.
+func TestReactBlockStripsToEmpty(t *testing.T) {
+	cases := []string{
+		"===REACT:eyes===",
+		"===REACT: wave===",
+		"  ===REACT:thumbsup===  ",
+	}
+	for _, in := range cases {
+		out := reReactBlock.ReplaceAllString(in, "")
+		if s := strings.TrimSpace(out); s != "" {
+			t.Errorf("expected REACT-only response to strip to empty, got %q for input %q", s, in)
+		}
+	}
+}
+
+// TestLearnBlockStripsToEmpty pins the same invariant for LEARN-only
+// responses produced by the model.
+func TestLearnBlockStripsToEmpty(t *testing.T) {
+	in := "===LEARN: topic ===\ncontent here\n===ENDLEARN===\n"
+	out := reLearnBlock.ReplaceAllString(in, "")
+	if s := strings.TrimSpace(out); s != "" {
+		t.Errorf("expected LEARN-only response to strip to empty, got %q", s)
 	}
 }

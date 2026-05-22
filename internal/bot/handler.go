@@ -373,6 +373,27 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 		})
 	}
 
+	// If we exhausted the tool iteration budget while the model was still
+	// emitting tool calls, the last response carries no text. Force a final
+	// generation with tools disabled so the user receives an answer instead
+	// of silence.
+	if len(genResp.FunctionCalls) > 0 {
+		b.logger.Warn("tool iteration limit reached, forcing final text response",
+			"iterations", maxToolIterations+1,
+			"pending_calls", len(genResp.FunctionCalls))
+		finalReq := genReq
+		finalReq.Tools = nil
+		finalResp, err := b.gemini.Generate(ctx, finalReq)
+		if err != nil {
+			b.logger.Error("final gemini generate failed", "error", err)
+			if postErr := b.platform.PostReply(ctx, msg.Channel, threadID, fmt.Sprintf("An error occurred: %v", err)); postErr != nil {
+				b.logger.Warn("failed to post error reply", "error", postErr)
+			}
+			return
+		}
+		genResp = finalResp
+	}
+
 	// 5.5. Upload screenshot attachments if any were produced by tools.
 	if b.toolExecutor != nil {
 		if screenshotData, ok := b.toolExecutor.PopScreenshot(); ok {
@@ -442,18 +463,26 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 		"query", query,
 	)
 
-	// 8. Format and post the response.
-	replyText := b.platform.FormatResponse(responseText)
-	if len(replyText) > maxReplyLength {
-		truncated := replyText[:maxReplyLength-3]
-		for len(truncated) > 0 && !utf8.RuneStart(truncated[len(truncated)-1]) {
-			truncated = truncated[:len(truncated)-1]
+	// 8. Format and post the response. Skip posting when the body is empty
+	// after stripping LEARN/REACT blocks — Slack drops empty Block Kit
+	// messages silently, which manifests to users as "the bot stopped
+	// replying". If only a reaction was requested, emit it below.
+	if responseText != "" {
+		replyText := b.platform.FormatResponse(responseText)
+		if len(replyText) > maxReplyLength {
+			truncated := replyText[:maxReplyLength-3]
+			for len(truncated) > 0 && !utf8.RuneStart(truncated[len(truncated)-1]) {
+				truncated = truncated[:len(truncated)-1]
+			}
+			replyText = truncated + "..."
 		}
-		replyText = truncated + "..."
-	}
 
-	if err := b.platform.PostReply(ctx, msg.Channel, threadID, replyText); err != nil {
-		b.logger.Error("failed to post reply", "platform", b.platform.Name(), "channel", msg.Channel, "error", err)
+		if err := b.platform.PostReply(ctx, msg.Channel, threadID, replyText); err != nil {
+			b.logger.Error("failed to post reply", "platform", b.platform.Name(), "channel", msg.Channel, "error", err)
+		}
+	} else if reactEmoji == "" {
+		b.logger.Warn("empty response after post-processing, nothing to send",
+			"query", query, "raw_length", len(genResp.Text))
 	}
 
 	// Add emoji reaction to the user's original message.
