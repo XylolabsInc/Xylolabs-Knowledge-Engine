@@ -32,6 +32,14 @@ type Connector struct {
 	channelCache   map[string]string // channel ID → channel name
 	channelCacheMu sync.RWMutex
 
+	// Cache of DM channel IDs the bot is a participant in. Slack occasionally
+	// delivers message.im events for DMs the bot cannot access; replying to
+	// them returns channel_not_found, so we filter those events upstream.
+	accessibleIMs   map[string]struct{}
+	accessibleIMsMu sync.RWMutex
+	deniedIMs       map[string]time.Time
+	deniedIMsMu     sync.RWMutex
+
 	botToken string
 	appToken string
 
@@ -41,6 +49,11 @@ type Connector struct {
 	extractor  *extractor.Extractor // may be nil
 	botUserID  string
 }
+
+const (
+	imRefreshInterval = 10 * time.Minute
+	imDenyCacheTTL    = 1 * time.Hour
+)
 
 // NewConnector creates a Slack connector.
 func NewConnector(botToken, appToken string, engine *kb.Engine, store kb.Storage, logger *slog.Logger) *Connector {
@@ -54,16 +67,18 @@ func NewConnector(botToken, appToken string, engine *kb.Engine, store kb.Storage
 	)
 
 	return &Connector{
-		client:       client,
-		socketClient: socketClient,
-		engine:       engine,
-		store:        store,
-		logger:       logger.With("component", "slack-connector"),
-		userCache:    make(map[string]*slack.User),
-		channelCache: make(map[string]string),
-		botToken:     botToken,
-		appToken:     appToken,
-		limiter:      rate.NewLimiter(rate.Limit(1), 1),
+		client:        client,
+		socketClient:  socketClient,
+		engine:        engine,
+		store:         store,
+		logger:        logger.With("component", "slack-connector"),
+		userCache:     make(map[string]*slack.User),
+		channelCache:  make(map[string]string),
+		accessibleIMs: make(map[string]struct{}),
+		deniedIMs:     make(map[string]time.Time),
+		botToken:      botToken,
+		appToken:      appToken,
+		limiter:       rate.NewLimiter(rate.Limit(1), 1),
 	}
 }
 
@@ -96,10 +111,97 @@ func (c *Connector) Start(done <-chan struct{}) error {
 		cancel()
 	}()
 
+	go c.runIMRefreshLoop(ctx)
 	go c.handleEvents(ctx)
 
 	c.logger.Info("starting slack socket mode")
 	return c.socketClient.RunContext(ctx)
+}
+
+// refreshAccessibleIMs reloads the set of DM channels the bot can post to.
+// Called at startup and on a timer so newly opened conversations become
+// accepted without requiring per-event API lookups.
+func (c *Connector) refreshAccessibleIMs(ctx context.Context) {
+	newCache := make(map[string]struct{})
+	cursor := ""
+	for {
+		if err := c.waitRateLimit(ctx); err != nil {
+			c.logger.Debug("rate limit during IM refresh", "error", err)
+			return
+		}
+		channels, nextCursor, err := c.client.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+			Types:           []string{"im"},
+			Limit:           200,
+			Cursor:          cursor,
+			ExcludeArchived: false,
+		})
+		if err != nil {
+			c.logger.Warn("failed to list bot IMs", "error", err)
+			return
+		}
+		for _, ch := range channels {
+			newCache[ch.ID] = struct{}{}
+		}
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+	c.accessibleIMsMu.Lock()
+	c.accessibleIMs = newCache
+	c.accessibleIMsMu.Unlock()
+	c.logger.Info("refreshed accessible IM list", "count", len(newCache))
+}
+
+func (c *Connector) runIMRefreshLoop(ctx context.Context) {
+	c.refreshAccessibleIMs(ctx)
+	ticker := time.NewTicker(imRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.refreshAccessibleIMs(ctx)
+		}
+	}
+}
+
+// imAccessible reports whether the bot is a participant in the given DM
+// channel and can therefore post replies to it. On cache miss it verifies via
+// conversations.info and caches both positive and negative results to avoid
+// per-message API calls under sustained traffic.
+func (c *Connector) imAccessible(ctx context.Context, channelID string) bool {
+	c.accessibleIMsMu.RLock()
+	_, ok := c.accessibleIMs[channelID]
+	c.accessibleIMsMu.RUnlock()
+	if ok {
+		return true
+	}
+
+	c.deniedIMsMu.RLock()
+	deniedAt, denied := c.deniedIMs[channelID]
+	c.deniedIMsMu.RUnlock()
+	if denied && time.Since(deniedAt) < imDenyCacheTTL {
+		return false
+	}
+
+	if err := c.waitRateLimit(ctx); err != nil {
+		c.logger.Debug("rate limit wait failed for IM check", "channel_id", channelID, "error", err)
+		return false
+	}
+	_, err := c.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil {
+		c.deniedIMsMu.Lock()
+		c.deniedIMs[channelID] = time.Now()
+		c.deniedIMsMu.Unlock()
+		c.logger.Debug("DM channel not accessible to bot, dropping event", "channel_id", channelID, "error", err)
+		return false
+	}
+	c.accessibleIMsMu.Lock()
+	c.accessibleIMs[channelID] = struct{}{}
+	c.accessibleIMsMu.Unlock()
+	return true
 }
 
 // Stop gracefully shuts down the connector.
@@ -264,8 +366,14 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event slackevents.Event
 				if ev.User == c.botUserID {
 					return
 				}
-				// Direct messages (DM channels start with "D")
+				// Direct messages (DM channels start with "D"). Slack can
+				// deliver message.im events for DMs the bot is not a
+				// participant in; replying then fails with channel_not_found
+				// and the user sees nothing. Skip those events entirely.
 				if strings.HasPrefix(ev.Channel, "D") {
+					if !c.imAccessible(ctx, ev.Channel) {
+						return
+					}
 					incoming := slackEventToIncomingMessage(ev)
 					go c.botHandler.HandleDirectMessage(ctx, incoming)
 					return // Don't index DMs to the bot
