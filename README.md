@@ -481,7 +481,7 @@ The Knowledge Engine provides AI-powered chat bots for **Slack** and **Discord**
 | Bold | `*bold*` (mrkdwn) | `**bold**` (Markdown) |
 | Links | `<url\|text>` (mrkdwn) | `[text](url)` (Markdown) |
 | Headers | `*Header*` (bold) | `## Header` (native) |
-| Message limit | 3,000 chars/block | 2,000 chars/message |
+| Message limit | 10,000 chars total, split into 3,000-char Block Kit sections | 2,000 chars/message |
 | Reactions | Native Slack emoji | Unicode emoji mapping |
 | File upload | `files:write` scope | Direct CDN upload |
 
@@ -497,18 +497,25 @@ The bot:
 
 ### Additional Bot Capabilities
 
-- **Tool calling (function calling)** — 29 tools for Google Workspace and Notion operations via Gemini function calling:
+- **Tool calling (function calling)** — 47 tools for Google Workspace, Notion, scheduling, search, screenshots, and cross-channel messaging via Gemini function calling:
   - **Google Drive:** `search_drive`, `get_drive_file_info`, `create_drive_folder`, `upload_to_drive`, `delete_drive_file`, `rename_drive_file`, `move_drive_file`, `copy_drive_file`, `list_drive_folder`, `share_drive_file`, `export_as_pdf`
   - **Google Docs:** `create_google_doc`, `read_google_doc`, `edit_google_doc`, `append_to_google_doc`
   - **Google Sheets:** `read_google_sheet`, `create_google_sheet`, `edit_google_sheet`, `append_google_sheet`, `get_sheet_metadata`, `clear_google_sheet`, `add_sheet_tab`
   - **Google Slides:** `read_google_slides`, `create_google_slides`, `add_slide`, `delete_slide`
+  - **Google Calendar:** `create_calendar_event`, `edit_calendar_event`, `delete_calendar_event`, `list_calendar_events`, `add_event_attendees`, `list_calendars`
+  - **Google Tasks:** `create_task`, `edit_task`, `delete_task`, `list_tasks`, `list_task_lists`
+  - **Gmail:** `send_email`
   - **Notion:** `create_notion_page`, `update_notion_page`
+  - **Scheduling:** `schedule_message`, `create_recurring_job`, `list_scheduled_jobs`, `cancel_scheduled_job`
+  - **Other:** `search_knowledge_base`, `screenshot_url`, `send_message`
 - **Thread continuation** — once the bot replies in a thread, all subsequent messages in that thread are handled automatically (no @mention needed)
 - **Multi-turn conversations** — up to 20 prior messages from the thread are included as context for conversation continuity
 - **Bidirectional learning** — when users share factual information, the bot can save it to the knowledge repo via LEARN blocks
 - **Business document lookup** — the bot provides exact values for business registration numbers, corporate registration numbers, representative names, etc., with links to original documents
 - **Slack mrkdwn formatting** — responses use native Slack formatting (not Markdown)
-- **Reply truncation** — responses are capped at 3,000 characters
+- **Reply length** — capped at 10,000 characters total, split into 3,000-character Slack Block Kit sections at paragraph or line boundaries
+- **DM event filtering (Slack)** — the connector only routes DM events for channels the bot is actually a participant in, so misdelivered `message.im` events from unrelated DMs are dropped before any Gemini call
+- **Empty-response guard** — if the model's reply is empty after stripping `===LEARN===` / `===REACT===` metadata, the bot skips the post entirely (Slack drops empty Block Kit messages silently) while still applying the requested emoji reaction
 
 ### Required Additional Slack Bot Scopes
 

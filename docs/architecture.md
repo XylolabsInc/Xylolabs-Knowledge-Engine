@@ -76,6 +76,8 @@ Two operational modes run concurrently:
 
 **Auto-join channels:** During each sync, the connector automatically joins all public channels the bot is not a member of. It also listens for `channel_created` events and auto-joins newly created public channels in real-time.
 
+**DM event filtering:** Slack can deliver `message.im` events for DM channels the bot is not a participant in. Replying to those returns `channel_not_found` and looks to the user like the bot died. The connector keeps two in-memory caches — `accessibleIMs` (positive, populated from `conversations.list?types=im` at startup and every 10 minutes) and `deniedIMs` (negative, 1-hour TTL) — and checks them in `imAccessible()` before routing a DM event to the bot handler. On cache miss it falls back to a single `conversations.info` call and caches the verdict. Events from unreachable DMs are dropped before any Gemini round-trip.
+
 Message threading: reply documents set `ParentID` to the root message's internal document ID.
 
 ### `internal/google` — Google Workspace connector
@@ -144,18 +146,20 @@ Responsibilities:
 - Load knowledge context from the markdown KB repo via `kbrepo.Reader`
 - Build Gemini prompt with KB context + user question + attachment content
 - Call Gemini API with function declarations to generate grounded responses
-- Execute tool calls (Google Drive write, Notion write) in a multi-turn loop (max 5 iterations)
+- Execute tool calls (Google Drive write, Notion write) in a multi-turn loop (up to six rounds, with a forced no-tools final call when the model is still tool-calling at the limit)
 - Post replies to Slack threads or DMs
 - Default response language is Korean (switches to English if user writes in English)
 - Handle rate limiting and errors gracefully
 
 Additional behaviors:
-- **Function calling (tool use)**: supports 8 tools — `create_google_doc`, `create_drive_folder`, `upload_to_drive`, `delete_drive_file`, `rename_drive_file`, `edit_google_doc`, `create_notion_page`, `update_notion_page`. Uses Gemini's native function calling API with explicit `toolConfig` (mode: AUTO).
+- **Function calling (tool use)**: supports the full `internal/tools` registry (47 tools spanning Google Drive / Docs / Sheets / Slides / Calendar / Tasks / Gmail, Notion, scheduled jobs, URL screenshots, knowledge-base search, and cross-channel `send_message`). Uses Gemini's native function calling API with explicit `toolConfig` (mode: AUTO).
+- **Tool iteration fallback**: if the loop exits with the last `genResp` still containing `function_calls` (the model never produced text within the budget), the handler issues one more `gemini.Generate` call with `Tools = nil` to force a final text response. Without this guard the bot would post an empty Block Kit message — which Slack drops silently and looks like silence to the user.
+- **Empty-response guard**: if the response text is empty after `===SKIP===` / `===LEARN===` / `===REACT===` stripping, the handler skips `PostReply` entirely (so Slack never receives an empty message) but still emits the requested emoji reaction. A warning is logged so the case stays visible in operations.
 - **Thread tracking**: the bot maintains a dual cache (positive cache for tracked threads, 5-minute negative cache for non-bot threads) to enable thread continuation without @mentions
 - **Multi-turn context**: up to 20 prior thread messages are fetched and included as conversation history for continuity
 - **LEARN blocks**: when users share factual information, the bot extracts `===LEARN:===...===ENDLEARN===` blocks from Gemini responses and saves them to the KB repo via `kbReader.SaveFact()`
 - **Slack mrkdwn conversion**: `**bold** → *bold*`, `[text](url) → <url|text>`, `## Header → *Header*`. Uses Block Kit with explicit mrkdwn type for reliable rendering
-- **Reply truncation** at 3,000 characters
+- **Reply length**: capped at 10,000 characters overall, then split into 3,000-character Slack Block Kit sections at paragraph or line boundaries
 - **Identity**: identifies as "Xylolabs Knowledge Engine"; never discloses backend models or internal tool names
 
 The bot only activates when `GEMINI_API_KEY` is set. If not configured, Slack ingestion still works normally.
@@ -165,7 +169,7 @@ The bot only activates when `GEMINI_API_KEY` is set. If not configured, Slack in
 Manages Google Drive and Notion write operations, invoked by the bot via Gemini function calling.
 
 Components:
-- **`executor.go`** — tool registry and dispatcher. Holds function declarations for all 8 tools, dispatches calls by name, manages file attachments from Slack messages
+- **`executor.go`** — tool registry and dispatcher. Holds function declarations for all 47 tools, dispatches calls by name, manages file attachments from Slack messages
 - **`google_writer.go`** — Google Drive write operations using the Drive API v3. `CreateDoc()`, `CreateFolder()`, `UploadFile()`, `DeleteFile()`, `RenameFile()`, `UpdateDocContent()`. Default folder: shared drive root
 - **`notion_writer.go`** — Notion write operations via REST API. `CreatePage()` creates pages with title + content blocks; `AppendToPage()` adds content to existing pages. Supports heading, list, and paragraph block types with Notion's 2000-char rich_text limit
 
@@ -350,6 +354,12 @@ Slack platform
     │  WebSocket event (Socket Mode)
     │  event type: app_mention or message.im or thread reply
     ▼
+internal/slack Connector
+    │
+    ├── (message.im) Check IM accessibility cache → drop if not a participant
+    └── Forward to bot handler
+    │
+    ▼
 internal/bot Handler
     │
     ├── Parse message text → question
@@ -399,17 +409,22 @@ internal/gemini Client
             ▼
         Append tool call + results to conversation
             │
-            └── Re-call Gemini with results (max 5 iterations)
+            └── Re-call Gemini with results (up to six rounds)
                     │
-                    └── Final text response
+                    ├── Final text response
+                    │
+                    └── Still tool-calling at the limit
+                            │
+                            └── One forced Gemini call with Tools=nil
+                                to collapse the loop into a text answer
     │
     ├── Extract LEARN blocks → kbReader.SaveFact() (async)
-    ├── Strip LEARN blocks from visible reply
+    ├── Strip LEARN / REACT blocks from visible reply
     ├── Convert Markdown → Slack mrkdwn
-    ├── Truncate to 3000 chars
+    ├── Cap total at 10,000 chars, split into 3,000-char Block Kit sections
     │
     ▼
-Post reply directly
+Post reply directly (skipped entirely if text is empty after stripping)
     │
     ├── chat.postMessage API call
     ├── Track thread in positive cache

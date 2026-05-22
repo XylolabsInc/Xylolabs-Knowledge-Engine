@@ -254,6 +254,9 @@ Global settings use no prefix: `LOG_LEVEL`, `DB_PATH`, `ATTACHMENT_PATH`, `API_H
 8. **NEVER use CGO-dependent sqlite drivers** — keep the build pure Go with `modernc.org/sqlite`
 9. **ALWAYS wrap errors** with component context using `fmt.Errorf("component: action: %w", err)`
 10. **NEVER expose internal package types** beyond the `kb` domain package — use interfaces
+11. **NEVER call `Platform.PostReply` with an empty body** — Slack drops empty Block Kit messages silently and the user sees nothing. The bot handler guards this in `internal/bot/handler.go`; preserve that guard when refactoring the response path
+12. **NEVER act on Slack DM events without verifying participation** — `internal/slack/connector.go` filters `message.im` events through `imAccessible()` (the `accessibleIMs` / `deniedIMs` caches). Slack occasionally delivers events from DMs the bot is not a member of; replying to those returns `channel_not_found` and looks like silence to the user
+13. **ALWAYS escape the Gemini tool-call loop with a text answer** — when `maxToolIterations` is hit while the model is still emitting function calls, retry once with `genReq.Tools = nil`. Without this fallback the last response carries no text and the user sees nothing
 
 ---
 

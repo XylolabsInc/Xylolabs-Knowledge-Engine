@@ -106,11 +106,21 @@ Post reply directly in thread
         │
         ├── Extract and save LEARN blocks (async)
         ├── Convert Markdown → Slack mrkdwn
-        ├── Truncate to 3000 chars
+        ├── Truncate to 10,000 chars overall, then split into 3,000-char Block Kit sections
         └── chat.postMessage in thread (for mentions) or DM channel (for DMs)
 ```
 
 The bot posts the final response directly without a typing indicator, keeping the conversation clean.
+
+### DM Filtering
+
+The bot only processes DM events for channels it is actually a participant in. Slack occasionally delivers `message.im` events for DMs between other users (depending on workspace scopes and event delivery quirks); replying to those returns `channel_not_found` and the user sees nothing back. To avoid that silent-failure mode:
+
+- At startup and every 10 minutes, the connector calls `conversations.list?types=im` to cache the bot's accessible DM channel IDs.
+- On cache miss for an incoming DM event, the connector verifies access via `conversations.info` and caches the positive or negative result (1-hour TTL on the negative cache).
+- DM events whose channel is not reachable are dropped before any Gemini call, so no compute is wasted on undeliverable replies.
+
+This also keeps the bot honest about its surface area: it never tries to butt into conversations it has no business in.
 
 ### Tool Calling (Function Calling)
 
@@ -149,10 +159,17 @@ Gemini returns response
                 ├── Append tool call + results to conversation
                 │
                 ▼
-            Re-call Gemini with tool results (max 5 iterations)
+            Re-call Gemini with tool results (up to 6 rounds)
                 │
-                └── Final text response → post reply with result URLs
+                ├── Final text response → post reply with result URLs
+                │
+                └── Still tool-calling at the limit
+                        │
+                        └── Force one final Gemini call with tools
+                            disabled to extract a text answer
 ```
+
+The tool loop runs at most six rounds. If the model is still emitting function calls when the limit is hit, the handler retries once with the tools list cleared so the model has to commit to a text response instead of looping forever — without this fallback, the last response carries no text and the user sees silence.
 
 #### Tool Usage Guide
 
@@ -229,7 +246,9 @@ Gemini responses are converted from Markdown to Slack mrkdwn before posting:
 | `## Header` | `*Header*` | bold text |
 | `~~strike~~` | `~strike~` | ~~strike~~ |
 
-Responses are truncated at 3,000 characters to stay within Slack's message limits.
+Replies are capped at 10,000 characters overall and split into 3,000-character Slack Block Kit sections at paragraph or line boundaries, so a long answer arrives as multiple consecutive blocks rather than a single oversized message that Slack would reject.
+
+When the model's response is empty after stripping the `===LEARN===` and `===REACT===` metadata blocks (for example, a reply that consists of only a reaction emoji directive), the handler skips the Slack post call entirely instead of sending an empty Block Kit payload that Slack drops silently. If a `===REACT===` block was present, the emoji reaction is still applied to the user's message.
 
 ### Knowledge Retrieval
 
@@ -328,7 +347,7 @@ The Gemini client has a default 120-second timeout. The bot uses `ThinkingLevel:
 ### File Limits
 
 - Maximum file download size: 10 MB per attachment
-- Maximum reply length: 3,000 characters
+- Maximum reply length: 10,000 characters (split into 3,000-character Slack Block Kit sections)
 
 ---
 
@@ -365,10 +384,12 @@ The Gemini client has a default 120-second timeout. The bot uses `ThinkingLevel:
 **Causes:**
 - `im:read` or `im:write` scopes missing
 - DM history isn't being fetched
+- DM channel is not in the bot's accessible IM list (event came from a DM the bot is not a participant in — these are dropped on purpose)
 
 **Solution:**
 1. Verify `im:history`, `im:read`, `im:write` scopes are present
 2. Restart the bot service: `docker compose restart xylolabs-kb`
+3. Confirm the user has at least one prior DM with the bot. Check the journal for `refreshed accessible IM list` to see how many DM channels the connector knows about. The next refresh happens every 10 minutes; cache misses also trigger a one-shot `conversations.info` check.
 
 ### "I don't have information about that" too often
 
