@@ -294,7 +294,7 @@ payload = json.dumps({
     "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
 }).encode()
 
-url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
 req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
 try:
     with urllib.request.urlopen(req, timeout=30) as resp:
