@@ -230,7 +230,7 @@ API_PORT=8080
 
 # Gemini AI (optional — enables bot and image extraction)
 GEMINI_API_KEY=your-api-key
-GEMINI_MODEL=gemini-3.1-flash-lite-preview
+GEMINI_MODEL=gemini-3.5-flash
 
 # Knowledge Base Repo (markdown Git repo)
 KB_REPO_DIR=/opt/knowledge

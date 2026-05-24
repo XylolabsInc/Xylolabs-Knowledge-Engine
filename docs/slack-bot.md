@@ -49,7 +49,7 @@ Update your `.env`:
 ```env
 # Gemini AI
 GEMINI_API_KEY=your-api-key-here
-GEMINI_MODEL=gemini-3.1-flash-lite-preview
+GEMINI_MODEL=gemini-3.5-flash
 
 # Knowledge Base Repo (markdown Git repo)
 KB_REPO_DIR=/path/to/knowledge-repo
@@ -330,7 +330,7 @@ Bot response quality depends on:
 
 1. **KB content** — more diverse, well-structured markdown documents in the knowledge repo → better answers
 2. **Index quality** — well-organized `indexes/*.md` files with links to detail documents improve retrieval
-3. **Gemini model** — `gemini-3.1-flash-lite-preview` is recommended; see [Gemini models](https://ai.google.dev/models) for alternatives
+3. **Gemini model** — `gemini-3.5-flash` is recommended; see [Gemini models](https://ai.google.dev/models) for alternatives
 4. **Thinking level** — responses use low thinking level for fast response times
 
 ### Rate Limiting

@@ -208,7 +208,7 @@ Notion is auto-enabled when `NOTION_API_KEY` is set.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GEMINI_API_KEY` | Google Gemini API key for bot responses and image description | — |
-| `GEMINI_MODEL` | Gemini model to use | `gemini-3.1-flash-lite-preview` |
+| `GEMINI_MODEL` | Gemini model to use | `gemini-3.5-flash` |
 
 ### KB Generation (Go tool: `kb-gen`)
 
