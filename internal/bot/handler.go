@@ -97,7 +97,7 @@ func (b *Bot) HandleMention(ctx context.Context, msg *IncomingMessage) {
 	if query == "" {
 		query = "Hello! How can I help you?"
 	}
-	b.respond(ctx, msg, query)
+	b.respond(ctx, msg, query, false)
 }
 
 // HandleDirectMessage processes a direct message to the bot.
@@ -106,11 +106,13 @@ func (b *Bot) HandleDirectMessage(ctx context.Context, msg *IncomingMessage) {
 	if query == "" {
 		return
 	}
-	b.respond(ctx, msg, query)
+	b.respond(ctx, msg, query, !msg.IsDM)
 }
 
 // respond loads KB context, builds the Gemini prompt, and posts the reply via the platform.
-func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
+// skipAllowed controls whether the model's ===SKIP=== directive is honored;
+// it is false for @mentions and DMs so the bot never silently ignores those.
+func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, skipAllowed bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error("panic recovered in respond", "panic", r)
@@ -413,8 +415,9 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string) {
 	}
 
 	// 5. Check if the model decided to skip this message.
+	// Only honor ===SKIP=== for thread replies; never skip DMs or @mentions.
 	responseText := genResp.Text
-	if strings.TrimSpace(responseText) == "===SKIP===" {
+	if skipAllowed && strings.TrimSpace(responseText) == "===SKIP===" {
 		b.logger.Debug("skipping trivial message", "query", query)
 		return
 	}
