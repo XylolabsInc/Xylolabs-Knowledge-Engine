@@ -217,7 +217,7 @@ The `kb-gen` CLI tool reads its configuration from flags and environment variabl
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GEMINI_API_KEY` | API key used by the Go `kb-gen` tool | — |
-| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.1-pro-preview` |
+| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.5-flash` |
 | `KB_GEN_THINKING` | Thinking level: `none`, `low`, `medium`, `high` | `high` |
 
 ### Scripts
@@ -229,7 +229,7 @@ The shell scripts in `scripts/` use their own set of environment variables (not 
 | `API_BASE` | Go worker API base URL | `http://localhost:8080` |
 | `KB_REPO_DIR` | Path to knowledge repo | `/opt/knowledge` |
 | `KB_BACKEND` | Processing backend: `gemini` or `claude` | `gemini` |
-| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.1-pro-preview` |
+| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.5-flash` |
 | `KB_GEN_THINKING` | Thinking level: `none`, `low`, `medium`, `high` | `high` |
 | `KB_GEN_API_KEY` | API key for KB generation | `$GEMINI_API_KEY` |
 | `MAX_DOCS_PER_SOURCE` | Max documents per fetch | `500` |

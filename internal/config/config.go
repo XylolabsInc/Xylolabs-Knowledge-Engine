@@ -99,7 +99,7 @@ func Load() *Config {
 
 		GeminiAPIKey:   os.Getenv("GEMINI_API_KEY"),
 		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.5-flash"),
-		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.1-pro-preview"),
+		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.5-flash"),
 
 		SystemPromptFile: envOrDefault("SYSTEM_PROMPT_FILE", ""),
 		Language:         envOrDefault("LANGUAGE", "en"),

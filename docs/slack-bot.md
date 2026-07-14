@@ -451,10 +451,10 @@ The Gemini client has a default 120-second timeout. The bot uses `ThinkingLevel:
 
 ### Custom Models
 
-To use a different Gemini model (e.g., `gemini-3.1-pro-preview` for higher quality):
+To use a different Gemini model, set `GEMINI_MODEL` (see the [Gemini models list](https://ai.google.dev/gemini-api/docs/models) for current IDs):
 
 ```env
-GEMINI_MODEL=gemini-3.1-pro-preview
+GEMINI_MODEL=gemini-3.5-flash
 ```
 
 ### Disable the Bot

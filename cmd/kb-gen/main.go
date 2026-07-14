@@ -59,7 +59,7 @@ type batch struct {
 }
 
 const (
-	defaultModel         = "gemini-3.1-pro-preview"
+	defaultModel         = "gemini-3.5-flash"
 	defaultThinkingLevel = "high"
 	defaultMaxDocs       = 50
 	maxDocContentChars   = 20000 // ~6.7k tokens; cap per document to limit batch payload
@@ -107,7 +107,7 @@ func main() {
 	flag.StringVar(&source, "source", "", "Source name: slack, google, notion (required)")
 	flag.StringVar(&kbDir, "kb-dir", "", "Path to knowledge base repo directory (required)")
 	flag.StringVar(&apiKey, "api-key", "", "Gemini API key (or GEMINI_API_KEY env var)")
-	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.1-pro-preview, or KB_GEN_MODEL env)")
+	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.5-flash, or KB_GEN_MODEL env)")
 	flag.StringVar(&thinkingLevel, "thinking", "", "Thinking level: none, low, medium, high (default: high, or KB_GEN_THINKING env)")
 	flag.IntVar(&maxDocs, "max-docs", 0, "Max documents to process per batch (default: 50)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print what would be written without writing files")
