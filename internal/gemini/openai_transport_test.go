@@ -270,6 +270,15 @@ func TestParseOpenAIResponse(t *testing.T) {
 			},
 		},
 		{
+			name: "reasoning_content falls back into Thinking when reasoning is absent",
+			json: `{"choices":[{"message":{"content":"x","reasoning_content":"because too"}}],"usage":{"total_tokens":1}}`,
+			want: func(t *testing.T, r *GenerateResponse) {
+				if r.Thinking != "because too" {
+					t.Errorf("Thinking = %q", r.Thinking)
+				}
+			},
+		},
+		{
 			name: "tool calls decode arguments",
 			json: `{"choices":[{"message":{"content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Seoul\"}"}}]}}],"usage":{"total_tokens":5}}`,
 			want: func(t *testing.T, r *GenerateResponse) {

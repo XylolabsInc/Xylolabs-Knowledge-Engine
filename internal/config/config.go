@@ -210,6 +210,12 @@ func (c *Config) Validate() []string {
 		}
 	}
 
+	// Check LLM_API_KEY isn't set without an endpoint (it would silently go
+	// unused, or worse, get sent to the native Gemini endpoint instead)
+	if c.LLMAPIKey != "" && c.LLMEndpoint == "" {
+		errs = append(errs, "LLM_API_KEY is set but LLM_ENDPOINT is not — the key would be sent to the native Gemini endpoint")
+	}
+
 	// Check system prompt file exists if specified
 	if c.SystemPromptFile != "" {
 		if _, err := os.Stat(c.SystemPromptFile); err != nil {

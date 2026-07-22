@@ -119,6 +119,7 @@ func TestValidateLLMEndpoint(t *testing.T) {
 		{"bad scheme", "ftp://openrouter.ai/x", "k", true},
 		{"not a url", "openrouter.ai", "k", true},
 		{"endpoint without any key", "https://openrouter.ai/api/v1/chat/completions", "", true},
+		{"key without endpoint", "", "k", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

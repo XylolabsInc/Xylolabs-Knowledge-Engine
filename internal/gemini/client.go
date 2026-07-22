@@ -116,6 +116,8 @@ func (c *Client) SetTimeout(d time.Duration) {
 // WithEndpoint switches the client to an OpenAI-compatible
 // chat/completions endpoint (full URL, e.g. OpenRouter). Chainable.
 // Empty endpoint keeps the native Gemini transport.
+// Must be called before the client is shared or Generate is first called;
+// the field is not synchronized.
 func (c *Client) WithEndpoint(endpoint string) *Client {
 	c.endpoint = endpoint
 	return c

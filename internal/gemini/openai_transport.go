@@ -57,9 +57,10 @@ type oaRequest struct {
 type oaResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   string       `json:"content"`
-			Reasoning string       `json:"reasoning"`
-			ToolCalls []oaToolCall `json:"tool_calls"`
+			Content          string       `json:"content"`
+			Reasoning        string       `json:"reasoning"`
+			ReasoningContent string       `json:"reasoning_content"`
+			ToolCalls        []oaToolCall `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -176,13 +177,17 @@ func parseOpenAIResponse(data []byte) (*GenerateResponse, error) {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	if len(oar.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
+		return nil, fmt.Errorf("no choices in response: %s", truncateForErr(data))
 	}
 
 	msg := oar.Choices[0].Message
+	thinking := msg.Reasoning
+	if thinking == "" {
+		thinking = msg.ReasoningContent
+	}
 	result := &GenerateResponse{
 		Text:       msg.Content,
-		Thinking:   msg.Reasoning,
+		Thinking:   thinking,
 		TokensUsed: oar.Usage.TotalTokens,
 	}
 	for _, tc := range msg.ToolCalls {
@@ -198,4 +203,16 @@ func parseOpenAIResponse(data []byte) (*GenerateResponse, error) {
 		})
 	}
 	return result, nil
+}
+
+// maxErrBodySnippet caps how much of a raw response body is echoed into an
+// error message, so a huge or malformed payload doesn't bloat logs.
+const maxErrBodySnippet = 200
+
+// truncateForErr returns data as a string, capped at maxErrBodySnippet bytes.
+func truncateForErr(data []byte) string {
+	if len(data) <= maxErrBodySnippet {
+		return string(data)
+	}
+	return string(data[:maxErrBodySnippet]) + "... (truncated)"
 }
