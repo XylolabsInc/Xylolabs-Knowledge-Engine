@@ -98,8 +98,8 @@ func Load() *Config {
 		NotionRootPages: splitEnv("NOTION_ROOT_PAGES", nil),
 
 		GeminiAPIKey:   os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.5-flash"),
-		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.5-flash"),
+		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.6-flash"),
+		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.6-flash"),
 
 		SystemPromptFile: envOrDefault("SYSTEM_PROMPT_FILE", ""),
 		Language:         envOrDefault("LANGUAGE", "en"),

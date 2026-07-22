@@ -27,7 +27,7 @@ CLAUDE_MAX_BUDGET="${CLAUDE_MAX_BUDGET:-5.00}"
 
 # KB generation backend: "gemini" (default, falls back to Claude CLI on quota errors) or "claude"
 KB_BACKEND="${KB_BACKEND:-gemini}"
-KB_GEN_MODEL="${KB_GEN_MODEL:-gemini-3.5-flash}"
+KB_GEN_MODEL="${KB_GEN_MODEL:-gemini-3.6-flash}"
 KB_GEN_THINKING="${KB_GEN_THINKING:-high}"
 KB_GEN_API_KEY="${KB_GEN_API_KEY:-${GEMINI_API_KEY:-}}"
 
