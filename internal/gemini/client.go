@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,10 +27,12 @@ const (
 
 // Client wraps the Gemini REST API.
 type Client struct {
-	apiKey     string
-	model      string
-	httpClient atomic.Pointer[http.Client]
-	logger     *slog.Logger
+	apiKey           string
+	model            string
+	endpoint         string
+	httpClient       atomic.Pointer[http.Client]
+	logger           *slog.Logger
+	googleSearchWarn sync.Once
 }
 
 // Message represents a conversation turn.
@@ -110,12 +113,54 @@ func (c *Client) SetTimeout(d time.Duration) {
 	})
 }
 
+// WithEndpoint switches the client to an OpenAI-compatible
+// chat/completions endpoint (full URL, e.g. OpenRouter). Chainable.
+// Empty endpoint keeps the native Gemini transport.
+func (c *Client) WithEndpoint(endpoint string) *Client {
+	c.endpoint = endpoint
+	return c
+}
+
 // Generate calls the Gemini generateContent endpoint and returns the response.
-// Retries on 429 and 5xx responses with exponential backoff.
+// Retries on 429 and 5xx responses with exponential backoff. If the client
+// was configured with WithEndpoint, requests are instead sent to that
+// OpenAI-compatible chat/completions endpoint.
 func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	model := c.model
 	if req.Model != "" {
 		model = req.Model
+	}
+
+	if c.endpoint != "" {
+		if req.GoogleSearch {
+			c.googleSearchWarn.Do(func() {
+				c.logger.Warn("google search grounding unsupported on openai-compatible endpoint, dropping", "endpoint", c.endpoint)
+			})
+		}
+
+		body, err := buildOpenAIRequestBody(req, model)
+		if err != nil {
+			return nil, fmt.Errorf("gemini: build openai request: %w", err)
+		}
+
+		header := http.Header{}
+		header.Set("Content-Type", "application/json")
+		header.Set("Authorization", "Bearer "+c.apiKey)
+
+		c.logger.Debug("calling openai-compatible API", "endpoint", c.endpoint, "model", model, "thinking_level", req.ThinkingLevel)
+
+		respData, err := c.doWithRetry(ctx, c.endpoint, header, body)
+		if err != nil {
+			return nil, err
+		}
+
+		result, err := parseOpenAIResponse(respData)
+		if err != nil {
+			return nil, fmt.Errorf("gemini: parse openai response: %w", err)
+		}
+
+		c.logger.Debug("openai-compatible API call complete", "tokens_used", result.TokensUsed)
+		return result, nil
 	}
 
 	thinkingBudget := thinkingBudgetFor(req.ThinkingLevel)
@@ -129,6 +174,29 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 
 	c.logger.Debug("calling gemini API", "model", model, "thinking_level", req.ThinkingLevel)
 
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
+	header.Set("x-goog-api-key", c.apiKey)
+
+	respData, err := c.doWithRetry(ctx, url, header, body)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := parseResponse(respData)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: parse response: %w", err)
+	}
+
+	c.logger.Debug("gemini API call complete", "tokens_used", result.TokensUsed)
+	return result, nil
+}
+
+// doWithRetry POSTs body to url with the given headers, retrying on 429 and
+// 5xx responses with exponential backoff (honoring a Retry-After hint parsed
+// from the previous error, if any). It returns the raw response body on
+// success (2xx/3xx); the caller is responsible for parsing it.
+func (c *Client) doWithRetry(ctx context.Context, url string, header http.Header, body []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
@@ -157,8 +225,11 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		if err != nil {
 			return nil, fmt.Errorf("gemini: create request: %w", err)
 		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+		for k, vs := range header {
+			for _, v := range vs {
+				httpReq.Header.Set(k, v)
+			}
+		}
 
 		resp, err := c.httpClient.Load().Do(httpReq)
 		if err != nil {
@@ -192,13 +263,7 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 			return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, errBody)
 		}
 
-		result, err := parseResponse(respData)
-		if err != nil {
-			return nil, fmt.Errorf("gemini: parse response: %w", err)
-		}
-
-		c.logger.Debug("gemini API call complete", "tokens_used", result.TokensUsed)
-		return result, nil
+		return respData, nil
 	}
 
 	return nil, fmt.Errorf("gemini: %w", lastErr)

@@ -457,6 +457,8 @@ To use a different Gemini model, set `GEMINI_MODEL` (see the [Gemini models list
 GEMINI_MODEL=gemini-3.6-flash
 ```
 
+Setting `LLM_ENDPOINT` (see [README.md](../README.md#gemini-ai)) routes the bot through an OpenAI-compatible provider such as OpenRouter instead of native Gemini — use a provider-prefixed `GEMINI_MODEL` (e.g. `google/gemini-3.6-flash`) in that mode. Google Search grounding is silently disabled whenever `LLM_ENDPOINT` is set.
+
 ### Disable the Bot
 
 To disable bot functionality while keeping KB ingestion:

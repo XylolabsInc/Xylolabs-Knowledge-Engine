@@ -247,14 +247,26 @@ PYEOF
         changelog=$(git log --pretty=format:"%s" -10 2>/dev/null || echo "")
     fi
 
-    # Translate changelog to Korean using Gemini API
+    # Translate changelog to Korean using Gemini API, or an OpenAI-compatible
+    # endpoint (e.g. OpenRouter) when LLM_ENDPOINT is set in the deployed env
+    # Note: these use `|| echo ""`/`|| echo "<default>"` fallbacks (not just a
+    # bare grep|cut) because grep exits non-zero when a line is entirely
+    # absent from .env, which would abort the script under `set -e` — a real
+    # case now that an OpenRouter-only setup may omit GEMINI_API_KEY entirely.
     local gemini_key
-    gemini_key=$(grep '^GEMINI_API_KEY=' "$env_file" | cut -d'=' -f2-)
+    gemini_key=$(grep '^GEMINI_API_KEY=' "$env_file" | cut -d'=' -f2- || echo "")
+    local gemini_model
+    gemini_model=$(grep '^GEMINI_MODEL=' "$env_file" | cut -d'=' -f2- || echo "gemini-3.6-flash")
+    gemini_model="${gemini_model:-gemini-3.6-flash}"
+    local llm_endpoint llm_api_key llm_model
+    llm_endpoint=$(grep '^LLM_ENDPOINT=' "$env_file" | cut -d'=' -f2- || echo "")
+    llm_api_key=$(grep '^LLM_API_KEY=' "$env_file" | cut -d'=' -f2- || echo "")
+    llm_model=$(grep '^LLM_MODEL=' "$env_file" | cut -d'=' -f2- || echo "")
     local language
     language=$(grep '^LANGUAGE=' "$env_file" | cut -d'=' -f2- || echo "ko")
     language="${language:-ko}"
 
-    if [ -n "$gemini_key" ] && [ -n "$changelog" ]; then
+    if { [ -n "$gemini_key" ] || [ -n "$llm_api_key" ]; } && [ -n "$changelog" ]; then
         local translate_script
         translate_script=$(mktemp /tmp/deploy-translate-XXXXXX.py)
         # Write changelog and key to temp files to avoid shell escaping issues
@@ -289,17 +301,34 @@ Input:
 
 Output (one bullet per line, {lang_name}):"""
 
-payload = json.dumps({
-    "contents": [{"parts": [{"text": prompt}]}],
-    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
-}).encode()
+# LLM_ENDPOINT switches to an OpenAI-compatible chat/completions endpoint
+# (e.g. OpenRouter); empty (the default) keeps native Gemini.
+llm_endpoint = os.environ.get("LLM_ENDPOINT", "")
+model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+if llm_endpoint:
+    payload = json.dumps({
+        "model": os.environ.get("LLM_MODEL", model),
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode()
+    req = urllib.request.Request(llm_endpoint, data=payload, headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + (os.environ.get("LLM_API_KEY") or api_key),
+    }, method="POST")
+else:
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
+    }).encode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
 
-url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
-req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
 try:
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read())
-    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    if llm_endpoint:
+        text = data["choices"][0]["message"]["content"].strip()
+    else:
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     print(text)
 except Exception as e:
     print(f"Translation failed: {e}", file=sys.stderr)
@@ -308,8 +337,17 @@ except Exception as e:
             print(f"• {line.strip()}")
 TRANSLATEEOF
 
-        changelog=$(KEY_FILE="$key_file" CHANGELOG_FILE="$changelog_file" LANG_TARGET="$language" \
-            python3 "$translate_script" 2>&1 || echo "$changelog")
+        local -a translate_env=(
+            "KEY_FILE=$key_file"
+            "CHANGELOG_FILE=$changelog_file"
+            "LANG_TARGET=$language"
+            "GEMINI_MODEL=$gemini_model"
+            "LLM_ENDPOINT=$llm_endpoint"
+            "LLM_API_KEY=$llm_api_key"
+        )
+        [ -n "$llm_model" ] && translate_env+=("LLM_MODEL=$llm_model")
+
+        changelog=$(env "${translate_env[@]}" python3 "$translate_script" 2>&1 || echo "$changelog")
         rm -f "$translate_script" "$changelog_file" "$key_file"
     else
         changelog=$(echo "$changelog" | sed 's/^/• /')

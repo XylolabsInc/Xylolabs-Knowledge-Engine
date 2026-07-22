@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,6 +40,11 @@ type Config struct {
 	GeminiAPIKey   string
 	GeminiModel    string
 	GeminiProModel string
+	// LLMEndpoint, when set, switches the LLM client to an OpenAI-compatible
+	// chat/completions endpoint (full URL, e.g. OpenRouter). Empty = native Gemini.
+	LLMEndpoint string
+	// LLMAPIKey is the bearer key for LLMEndpoint; falls back to GeminiAPIKey.
+	LLMAPIKey string
 
 	// Bot
 	SystemPromptFile string
@@ -100,6 +106,8 @@ func Load() *Config {
 		GeminiAPIKey:   os.Getenv("GEMINI_API_KEY"),
 		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.6-flash"),
 		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.6-flash"),
+		LLMEndpoint:    os.Getenv("LLM_ENDPOINT"),
+		LLMAPIKey:      os.Getenv("LLM_API_KEY"),
 
 		SystemPromptFile: envOrDefault("SYSTEM_PROMPT_FILE", ""),
 		Language:         envOrDefault("LANGUAGE", "en"),
@@ -145,7 +153,16 @@ func (c *Config) NotionEnabled() bool {
 
 // GeminiEnabled returns true if Gemini API key is configured.
 func (c *Config) GeminiEnabled() bool {
-	return c.GeminiAPIKey != ""
+	return c.LLMKey() != ""
+}
+
+// LLMKey returns the bearer key for the configured LLM endpoint:
+// LLM_API_KEY when set, else GEMINI_API_KEY.
+func (c *Config) LLMKey() string {
+	if c.LLMAPIKey != "" {
+		return c.LLMAPIKey
+	}
+	return c.GeminiAPIKey
 }
 
 // ConsoleAuthEnabled returns true if console password is set.
@@ -180,6 +197,17 @@ func (c *Config) Validate() []string {
 	// Check Gemini model is set if API key is provided
 	if c.GeminiAPIKey != "" && c.GeminiModel == "" {
 		errs = append(errs, "GEMINI_API_KEY is set but GEMINI_MODEL is empty")
+	}
+
+	// Check LLM endpoint is a valid http(s) URL and a key is available
+	if c.LLMEndpoint != "" {
+		u, err := url.Parse(c.LLMEndpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, fmt.Sprintf("LLM_ENDPOINT %q is not an http(s) URL", c.LLMEndpoint))
+		}
+		if c.LLMKey() == "" {
+			errs = append(errs, "LLM_ENDPOINT is set but neither LLM_API_KEY nor GEMINI_API_KEY is")
+		}
 	}
 
 	// Check system prompt file exists if specified

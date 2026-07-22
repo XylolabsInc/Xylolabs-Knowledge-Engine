@@ -209,6 +209,10 @@ Notion is auto-enabled when `NOTION_API_KEY` is set.
 |----------|-------------|---------|
 | `GEMINI_API_KEY` | Google Gemini API key for bot responses and image description | — |
 | `GEMINI_MODEL` | Gemini model to use | `gemini-3.6-flash` |
+| `LLM_ENDPOINT` | Full URL of an OpenAI-compatible `chat/completions` endpoint (e.g. `https://openrouter.ai/api/v1/chat/completions`); switches the service off native Gemini when set | — (native Gemini) |
+| `LLM_API_KEY` | Bearer key for `LLM_ENDPOINT` | falls back to `GEMINI_API_KEY` |
+
+With `LLM_ENDPOINT` set, use provider-prefixed model IDs in `GEMINI_MODEL`/`GEMINI_PRO_MODEL`/`KB_GEN_MODEL` (e.g. `google/gemini-3.6-flash` for OpenRouter). Google Search grounding has no OpenAI-compatible equivalent and is silently disabled in this mode.
 
 ### KB Generation (Go tool: `kb-gen`)
 

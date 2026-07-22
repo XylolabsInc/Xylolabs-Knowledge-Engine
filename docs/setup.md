@@ -231,6 +231,10 @@ API_PORT=8080
 # Gemini AI (optional — enables bot and image extraction)
 GEMINI_API_KEY=your-api-key
 GEMINI_MODEL=gemini-3.6-flash
+# Optional: route through an OpenAI-compatible endpoint (e.g. OpenRouter) instead of native Gemini.
+# When set, use a provider-prefixed model id in GEMINI_MODEL (e.g. google/gemini-3.6-flash).
+# LLM_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
+# LLM_API_KEY=your-openrouter-key
 
 # Knowledge Base Repo (markdown Git repo)
 KB_REPO_DIR=/opt/knowledge

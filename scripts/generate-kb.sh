@@ -30,6 +30,7 @@ KB_BACKEND="${KB_BACKEND:-gemini}"
 KB_GEN_MODEL="${KB_GEN_MODEL:-gemini-3.6-flash}"
 KB_GEN_THINKING="${KB_GEN_THINKING:-high}"
 KB_GEN_API_KEY="${KB_GEN_API_KEY:-${GEMINI_API_KEY:-}}"
+# Set LLM_ENDPOINT/LLM_API_KEY to use an OpenAI-compatible endpoint (e.g. OpenRouter); model ids then use the provider's naming (google/gemini-3.6-flash).
 
 # Sources to process
 SOURCES=("slack" "google" "notion" "discord")

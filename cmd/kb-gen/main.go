@@ -106,7 +106,7 @@ func main() {
 	flag.StringVar(&inputPath, "input", "", "Path to raw documents JSON file (required)")
 	flag.StringVar(&source, "source", "", "Source name: slack, google, notion (required)")
 	flag.StringVar(&kbDir, "kb-dir", "", "Path to knowledge base repo directory (required)")
-	flag.StringVar(&apiKey, "api-key", "", "Gemini API key (or GEMINI_API_KEY env var)")
+	flag.StringVar(&apiKey, "api-key", "", "Gemini API key (or LLM_API_KEY/GEMINI_API_KEY env var)")
 	flag.StringVar(&model, "model", "", "Gemini model (default: gemini-3.6-flash, or KB_GEN_MODEL env)")
 	flag.StringVar(&thinkingLevel, "thinking", "", "Thinking level: none, low, medium, high (default: high, or KB_GEN_THINKING env)")
 	flag.IntVar(&maxDocs, "max-docs", 0, "Max documents to process per batch (default: 50)")
@@ -120,6 +120,9 @@ func main() {
 	flag.Parse()
 
 	// Resolve defaults from env vars
+	if apiKey == "" {
+		apiKey = os.Getenv("LLM_API_KEY")
+	}
 	if apiKey == "" {
 		apiKey = os.Getenv("GEMINI_API_KEY")
 	}
@@ -188,7 +191,7 @@ func main() {
 		os.Exit(1)
 	}
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "Error: Gemini API key required (--api-key or GEMINI_API_KEY env var)\n")
+		fmt.Fprintf(os.Stderr, "Error: Gemini API key required (--api-key or LLM_API_KEY/GEMINI_API_KEY env var)\n")
 		os.Exit(1)
 	}
 
@@ -244,6 +247,9 @@ func main() {
 
 	// Create Gemini client with extended timeout for KB generation
 	client := gemini.NewClient(apiKey, model, logger)
+	if ep := os.Getenv("LLM_ENDPOINT"); ep != "" {
+		client.WithEndpoint(ep)
+	}
 	client.SetTimeout(10 * time.Minute) // KB generation with thinking needs longer than default 120s
 
 	// Group documents into batches

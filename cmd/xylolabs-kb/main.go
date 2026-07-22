@@ -76,10 +76,15 @@ func main() {
 	// Initialize Gemini client (used by bot and extractor)
 	var geminiClient *gemini.Client
 	if cfg.GeminiEnabled() {
-		geminiClient = gemini.NewClient(cfg.GeminiAPIKey, cfg.GeminiModel, logger)
-		logger.Info("gemini client enabled", "model", cfg.GeminiModel)
+		geminiClient = gemini.NewClient(cfg.LLMKey(), cfg.GeminiModel, logger)
+		if cfg.LLMEndpoint != "" {
+			geminiClient.WithEndpoint(cfg.LLMEndpoint)
+			logger.Info("llm client enabled (openai-compatible endpoint)", "endpoint", cfg.LLMEndpoint, "model", cfg.GeminiModel)
+		} else {
+			logger.Info("gemini client enabled", "model", cfg.GeminiModel)
+		}
 	} else {
-		logger.Info("gemini client disabled (missing API key)")
+		logger.Info("llm client disabled (missing API key)")
 	}
 
 	// Initialize content extractor (works with or without Gemini; image extraction needs Gemini)
