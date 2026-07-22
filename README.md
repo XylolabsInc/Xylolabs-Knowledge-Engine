@@ -209,6 +209,7 @@ Notion is auto-enabled when `NOTION_API_KEY` is set.
 |----------|-------------|---------|
 | `GEMINI_API_KEY` | Google Gemini API key for bot responses and image description | — |
 | `GEMINI_MODEL` | Gemini model to use | `gemini-3.6-flash` |
+| `GEMINI_PRO_MODEL` | Gemini model for creation/generation tasks in the bot | `gemini-3.6-flash` |
 | `LLM_ENDPOINT` | Full URL of an OpenAI-compatible `chat/completions` endpoint (e.g. `https://openrouter.ai/api/v1/chat/completions`); switches the service off native Gemini when set | — (native Gemini) |
 | `LLM_API_KEY` | Bearer key for `LLM_ENDPOINT` | falls back to `GEMINI_API_KEY` |
 
@@ -223,6 +224,8 @@ The `kb-gen` CLI tool reads its configuration from flags and environment variabl
 | `GEMINI_API_KEY` | API key used by the Go `kb-gen` tool | — |
 | `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.6-flash` |
 | `KB_GEN_THINKING` | Thinking level: `none`, `low`, `medium`, `high` | `high` |
+| `LLM_ENDPOINT` | Full URL of an OpenAI-compatible `chat/completions` endpoint (e.g. `https://openrouter.ai/api/v1/chat/completions`); switches `kb-gen` off native Gemini when set | — (native Gemini) |
+| `LLM_API_KEY` | Bearer key for `LLM_ENDPOINT` | falls back to `GEMINI_API_KEY` |
 
 ### Scripts
 
@@ -726,7 +729,7 @@ scripts/
 └── regenerate-kb.sh   # Full KB rebuild (weekly)
 ```
 
-**`scripts/deploy.sh`** — Builds Go binaries for linux/arm64, uploads to the AWS server, restarts the systemd service, and verifies health.
+**`scripts/deploy.sh`** — Builds Go binaries for linux/arm64, uploads to the AWS server, restarts the systemd service, and verifies health. Its Slack deploy-notification changelog translator honors an optional `LLM_MODEL` override, falling back to `GEMINI_MODEL`, when routing translation through `LLM_ENDPOINT`.
 
 ```bash
 ./scripts/deploy.sh              # Build, upload, restart
