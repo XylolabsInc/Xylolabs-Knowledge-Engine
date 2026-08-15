@@ -104,8 +104,8 @@ func Load() *Config {
 		NotionRootPages: splitEnv("NOTION_ROOT_PAGES", nil),
 
 		GeminiAPIKey:   os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.6-flash"),
-		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.6-flash"),
+		GeminiModel:    envOrDefault("GEMINI_MODEL", "gemini-3.7-flash"),
+		GeminiProModel: envOrDefault("GEMINI_PRO_MODEL", "gemini-3.7-flash"),
 		LLMEndpoint:    os.Getenv("LLM_ENDPOINT"),
 		LLMAPIKey:      os.Getenv("LLM_API_KEY"),
 

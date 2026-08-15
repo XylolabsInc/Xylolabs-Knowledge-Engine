@@ -316,7 +316,7 @@ func TestGenerateOpenAIMode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("or-key", "google/gemini-3.6-flash", slog.Default()).
+	c := NewClient("or-key", "google/gemini-3.7-flash", slog.Default()).
 		WithEndpoint(srv.URL + "/api/v1/chat/completions")
 	resp, err := c.Generate(context.Background(), GenerateRequest{
 		Messages: []Message{{Role: "user", Content: "ping"}},
@@ -333,7 +333,7 @@ func TestGenerateOpenAIMode(t *testing.T) {
 	if gotPath != "/api/v1/chat/completions" {
 		t.Errorf("path = %q", gotPath)
 	}
-	if gotBody["model"] != "google/gemini-3.6-flash" {
+	if gotBody["model"] != "google/gemini-3.7-flash" {
 		t.Errorf("model = %v", gotBody["model"])
 	}
 }

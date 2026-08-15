@@ -49,7 +49,7 @@ Update your `.env`:
 ```env
 # Gemini AI
 GEMINI_API_KEY=your-api-key-here
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-3.7-flash
 
 # Knowledge Base Repo (markdown Git repo)
 KB_REPO_DIR=/path/to/knowledge-repo
@@ -330,7 +330,7 @@ Bot response quality depends on:
 
 1. **KB content** — more diverse, well-structured markdown documents in the knowledge repo → better answers
 2. **Index quality** — well-organized `indexes/*.md` files with links to detail documents improve retrieval
-3. **Gemini model** — `gemini-3.6-flash` is recommended; see [Gemini models](https://ai.google.dev/models) for alternatives
+3. **Gemini model** — `gemini-3.7-flash` is recommended; see [Gemini models](https://ai.google.dev/models) for alternatives
 4. **Thinking level** — responses use low thinking level for fast response times
 
 ### Rate Limiting
@@ -454,10 +454,10 @@ The Gemini client has a default 120-second timeout. The bot uses `ThinkingLevel:
 To use a different Gemini model, set `GEMINI_MODEL` (see the [Gemini models list](https://ai.google.dev/gemini-api/docs/models) for current IDs):
 
 ```env
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-3.7-flash
 ```
 
-Setting `LLM_ENDPOINT` (see [README.md](../README.md#gemini-ai)) routes the bot through an OpenAI-compatible provider such as OpenRouter instead of native Gemini — use a provider-prefixed `GEMINI_MODEL` (e.g. `google/gemini-3.6-flash`) in that mode. Google Search grounding is silently disabled whenever `LLM_ENDPOINT` is set.
+Setting `LLM_ENDPOINT` (see [README.md](../README.md#gemini-ai)) routes the bot through an OpenAI-compatible provider such as OpenRouter instead of native Gemini — use a provider-prefixed `GEMINI_MODEL` (e.g. `google/gemini-3.7-flash`) in that mode. Google Search grounding is silently disabled whenever `LLM_ENDPOINT` is set.
 
 ### Disable the Bot
 
