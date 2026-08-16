@@ -10,7 +10,7 @@ require (
 	github.com/hanpama/hwp v0.1.2
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/slack-go/slack v0.19.0
+	github.com/slack-go/slack v0.23.1
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/net v0.51.0
 	golang.org/x/oauth2 v0.35.0
