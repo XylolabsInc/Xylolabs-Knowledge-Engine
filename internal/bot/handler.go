@@ -486,6 +486,14 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 	} else if reactEmoji == "" {
 		b.logger.Warn("empty response after post-processing, nothing to send",
 			"query", query, "raw_length", len(genResp.Text))
+		// Silence is the worst possible outcome: the user watches the bot read
+		// their message and never answer, with no way to tell whether it failed
+		// or is still working. Always say something.
+		if err := b.platform.PostReply(ctx, msg.Channel, threadID,
+			"I couldn't put together an answer for that one. Please try rephrasing, or ask again."); err != nil {
+			b.logger.Error("failed to post empty-response fallback",
+				"platform", b.platform.Name(), "channel", msg.Channel, "error", err)
+		}
 	}
 
 	// Add emoji reaction to the user's original message.

@@ -186,16 +186,43 @@ func (s *SQLiteStore) GetAttachments(documentID string) ([]kb.Attachment, error)
 	return atts, rows.Err()
 }
 
+// escapeFTS5Query turns free-form user text into a safe FTS5 MATCH expression.
+// FTS5 reads ", *, :, ^, -, ( ) and bare AND/OR/NOT as query operators, so raw
+// user text - a question containing quotation marks or punctuation, say - fails
+// with "fts5: syntax error" instead of searching. Quoting each whitespace token
+// as a phrase (doubling any embedded quote, which is FTS5's escape) disables
+// operator handling so arbitrary input becomes searchable. Space-separated
+// phrases keep FTS5's implicit-AND semantics, matching the previous behaviour
+// for inputs that happened to parse. Returns "" when nothing searchable remains.
+func escapeFTS5Query(q string) string {
+	var quoted []string
+	for _, tok := range strings.Fields(q) {
+		tok = strings.ReplaceAll(tok, `"`, `""`)
+		if strings.Trim(tok, `"`) == "" {
+			continue
+		}
+		quoted = append(quoted, `"`+tok+`"`)
+	}
+	return strings.Join(quoted, " ")
+}
+
 // Search performs a full-text search with optional filters.
 func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 	var conditions []string
 	var args []any
 
+	// Nothing searchable (empty or punctuation-only input): return an empty
+	// result rather than handing FTS5 an empty MATCH, which is itself an error.
+	matchExpr := escapeFTS5Query(query.Query)
+	if matchExpr == "" {
+		return &kb.SearchResponse{Results: []kb.SearchResult{}, Total: 0}, nil
+	}
+
 	fromClause := `FROM fts_documents fts
 		JOIN documents d ON d.rowid = fts.rowid
 		WHERE fts_documents MATCH ?`
 
-	args = append(args, query.Query)
+	args = append(args, matchExpr)
 
 	if query.Source != "" {
 		conditions = append(conditions, "d.source = ?")

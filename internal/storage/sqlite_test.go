@@ -337,3 +337,50 @@ func TestListDocumentsOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchHandlesUnescapedUserInput(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	doc := kb.Document{
+		ID:        "fts-1",
+		Source:    kb.SourceSlack,
+		SourceID:  "F1",
+		Title:     "회의록",
+		Content:   "회의록 정리 내용입니다",
+		Timestamp: now,
+		UpdatedAt: now,
+		IndexedAt: now,
+	}
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	// Free-form user text reaches MATCH directly. Every one of these used to
+	// raise `fts5: syntax error`, which surfaced to users as the bot silently
+	// never replying. The first is the real query that broke it in production.
+	for _, q := range []string{
+		`내 말 씹지마. 위 스레드 내용 확인해서 회의록 정리해줘. 한국어로.`,
+		`"unbalanced quote`,
+		`quote " in middle`,
+		`NOT AND OR`,
+		`wildcard * and ^caret`,
+		`colon:separated`,
+		`(parens) and -dash`,
+		`...`,
+		``,
+		`   `,
+	} {
+		if _, err := store.Search(kb.SearchQuery{Query: q, Limit: 5}); err != nil {
+			t.Errorf("Search(%q) returned error = %v; want nil", q, err)
+		}
+	}
+
+	// Escaping must not break ordinary search.
+	res, err := store.Search(kb.SearchQuery{Query: "회의록", Limit: 5})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(res.Results) == 0 {
+		t.Error("expected a match for 회의록, got none")
+	}
+}
