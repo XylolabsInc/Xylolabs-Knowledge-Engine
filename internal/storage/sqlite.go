@@ -213,16 +213,26 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 
 	// Nothing searchable (empty or punctuation-only input): return an empty
 	// result rather than handing FTS5 an empty MATCH, which is itself an error.
-	matchExpr := escapeFTS5Query(query.Query)
-	if matchExpr == "" {
+	escaped := escapeFTS5Query(query.Query)
+	if escaped == "" {
 		return &kb.SearchResponse{Results: []kb.SearchResult{}, Total: 0}, nil
+	}
+
+	// Try the caller's text verbatim first so documented FTS5 syntax keeps
+	// working - phrase queries, prefix matches, boolean operators, column
+	// filters. Only if FTS5 rejects it do we retry with the quoted-token form,
+	// which always parses. Escaping unconditionally would silently reduce
+	// `a AND b` to a search for the literal token "AND".
+	matchCandidates := []string{query.Query}
+	if escaped != query.Query {
+		matchCandidates = append(matchCandidates, escaped)
 	}
 
 	fromClause := `FROM fts_documents fts
 		JOIN documents d ON d.rowid = fts.rowid
 		WHERE fts_documents MATCH ?`
 
-	args = append(args, matchExpr)
+	args = append(args, matchCandidates[0])
 
 	if query.Source != "" {
 		conditions = append(conditions, "d.source = ?")
@@ -252,12 +262,22 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 	}
 
 	// Count total matching documents (ignoring limit/offset).
-	countArgs := make([]any, len(args))
-	copy(countArgs, args)
 	var total int
 	countQuery := `SELECT COUNT(*) ` + fromClause + whereClause
-	if err := s.db.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, fmt.Errorf("search count: %w", err)
+	var countErr error
+	matched := false
+	for _, candidate := range matchCandidates {
+		countArgs := make([]any, len(args))
+		copy(countArgs, args)
+		countArgs[0] = candidate
+		if countErr = s.db.QueryRow(countQuery, countArgs...).Scan(&total); countErr == nil {
+			args[0] = candidate
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return nil, fmt.Errorf("search count: %w", countErr)
 	}
 
 	// Build data query with relevance scoring and pagination.

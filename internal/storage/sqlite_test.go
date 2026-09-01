@@ -384,3 +384,51 @@ func TestSearchHandlesUnescapedUserInput(t *testing.T) {
 		t.Error("expected a match for 회의록, got none")
 	}
 }
+
+func TestSearchPreservesFTS5Operators(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, c := range []string{"deployment runbook alpha", "deployment notes beta", "unrelated gamma"} {
+		doc := kb.Document{
+			ID:        fmt.Sprintf("op-%d", i),
+			Source:    kb.SourceSlack,
+			SourceID:  fmt.Sprintf("OP%d", i),
+			Content:   c,
+			Timestamp: now,
+			UpdatedAt: now,
+			IndexedAt: now,
+		}
+		if err := store.UpsertDocument(doc); err != nil {
+			t.Fatalf("UpsertDocument() error = %v", err)
+		}
+	}
+
+	// Documented FTS5 syntax must survive. Escaping every query unconditionally
+	// would turn `a AND b` into a search for the literal token "AND" (0 hits)
+	// and strip prefix semantics entirely.
+	//
+	// The prefix case uses `runbook*`, not `deploy*`: the index uses the porter
+	// tokenizer, which rewrites a terminal y to i, so `deploy*` searches for the
+	// prefix "deploi" and matches nothing even though "deployment" is indexed.
+	// That is a stemmer property rather than an escaping bug, and it is why
+	// prefix queries only behave intuitively for terms the stemmer leaves alone.
+	for _, tc := range []struct {
+		q       string
+		wantMin int
+	}{
+		{`deployment AND runbook`, 1}, // boolean
+		{`runbook*`, 1},               // prefix (see stemming note above)
+		{`"deployment runbook"`, 1},   // phrase
+		{`deployment NOT beta`, 1},    // negation
+	} {
+		res, err := store.Search(kb.SearchQuery{Query: tc.q, Limit: 10})
+		if err != nil {
+			t.Errorf("Search(%q) error = %v", tc.q, err)
+			continue
+		}
+		if len(res.Results) < tc.wantMin {
+			t.Errorf("Search(%q) returned %d results, want >= %d",
+				tc.q, len(res.Results), tc.wantMin)
+		}
+	}
+}
