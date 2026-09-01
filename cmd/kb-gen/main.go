@@ -359,7 +359,15 @@ func main() {
 
 		// Track latest timestamp only when files were actually written successfully
 		if totalFilesWritten > batchWritesBefore {
+			now := time.Now().UTC().Format(time.RFC3339)
 			for _, doc := range b.Documents {
+				// Calendar-backed sources legitimately emit future-dated documents
+				// (holidays, deadlines). Adopting one as the sync watermark would
+				// skip every genuinely new document until that date arrives, so
+				// never let the watermark run ahead of the present.
+				if doc.Timestamp > now {
+					continue
+				}
 				if doc.Timestamp > latestTimestamp {
 					latestTimestamp = doc.Timestamp
 				}
