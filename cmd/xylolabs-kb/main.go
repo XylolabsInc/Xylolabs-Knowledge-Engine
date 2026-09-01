@@ -125,7 +125,7 @@ func main() {
 					logger.Info("kb repo reader enabled", "dir", cfg.KBRepoDir)
 				}
 				slackPlatform = bot.NewSlackPlatform(slackAPI, authResp.UserID, cfg.SlackBotToken, logger)
-				botHandler = bot.New(slackPlatform, geminiClient, kbReader, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Location(), logger)
+				botHandler = bot.New(slackPlatform, geminiClient, kbReader, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Language, cfg.Location(), logger)
 				botHandler.SetExtractor(ext)
 				slackConn.SetBot(botHandler, authResp.UserID)
 				slackPlatform.StartCleanup()
@@ -221,7 +221,7 @@ func main() {
 						kbReader = kbrepo.NewReader(cfg.KBRepoDir, logger)
 					}
 					discordPlatform = bot.NewDiscordPlatform(sess, botUser.ID, cfg.DiscordGuildID, logger)
-					discordBotHandler = bot.New(discordPlatform, geminiClient, kbReader, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Location(), logger)
+					discordBotHandler = bot.New(discordPlatform, geminiClient, kbReader, cfg.GeminiProModel, cfg.SystemPromptFile, cfg.Language, cfg.Location(), logger)
 					discordBotHandler.SetExtractor(ext)
 					discordConn.SetBot(discordBotHandler, botUser.ID)
 					discordPlatform.StartCleanup()

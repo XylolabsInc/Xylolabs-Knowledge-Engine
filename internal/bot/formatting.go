@@ -12,7 +12,7 @@ const (
 	maxReplyLength    = 10000
 	maxFileDownload   = 10 * 1024 * 1024 // 10 MB
 	maxThreadHistory  = 20               // max prior messages to include as context
-	maxToolIterations = 5                // max function calling round-trips
+	maxToolIterations = 12               // max function calling round-trips
 
 	maxTrackedThreads     = 1000
 	maxNotBotThreads      = 500

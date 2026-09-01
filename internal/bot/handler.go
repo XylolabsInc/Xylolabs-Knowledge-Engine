@@ -29,6 +29,7 @@ type Bot struct {
 	kbReader     *kbrepo.Reader
 	proModel     string
 	systemPrompt string
+	language     string
 	location     *time.Location
 	logger       *slog.Logger
 	toolExecutor *tools.ToolExecutor
@@ -37,15 +38,28 @@ type Bot struct {
 }
 
 // New creates a Bot handler backed by the given Platform.
-func New(platform Platform, geminiClient *gemini.Client, kbReader *kbrepo.Reader, proModel, systemPromptFile string, location *time.Location, logger *slog.Logger) *Bot {
+func New(platform Platform, geminiClient *gemini.Client, kbReader *kbrepo.Reader, proModel, systemPromptFile, language string, location *time.Location, logger *slog.Logger) *Bot {
 	return &Bot{
 		platform:     platform,
 		gemini:       geminiClient,
 		kbReader:     kbReader,
 		proModel:     proModel,
 		systemPrompt: loadSystemPrompt(systemPromptFile),
+		language:     language,
 		location:     location,
 		logger:       logger.With("component", "bot"),
+	}
+}
+
+// emptyResponseFallback is the last-resort reply when the model returns nothing.
+// It follows the configured LANGUAGE so a Korean-speaking workspace does not get
+// an English apology.
+func (b *Bot) emptyResponseFallback() string {
+	switch strings.ToLower(b.language) {
+	case "ko":
+		return "죄송합니다. 방금 요청은 답변을 만들어내지 못했습니다. 질문을 조금 바꿔서 다시 물어봐 주세요."
+	default:
+		return "I couldn't put together an answer for that one. Please try rephrasing, or ask again."
 	}
 }
 
@@ -383,8 +397,20 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		b.logger.Warn("tool iteration limit reached, forcing final text response",
 			"iterations", maxToolIterations+1,
 			"pending_calls", len(genResp.FunctionCalls))
+		// Re-sending the identical request with tools removed leaves the model
+		// with nothing to act on - its last turn was a tool call - and it
+		// reliably comes back empty, which is what reached users as silence.
+		// Give it an explicit instruction to answer from what it already has.
 		finalReq := genReq
 		finalReq.Tools = nil
+		finalReq.Messages = append(append([]gemini.Message(nil), finalReq.Messages...), gemini.Message{
+			Role: "user",
+			Content: "You have reached the tool-call limit and no further tools are available. " +
+				"Write your final answer now using only the information you have already gathered. " +
+				"Do not ask for more tools and do not reply with an empty message. " +
+				"If the information is incomplete, say what you found and what is missing. " +
+				"Reply in the same language as my previous message.",
+		})
 		finalResp, err := b.gemini.Generate(ctx, finalReq)
 		if err != nil {
 			b.logger.Error("final gemini generate failed", "error", err)
@@ -489,8 +515,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		// Silence is the worst possible outcome: the user watches the bot read
 		// their message and never answer, with no way to tell whether it failed
 		// or is still working. Always say something.
-		if err := b.platform.PostReply(ctx, msg.Channel, threadID,
-			"I couldn't put together an answer for that one. Please try rephrasing, or ask again."); err != nil {
+		if err := b.platform.PostReply(ctx, msg.Channel, threadID, b.emptyResponseFallback()); err != nil {
 			b.logger.Error("failed to post empty-response fallback",
 				"platform", b.platform.Name(), "channel", msg.Channel, "error", err)
 		}
