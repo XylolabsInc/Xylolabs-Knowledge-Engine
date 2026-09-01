@@ -15,6 +15,24 @@ if [ "$(id -u)" = "0" ]; then
     exit 1
 fi
 
+# Load the deployed environment file. cron runs this script with a minimal
+# environment, so without this GEMINI_API_KEY/KB_GEN_MODEL are unset, the Gemini
+# path fails for lack of a key, and every run silently falls back to the Claude
+# CLI. Values already present in the environment win, so an explicit
+# `KB_GEN_MODEL=... generate-kb.sh` still overrides the deployed file.
+ENV_FILE="${ENV_FILE:-/opt/xylolabs-kb/.env}"
+if [ -f "$ENV_FILE" ]; then
+    while IFS= read -r __line || [ -n "$__line" ]; do
+        case "$__line" in ''|'#'*) continue ;; esac
+        __key=${__line%%=*}
+        case "$__key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+        if [ -z "${!__key+set}" ]; then
+            export "$__key=${__line#*=}"
+        fi
+    done < "$ENV_FILE"
+    unset __line __key
+fi
+
 # Configuration (override via environment)
 API_BASE="${API_BASE:-http://localhost:8080}"
 KB_REPO_DIR="${KB_REPO_DIR:-/opt/knowledge}"
