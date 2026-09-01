@@ -223,21 +223,48 @@ func main() {
 	if !force {
 		existingMap := loadDocumentMap(kbDir)
 		var newDocs []Document
+		var skippedDocs []Document
 		for _, doc := range apiResp.Documents {
 			if doc.SourceID != "" {
 				if _, exists := existingMap[doc.SourceID]; exists {
+					skippedDocs = append(skippedDocs, doc)
 					continue
 				}
 			}
 			newDocs = append(newDocs, doc)
 		}
-		skipped := len(apiResp.Documents) - len(newDocs)
+		skipped := len(skippedDocs)
 		if skipped > 0 {
 			logger.Info("skipped already-processed documents", "skipped", skipped, "remaining", len(newDocs))
 		}
 		apiResp.Documents = newDocs
 		if len(apiResp.Documents) == 0 {
 			logger.Info("all documents already processed, nothing to do")
+			// Every document in this page is recorded in the document map, so the
+			// watermark can safely move past them. Without this the next run
+			// fetches the very same page, skips it again, and the source never
+			// advances - a permanent stall once its oldest page is fully
+			// processed.
+			if !dryRun {
+				now := time.Now().UTC().Format(time.RFC3339)
+				var watermark string
+				for _, doc := range skippedDocs {
+					if doc.Timestamp > now {
+						continue
+					}
+					if doc.Timestamp > watermark {
+						watermark = doc.Timestamp
+					}
+				}
+				if watermark != "" {
+					if err := updateSyncState(kbDir, source, watermark); err != nil {
+						logger.Error("failed to update sync state", "error", err)
+					} else {
+						logger.Info("advanced sync state past already-processed documents",
+							"latest_timestamp", watermark)
+					}
+				}
+			}
 			return
 		}
 	}
