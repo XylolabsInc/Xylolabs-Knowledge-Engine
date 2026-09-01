@@ -130,7 +130,7 @@ Thin HTTP layer using the Go standard library (`net/http`). Reads directly from 
 Routes:
 - `GET /health` — liveness probe
 - `GET /api/v1/search` — full-text search with filter parameters
-- `GET /api/v1/documents` — list documents with source/since/limit/offset filters (used by kb-gen)
+- `GET /api/v1/documents` — list documents with source/since/limit/offset/order filters (used by kb-gen, which passes `order=asc` so incremental runs drain oldest-first)
 - `GET /api/v1/documents/{id}` — single document fetch
 - `GET /api/v1/stats` — `GetStats` result
 - `GET /api/v1/sources` — scheduler status + sync state for all sources

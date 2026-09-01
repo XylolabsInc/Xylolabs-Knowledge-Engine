@@ -306,7 +306,7 @@ curl "http://localhost:8080/api/v1/search?q=deployment+runbook&source=notion&lim
 ### List Documents
 
 ```bash
-GET /api/v1/documents?source={source}&since={RFC3339}&limit={n}&offset={n}
+GET /api/v1/documents?source={source}&since={RFC3339}&limit={n}&offset={n}&order={asc|desc}
 ```
 
 | Parameter | Type | Description |
@@ -315,6 +315,11 @@ GET /api/v1/documents?source={source}&since={RFC3339}&limit={n}&offset={n}
 | `since` | RFC3339 | Only documents indexed after this timestamp |
 | `limit` | int | Max results (default 500, max 1000) |
 | `offset` | int | Pagination offset |
+| `order` | string | Sort by timestamp: `asc` or `desc` (default `desc`) |
+
+Incremental sync must pass `order=asc`. With `desc`, a page truncated by `limit`
+returns the *newest* pending documents, so advancing a sync watermark past them
+silently skips every older one.
 
 Used by `kb-gen` to export raw documents for knowledge base generation.
 
