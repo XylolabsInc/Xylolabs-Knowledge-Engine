@@ -385,6 +385,25 @@ TRANSLATEEOF
 # Install crontab
 # -----------------------------------------------------------------------------
 install_cron() {
+    # The cron entries redirect into /var/log/generate-kb.log. /var/log is
+    # root:syslog and not writable by the ubuntu user the jobs run as, so
+    # without this the shell cannot open the redirect and the job fails before
+    # the script ever runs - silently, since there is nowhere to log it.
+    log "Preparing cron log file..."
+    ssh_cmd "sudo install -o $SERVER_USER -g $SERVER_USER -m 0644 /dev/null /var/log/generate-kb.log 2>/dev/null || sudo chown $SERVER_USER:$SERVER_USER /var/log/generate-kb.log"
+    ssh_cmd "cat <<'ROTATE' | sudo tee /etc/logrotate.d/xylolabs-kb > /dev/null
+/var/log/generate-kb.log {
+    su root syslog
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 $SERVER_USER $SERVER_USER
+}
+ROTATE"
+
     log "Installing crontab..."
     ssh_cmd "cat <<'CRON' | sudo tee /etc/cron.d/xylolabs-kb > /dev/null
 # Incremental KB generation — every 6 hours (run as ubuntu to avoid permission issues)
