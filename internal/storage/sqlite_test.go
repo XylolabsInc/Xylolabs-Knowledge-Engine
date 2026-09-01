@@ -291,3 +291,49 @@ func TestUpsertDocumentUpdate(t *testing.T) {
 		t.Errorf("Title = %q after upsert, want %q", got.Title, "Updated")
 	}
 }
+
+func TestListDocumentsOrder(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for i := 0; i < 5; i++ {
+		doc := kb.Document{
+			ID:        fmt.Sprintf("order-%d", i),
+			Source:    kb.SourceSlack,
+			SourceID:  fmt.Sprintf("O%d", i),
+			Content:   "content",
+			Timestamp: now.Add(time.Duration(i) * time.Minute),
+			UpdatedAt: now,
+			IndexedAt: now,
+		}
+		if err := store.UpsertDocument(doc); err != nil {
+			t.Fatalf("UpsertDocument() error = %v", err)
+		}
+	}
+
+	// Ascending is what incremental sync relies on: a truncated page must yield
+	// the OLDEST pending documents, otherwise advancing the sync watermark past
+	// a page of newest documents silently skips every older one.
+	asc, err := store.ListDocuments(kb.ListDocumentsQuery{Limit: 2, Order: "asc"})
+	if err != nil {
+		t.Fatalf("ListDocuments(asc) error = %v", err)
+	}
+	if len(asc.Documents) != 2 {
+		t.Fatalf("got %d documents, want 2", len(asc.Documents))
+	}
+	if asc.Documents[0].ID != "order-0" || asc.Documents[1].ID != "order-1" {
+		t.Errorf("asc returned %s,%s; want order-0,order-1",
+			asc.Documents[0].ID, asc.Documents[1].ID)
+	}
+
+	// Default and explicit desc stay newest-first for the bot and UI.
+	for _, order := range []string{"", "desc"} {
+		got, err := store.ListDocuments(kb.ListDocumentsQuery{Limit: 2, Order: order})
+		if err != nil {
+			t.Fatalf("ListDocuments(%q) error = %v", order, err)
+		}
+		if got.Documents[0].ID != "order-4" || got.Documents[1].ID != "order-3" {
+			t.Errorf("order=%q returned %s,%s; want order-4,order-3",
+				order, got.Documents[0].ID, got.Documents[1].ID)
+		}
+	}
+}

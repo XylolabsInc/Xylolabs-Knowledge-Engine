@@ -316,10 +316,16 @@ func (s *SQLiteStore) ListDocuments(query kb.ListDocumentsQuery) (*kb.ListDocume
 		limit = 1000
 	}
 
+	// Whitelisted so the direction can never carry caller-supplied SQL.
+	orderDir := "DESC"
+	if strings.EqualFold(query.Order, "asc") {
+		orderDir = "ASC"
+	}
+
 	// Fetch documents
 	selectQuery := `SELECT id, source, source_id, parent_id, title, content, content_type,
 		author, author_email, channel, workspace, url, timestamp, updated_at, indexed_at, metadata
-		FROM documents ` + where + ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`
+		FROM documents ` + where + ` ORDER BY timestamp ` + orderDir + ` LIMIT ? OFFSET ?`
 	args = append(args, limit, query.Offset)
 
 	rows, err := s.db.Query(selectQuery, args...)

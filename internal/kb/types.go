@@ -121,6 +121,11 @@ type ListDocumentsQuery struct {
 	Since  time.Time
 	Limit  int
 	Offset int
+	// Order sorts by timestamp: "asc" or "desc". Empty means "desc".
+	// Incremental sync needs "asc" so that a truncated page yields the OLDEST
+	// pending documents; with "desc" the newest are returned and advancing a
+	// watermark past them silently skips everything older.
+	Order string
 }
 
 // ListDocumentsResult holds the paginated result of listing documents.

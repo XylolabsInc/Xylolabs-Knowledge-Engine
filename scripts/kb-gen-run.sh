@@ -81,7 +81,7 @@ except:
     TOTAL=0
 
     while true; do
-        URL="${API_URL}/api/v1/documents?source=${SOURCE}&limit=${PAGE_SIZE}&offset=${OFFSET}"
+        URL="${API_URL}/api/v1/documents?source=${SOURCE}&limit=${PAGE_SIZE}&order=asc&offset=${OFFSET}"
         if [[ -n "$SINCE" ]]; then
             URL="${URL}&since=${SINCE}"
         fi

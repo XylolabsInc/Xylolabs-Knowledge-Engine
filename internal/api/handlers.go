@@ -197,6 +197,16 @@ func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if order := q.Get("order"); order != "" {
+		switch strings.ToLower(order) {
+		case "asc", "desc":
+			query.Order = strings.ToLower(order)
+		default:
+			writeError(w, http.StatusBadRequest, "invalid 'order' parameter: must be asc or desc")
+			return
+		}
+	}
+
 	result, err := s.store.ListDocuments(query)
 	if err != nil {
 		s.logger.Warn("list documents failed", "error", err)

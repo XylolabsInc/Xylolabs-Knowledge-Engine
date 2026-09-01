@@ -153,7 +153,7 @@ fetch_documents() {
 
     log "Fetching $source documents since $since..."
 
-    local url="${API_BASE}/api/v1/documents?since=${since}&source=${source}&limit=${MAX_DOCS_PER_SOURCE}"
+    local url="${API_BASE}/api/v1/documents?since=${since}&source=${source}&limit=${MAX_DOCS_PER_SOURCE}&order=asc"
     local http_code
     http_code=$(curl -sf -w "%{http_code}" -o "$output_file" "$url" 2>/dev/null || echo "000")
 
