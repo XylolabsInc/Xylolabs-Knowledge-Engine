@@ -26,6 +26,21 @@ LOG_PREFIX="[deploy]"
 log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $LOG_PREFIX $*"; }
 die() { log "FATAL: $*"; exit 1; }
 
+# Apparent size, humanized. Do not use `du` here: over NFS it reports
+# server-side allocated blocks, which read as 512B for a freshly written file
+# and as the post-compression size on a ZFS-backed export - so build output on
+# a network-mounted work dir gets misreported.
+human_size() {
+    local bytes
+    bytes=$(wc -c < "$1" 2>/dev/null | tr -d ' ') || { echo "unknown"; return; }
+    [ -n "$bytes" ] || { echo "unknown"; return; }
+    awk -v b="$bytes" 'BEGIN {
+        split("B KB MB GB", u, " "); i = 1
+        while (b >= 1024 && i < 4) { b /= 1024; i++ }
+        printf (i == 1 ? "%d%s" : "%.1f%s"), b, u[i]
+    }'
+}
+
 ssh_cmd() {
     ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${SERVER_USER}@${SERVER_HOST}" "$@"
 }
@@ -41,11 +56,11 @@ build() {
     log "Building for linux/arm64..."
     cd "$PROJECT_DIR"
     GOOS=linux GOARCH=arm64 go build -o "$BUILD_OUTPUT" ./cmd/xylolabs-kb/
-    log "Built: $BUILD_OUTPUT ($(du -h "$BUILD_OUTPUT" | cut -f1))"
+    log "Built: $BUILD_OUTPUT ($(human_size "$BUILD_OUTPUT"))"
 
     log "Building kb-gen for linux/arm64..."
     GOOS=linux GOARCH=arm64 go build -o "$PROJECT_DIR/bin/kb-gen-linux-arm64" ./cmd/kb-gen/
-    log "Built: kb-gen-linux-arm64 ($(du -h "$PROJECT_DIR/bin/kb-gen-linux-arm64" | cut -f1))"
+    log "Built: kb-gen-linux-arm64 ($(human_size "$PROJECT_DIR/bin/kb-gen-linux-arm64"))"
 }
 
 # -----------------------------------------------------------------------------
