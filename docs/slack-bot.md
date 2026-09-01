@@ -159,17 +159,34 @@ Gemini returns response
                 ├── Append tool call + results to conversation
                 │
                 ▼
-            Re-call Gemini with tool results (up to 6 rounds)
+            Re-call Gemini with tool results (up to 13 rounds)
                 │
                 ├── Final text response → post reply with result URLs
                 │
                 └── Still tool-calling at the limit
                         │
                         └── Force one final Gemini call with tools
-                            disabled to extract a text answer
+                            disabled AND an explicit instruction to
+                            answer from what was already gathered
 ```
 
-The tool loop runs at most six rounds. If the model is still emitting function calls when the limit is hit, the handler retries once with the tools list cleared so the model has to commit to a text response instead of looping forever — without this fallback, the last response carries no text and the user sees silence.
+The tool loop runs at most 13 rounds (`maxToolIterations`). Research-style requests
+— "read this thread and write up the meeting notes" — legitimately need several
+searches and fetches before an answer can be formed; an earlier limit of 6 was
+routinely exhausted mid-investigation.
+
+If the model is still emitting function calls at the limit, the handler makes one
+final call with the tools list cleared **and appends an explicit instruction** to
+write the answer now from the information already gathered, to state what is
+missing if incomplete, and to reply in the user's language. The instruction is
+load-bearing: re-sending the request with only `Tools` cleared leaves the model
+with nothing to act on — its last turn was a tool call — and it reliably returns
+an empty response.
+
+Should the final response still come back empty, the handler posts a short
+fallback message in the configured `LANGUAGE` rather than posting nothing.
+Silence is the worst failure mode here, because the user cannot tell whether the
+bot failed or is still working.
 
 #### Tool Usage Guide
 

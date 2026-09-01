@@ -149,6 +149,9 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `DB_PATH` | Path to the SQLite database file | `xylolabs-kb.db` |
 | `ATTACHMENT_PATH` | Directory for downloaded attachment files | `attachments` |
 | `KB_REPO_DIR` | Path to the markdown knowledge base Git repository | — |
+| `LANGUAGE` | Language the bot answers in, and the language of its built-in messages (e.g. `ko`, `en`) | `en` |
+| `TIMEZONE` | IANA timezone used for date handling in bot replies | — |
+| `SYSTEM_PROMPT_FILE` | Path to a file overriding the built-in bot system prompt | — (built-in) |
 
 ### API Server
 
@@ -156,6 +159,13 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 |----------|-------------|---------|
 | `API_HOST` | Interface to bind the HTTP server | `0.0.0.0` |
 | `API_PORT` | Port for the HTTP REST API | `8080` |
+
+### Google Workspace
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOOGLE_IMPERSONATE_EMAIL` | Workspace user to impersonate via domain-wide delegation | — |
+| `GOOGLE_DEFAULT_CALENDAR_ID` | Calendar the bot reads and writes events against | — |
 
 ### Slack
 
@@ -722,8 +732,21 @@ xylolabs-kb uses **SQLite** with the **FTS5** extension for full-text search.
 
 - BM25 relevance ranking
 - Snippet extraction with highlighted match terms
-- Phrase queries (`"deployment runbook"`), prefix queries (`deploy*`), and boolean operators (`deploy AND runbook`)
+- Phrase queries (`"deployment runbook"`), prefix queries (`runbook*`), and boolean operators (`deployment AND runbook`)
 - Column filters — search only `title` or only `content`
+
+> **Prefix queries and stemming.** The index uses the `porter unicode61`
+> tokenizer, so prefix queries only behave intuitively for terms the stemmer
+> leaves unchanged. `runbook*` matches `runbook`, but `deploy*` matches
+> **nothing** even though `deployment` is indexed — Porter rewrites a terminal
+> `y` to `i`, so the query looks for the prefix `deploi`. Prefer the whole word
+> (`deployment`) over a prefix when in doubt.
+
+> **Malformed queries.** Free-form text is often not valid FTS5 — a trailing
+> full stop is enough to raise `fts5: syntax error`. The query is tried
+> verbatim first, so all of the syntax above keeps working; only if FTS5
+> rejects it is it retried as quoted tokens. Callers therefore never see a
+> syntax error, and operator syntax is never silently reinterpreted.
 
 ## Scripts
 
