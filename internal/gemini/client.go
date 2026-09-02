@@ -18,7 +18,7 @@ import (
 
 const (
 	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
-	defaultModel       = "gemini-3.7-flash"
+	defaultModel       = "gemini-3.8-flash"
 	httpTimeout        = 120 * time.Second
 	maxAPIResponseSize = 50 << 20 // 50 MB
 	maxRetries         = 3
@@ -89,7 +89,7 @@ type FunctionResponse struct {
 }
 
 // NewClient creates a Gemini API client.
-// If model is empty, defaults to "gemini-3.7-flash".
+// If model is empty, defaults to "gemini-3.8-flash".
 func NewClient(apiKey, model string, logger *slog.Logger) *Client {
 	if model == "" {
 		model = defaultModel

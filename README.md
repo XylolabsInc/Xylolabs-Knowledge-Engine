@@ -218,12 +218,12 @@ Notion is auto-enabled when `NOTION_API_KEY` is set.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GEMINI_API_KEY` | Google Gemini API key for bot responses and image description | — |
-| `GEMINI_MODEL` | Gemini model to use | `gemini-3.7-flash` |
-| `GEMINI_PRO_MODEL` | Gemini model for creation/generation tasks in the bot | `gemini-3.7-flash` |
+| `GEMINI_MODEL` | Gemini model to use | `gemini-3.8-flash` |
+| `GEMINI_PRO_MODEL` | Gemini model for creation/generation tasks in the bot | `gemini-3.8-flash` |
 | `LLM_ENDPOINT` | Full URL of an OpenAI-compatible `chat/completions` endpoint (e.g. `https://openrouter.ai/api/v1/chat/completions`); switches the service off native Gemini when set | — (native Gemini) |
 | `LLM_API_KEY` | Bearer key for `LLM_ENDPOINT` | falls back to `GEMINI_API_KEY` |
 
-With `LLM_ENDPOINT` set, use provider-prefixed model IDs in `GEMINI_MODEL`/`GEMINI_PRO_MODEL`/`KB_GEN_MODEL` (e.g. `google/gemini-3.7-flash` for OpenRouter). Google Search grounding has no OpenAI-compatible equivalent and is silently disabled in this mode.
+With `LLM_ENDPOINT` set, use provider-prefixed model IDs in `GEMINI_MODEL`/`GEMINI_PRO_MODEL`/`KB_GEN_MODEL` (e.g. `google/gemini-3.8-flash` for OpenRouter). Google Search grounding has no OpenAI-compatible equivalent and is silently disabled in this mode.
 
 ### KB Generation (Go tool: `kb-gen`)
 
@@ -232,7 +232,7 @@ The `kb-gen` CLI tool reads its configuration from flags and environment variabl
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GEMINI_API_KEY` | API key used by the Go `kb-gen` tool | — |
-| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.7-flash` |
+| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.8-flash` |
 | `KB_GEN_THINKING` | Thinking level: `none`, `low`, `medium`, `high` | `high` |
 | `LLM_ENDPOINT` | Full URL of an OpenAI-compatible `chat/completions` endpoint (e.g. `https://openrouter.ai/api/v1/chat/completions`); switches `kb-gen` off native Gemini when set | — (native Gemini) |
 | `LLM_API_KEY` | Bearer key for `LLM_ENDPOINT` | falls back to `GEMINI_API_KEY` |
@@ -246,7 +246,7 @@ The shell scripts in `scripts/` use their own set of environment variables (not 
 | `API_BASE` | Go worker API base URL | `http://localhost:8080` |
 | `KB_REPO_DIR` | Path to knowledge repo | `/opt/knowledge` |
 | `KB_BACKEND` | Processing backend: `gemini` or `claude` | `gemini` |
-| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.7-flash` |
+| `KB_GEN_MODEL` | Gemini model for KB generation | `gemini-3.8-flash` |
 | `KB_GEN_THINKING` | Thinking level: `none`, `low`, `medium`, `high` | `high` |
 | `KB_GEN_API_KEY` | API key for KB generation | `$GEMINI_API_KEY` |
 | `MAX_DOCS_PER_SOURCE` | Max documents per fetch | `500` |

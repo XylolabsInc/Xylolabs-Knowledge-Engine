@@ -271,8 +271,8 @@ PYEOF
     local gemini_key
     gemini_key=$(grep '^GEMINI_API_KEY=' "$env_file" | cut -d'=' -f2- || echo "")
     local gemini_model
-    gemini_model=$(grep '^GEMINI_MODEL=' "$env_file" | cut -d'=' -f2- || echo "gemini-3.7-flash")
-    gemini_model="${gemini_model:-gemini-3.7-flash}"
+    gemini_model=$(grep '^GEMINI_MODEL=' "$env_file" | cut -d'=' -f2- || echo "gemini-3.8-flash")
+    gemini_model="${gemini_model:-gemini-3.8-flash}"
     local llm_endpoint llm_api_key llm_model
     llm_endpoint=$(grep '^LLM_ENDPOINT=' "$env_file" | cut -d'=' -f2- || echo "")
     llm_api_key=$(grep '^LLM_API_KEY=' "$env_file" | cut -d'=' -f2- || echo "")
@@ -319,7 +319,7 @@ Output (one bullet per line, {lang_name}):"""
 # LLM_ENDPOINT switches to an OpenAI-compatible chat/completions endpoint
 # (e.g. OpenRouter); empty (the default) keeps native Gemini.
 llm_endpoint = os.environ.get("LLM_ENDPOINT", "")
-model = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
+model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 if llm_endpoint:
     payload = json.dumps({
         "model": os.environ.get("LLM_MODEL", model),
