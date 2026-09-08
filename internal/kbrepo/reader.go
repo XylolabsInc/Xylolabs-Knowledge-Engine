@@ -507,6 +507,12 @@ func (r *Reader) listDetailFiles() []string {
 			return nil
 		}
 		if d.IsDir() {
+			// The walk root is ".", whose Base is "." — without this guard the
+			// hidden-directory check below skips the entire repo and the walk
+			// yields nothing.
+			if path == "." {
+				return nil
+			}
 			base := filepath.Base(path)
 			if strings.HasPrefix(base, ".") || base == "_meta" || base == "indexes" {
 				return filepath.SkipDir

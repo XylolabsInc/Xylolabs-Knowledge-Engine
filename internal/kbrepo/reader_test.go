@@ -1,7 +1,13 @@
 package kbrepo
 
 import (
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSlugify(t *testing.T) {
@@ -128,6 +134,50 @@ func TestTokenize(t *testing.T) {
 		tokens := tokenize(tt.input)
 		if len(tokens) < tt.want {
 			t.Errorf("tokenize(%q) = %v, want at least %d tokens", tt.input, tokens, tt.want)
+		}
+	}
+}
+
+// newTestRepo lays out a minimal KB repo on disk and returns a Reader for it
+// with git pull suppressed.
+func newTestRepo(t *testing.T, files map[string]string) *Reader {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, content := range files {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewReader(dir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Keep Pull() from shelling out to git during tests.
+	r.lastPull = time.Now()
+	return r
+}
+
+// listDetailFiles walks from ".", whose filepath.Base is also "." — a
+// hidden-directory guard that did not exempt the walk root skipped the whole
+// repo, so nothing outside indexes/ was ever searchable.
+func TestListDetailFilesWalksRepoRoot(t *testing.T) {
+	r := newTestRepo(t, map[string]string{
+		"indexes/topics.md":                    "# Topics\n",
+		"slack/channels/04-mgmt/2026-06-18.md": "# Mgmt\n대표번호를 변경했습니다.\n",
+		"user-provided/2026-03-13-info.md":     "# Info\n",
+		"README.md":                            "# Repo\n",
+		".git/config":                          "[core]\n",
+		"_meta/sync-state.json":                "{}\n",
+	})
+
+	files := r.listDetailFiles()
+	if len(files) != 2 {
+		t.Fatalf("listDetailFiles() = %v, want the 2 detail files", files)
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f, "indexes/") || strings.HasPrefix(f, "_meta/") || strings.HasPrefix(f, ".git/") {
+			t.Errorf("listDetailFiles() returned excluded path %q", f)
 		}
 	}
 }
