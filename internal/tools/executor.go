@@ -1055,6 +1055,22 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 					"required": []string{"query"},
 				},
 			},
+			gemini.FunctionDeclaration{
+				Name: "read_knowledge_base_document",
+				Description: "Read the full text of one knowledge base document by its id, as returned in a " +
+					"search_knowledge_base result. Use it when a search result looks relevant but its snippet " +
+					"is cut off before the detail you need — a phone number, an account number, a date.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id": map[string]any{
+							"type":        "string",
+							"description": "Document id from a search_knowledge_base result",
+						},
+					},
+					"required": []string{"id"},
+				},
+			},
 		)
 	}
 
@@ -1947,6 +1963,7 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		var items []map[string]any
 		for _, r := range results.Results {
 			item := map[string]any{
+				"id":        r.Document.ID,
 				"author":    r.Document.Author,
 				"channel":   r.Document.Channel,
 				"source":    string(r.Document.Source),
@@ -1965,9 +1982,58 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 
 		return map[string]any{"results": items, "count": len(items), "query": query}, nil
 
+	case "read_knowledge_base_document":
+		if e.store == nil {
+			return nil, fmt.Errorf("knowledge base search is not configured")
+		}
+		id, _ := call.Args["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("id is required")
+		}
+		doc, err := e.store.GetDocument(id)
+		if err != nil {
+			return nil, fmt.Errorf("read document %s: %w", id, err)
+		}
+		if doc == nil {
+			return nil, fmt.Errorf("no document with id %s", id)
+		}
+
+		content, truncated := truncateRunes(doc.Content, maxDocumentReadRunes)
+		result := map[string]any{
+			"id":        doc.ID,
+			"source":    string(doc.Source),
+			"author":    doc.Author,
+			"channel":   doc.Channel,
+			"timestamp": doc.Timestamp.Format("2006-01-02 15:04"),
+			"content":   content,
+			"truncated": truncated,
+		}
+		if doc.Title != "" {
+			result["title"] = doc.Title
+		}
+		if doc.URL != "" {
+			result["url"] = doc.URL
+		}
+		return result, nil
+
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)
 	}
+}
+
+// maxDocumentReadRunes caps how much of one document read_knowledge_base_document
+// returns. A synced document can be a whole day of a busy channel — the largest
+// in production is over a megabyte — and the whole thing would crowd the model's
+// context out for a single lookup.
+const maxDocumentReadRunes = 20000
+
+// truncateRunes cuts s to at most limit runes, reporting whether it cut.
+func truncateRunes(s string, limit int) (string, bool) {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s, false
+	}
+	return string(runes[:limit]), true
 }
 
 // columnLetter converts a 0-based column index to a spreadsheet column letter.

@@ -147,3 +147,19 @@ func TestToolExecutorStaleDetectionOnNextSession(t *testing.T) {
 		t.Error("fresh.txt should survive Execute when lastSeenEpoch was 0")
 	}
 }
+
+func TestTruncateRunes(t *testing.T) {
+	// Byte-based truncation would split a multi-byte rune mid-sequence.
+	got, truncated := truncateRunes("한국어 문서입니다", 5)
+	if !truncated {
+		t.Error("truncateRunes() reported no truncation for an over-long string")
+	}
+	if got != "한국어 문" {
+		t.Errorf("truncateRunes() = %q, want %q", got, "한국어 문")
+	}
+
+	got, truncated = truncateRunes("짧다", 5)
+	if truncated || got != "짧다" {
+		t.Errorf("truncateRunes() = %q, %v; want the input unchanged", got, truncated)
+	}
+}

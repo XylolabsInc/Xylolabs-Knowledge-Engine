@@ -519,7 +519,7 @@ The bot:
 
 ### Additional Bot Capabilities
 
-- **Tool calling (function calling)** — 47 tools for Google Workspace, Notion, scheduling, search, screenshots, and cross-channel messaging via Gemini function calling:
+- **Tool calling (function calling)** — 48 tools for Google Workspace, Notion, scheduling, search, screenshots, and cross-channel messaging via Gemini function calling:
   - **Google Drive:** `search_drive`, `get_drive_file_info`, `create_drive_folder`, `upload_to_drive`, `delete_drive_file`, `rename_drive_file`, `move_drive_file`, `copy_drive_file`, `list_drive_folder`, `share_drive_file`, `export_as_pdf`
   - **Google Docs:** `create_google_doc`, `read_google_doc`, `edit_google_doc`, `append_to_google_doc`
   - **Google Sheets:** `read_google_sheet`, `create_google_sheet`, `edit_google_sheet`, `append_google_sheet`, `get_sheet_metadata`, `clear_google_sheet`, `add_sheet_tab`
@@ -529,7 +529,7 @@ The bot:
   - **Gmail:** `send_email`
   - **Notion:** `create_notion_page`, `update_notion_page`
   - **Scheduling:** `schedule_message`, `create_recurring_job`, `list_scheduled_jobs`, `cancel_scheduled_job`
-  - **Other:** `search_knowledge_base`, `screenshot_url`, `send_message`
+  - **Other:** `search_knowledge_base`, `read_knowledge_base_document`, `screenshot_url`, `send_message`
 - **Thread continuation** — once the bot replies in a thread, all subsequent messages in that thread are handled automatically (no @mention needed)
 - **Multi-turn conversations** — up to 20 prior messages from the thread are included as context for conversation continuity
 - **Bidirectional learning** — when users share factual information, the bot can save it to the knowledge repo via LEARN blocks
