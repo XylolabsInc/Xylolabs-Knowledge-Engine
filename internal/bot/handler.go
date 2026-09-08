@@ -161,10 +161,12 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 
 	b.logger.Info("kb context loaded", "length", len(kbContext), "query", query)
 
-	// Truncate KB context if it exceeds budget.
+	// Backstop only: the reader already fits both layers into its own budget.
+	// Reaching this means the budgets have drifted apart, and the cut lands on
+	// the detail documents at the tail — so it is a warning worth acting on.
 	if len(kbContext) > maxKBContextChars {
 		originalLen := len(kbContext)
-		kbContext = kbContext[:maxKBContextChars] + "\n\n[... KB context truncated due to size ...]"
+		kbContext = truncateUTF8(kbContext, maxKBContextChars) + "\n\n[... KB context truncated due to size ...]"
 		b.logger.Warn("kb context truncated", "original_length", originalLen, "max", maxKBContextChars)
 	}
 
@@ -282,7 +284,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 	systemPrompt := fmt.Sprintf(b.systemPrompt, userName, platformFormattingInstructions(b.platform.Name())) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	if len(systemPrompt) > maxSystemPromptChars {
-		systemPrompt = systemPrompt[:maxSystemPromptChars] + "\n[... truncated ...]"
+		systemPrompt = truncateUTF8(systemPrompt, maxSystemPromptChars) + "\n[... truncated ...]"
 		b.logger.Warn("system prompt truncated", "length", len(systemPrompt), "max", maxSystemPromptChars)
 	}
 

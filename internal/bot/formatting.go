@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
 )
@@ -20,10 +21,14 @@ const (
 	notBotCacheTTL        = 5 * time.Minute
 
 	// Token budget estimates (chars-based, ~3 chars per token)
-	maxContextChars      = 300000 // ~100k tokens for total context
-	maxKBContextChars    = 200000 // ~67k tokens for KB context
+	maxContextChars = 500000 // ~167k tokens for total context
+	// maxKBContextChars must stay at or above the kbrepo reader's own budget:
+	// the reader already fits the index and detail layers into that, and a
+	// smaller cap here re-truncates the result from the tail, which is exactly
+	// where the query-relevant detail documents sit.
+	maxKBContextChars    = 400000 // ~133k tokens for KB context
 	maxFileChars         = 24000  // ~8k tokens per attached file
-	maxSystemPromptChars = 250000
+	maxSystemPromptChars = 460000
 	maxQueryBudget       = 50000 // aggregate char budget for user query + attachments
 )
 
@@ -129,4 +134,19 @@ func mergeConsecutiveRoles(messages []gemini.Message) []gemini.Message {
 		}
 	}
 	return merged
+}
+
+// truncateUTF8 cuts s to at most limit bytes without splitting a rune. Slicing
+// a Korean string on a byte boundary leaves an invalid trailing sequence.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	if limit <= 0 {
+		return ""
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit]
 }

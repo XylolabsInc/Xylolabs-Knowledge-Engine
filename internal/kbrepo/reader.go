@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Reader provides hierarchical access to the markdown-based knowledge base repository.
@@ -42,15 +43,18 @@ type Reader struct {
 
 	detailContentCache   map[string]string
 	detailContentCacheAt time.Time
+
+	maxContextBytes int
 }
 
 // NewReader creates a KB repo reader.
 func NewReader(repoDir string, logger *slog.Logger) *Reader {
 	return &Reader{
-		repoDir:       repoDir,
-		logger:        logger.With("component", "kbrepo"),
-		pullMinGap:    30 * time.Second,
-		indexCacheTTL: 30 * time.Second,
+		repoDir:         repoDir,
+		logger:          logger.With("component", "kbrepo"),
+		pullMinGap:      30 * time.Second,
+		indexCacheTTL:   30 * time.Second,
+		maxContextBytes: defaultMaxContextBytes,
 	}
 }
 
@@ -81,12 +85,61 @@ func (r *Reader) Pull() {
 	}
 }
 
+// Context size budget. The caller imposes its own cap on the returned string;
+// these keep the two layers inside it in the right order of priority.
+const (
+	// defaultMaxContextBytes is the total size BuildContext aims for.
+	defaultMaxContextBytes = 400000
+
+	// detailReservePercent is the share of the budget the query-relevant detail
+	// documents may always claim. The index layer is "always included" and
+	// grows with every channel added — it passed 200 KB on its own here, which
+	// under a plain tail-truncation silently discarded every detail document,
+	// the one part selected because it answers this question.
+	detailReservePercent = 30
+
+	// maxDetailFileBytes caps a single detail document, so one 500 KB day of a
+	// busy channel cannot consume the whole detail reserve.
+	maxDetailFileBytes = 24000
+)
+
+// renderSection appends a titled document to b, capped at limit bytes, and
+// reports how many bytes it wrote.
+func renderSection(b *strings.Builder, f fileEntry, limit int) int {
+	title := extractTitle(f.content)
+	if title == "" {
+		title = filepath.Base(f.relPath)
+	}
+	section := fmt.Sprintf("## %s\n%s\n\n", title, f.content)
+	if len(section) > limit {
+		section = truncateUTF8(section, limit)
+	}
+	b.WriteString(section)
+	return len(section)
+}
+
+// truncateUTF8 cuts s to at most limit bytes without splitting a rune.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	if limit <= 0 {
+		return ""
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit]
+}
+
 // BuildContext constructs a context string for the LLM by:
 //  1. Loading all index/overview files (always included)
 //  2. Finding detail files relevant to the query via keyword matching and link extraction
 //  3. Loading only those detail files
 //
-// This keeps context small and focused even as the repo grows.
+// Both layers are fitted into maxContextBytes with the detail layer given a
+// reserved share, so the documents selected for this query survive even when
+// the index layer alone would fill the budget.
 func (r *Reader) BuildContext(query string) (string, error) {
 	r.Pull()
 
@@ -108,32 +161,49 @@ func (r *Reader) BuildContext(query string) (string, error) {
 	// Build URL map to rewrite internal .md links → actual source URLs.
 	urlMap := r.buildURLMap()
 
+	// Render the detail layer first to learn its true size, then give the index
+	// layer whatever the budget has left. Output order is unchanged.
+	var detailPart strings.Builder
+	if len(details) > 0 {
+		indexSize := 0
+		for _, f := range indexes {
+			indexSize += len(f.content)
+		}
+		reserve := r.maxContextBytes * detailReservePercent / 100
+		detailBudget := r.maxContextBytes - indexSize
+		if detailBudget < reserve {
+			detailBudget = reserve
+		}
+
+		detailPart.WriteString("# Relevant Detail Documents\n\n")
+		used := detailPart.Len()
+		for _, f := range details {
+			remaining := detailBudget - used
+			if remaining <= 0 {
+				break
+			}
+			limit := maxDetailFileBytes
+			if remaining < limit {
+				limit = remaining
+			}
+			used += renderSection(&detailPart, f, limit)
+		}
+	}
+
+	indexBudget := r.maxContextBytes - detailPart.Len()
+
 	// Build final context — use document titles, never expose internal file paths.
 	var b strings.Builder
-
 	b.WriteString("# Knowledge Base Indexes\n\n")
+	used := b.Len()
 	for _, f := range indexes {
-		title := extractTitle(f.content)
-		if title == "" {
-			title = filepath.Base(f.relPath)
+		remaining := indexBudget - used
+		if remaining <= 0 {
+			break
 		}
-		b.WriteString(fmt.Sprintf("## %s\n", title))
-		b.WriteString(f.content)
-		b.WriteString("\n\n")
+		used += renderSection(&b, f, remaining)
 	}
-
-	if len(details) > 0 {
-		b.WriteString("# Relevant Detail Documents\n\n")
-		for _, f := range details {
-			title := extractTitle(f.content)
-			if title == "" {
-				title = filepath.Base(f.relPath)
-			}
-			b.WriteString(fmt.Sprintf("## %s\n", title))
-			b.WriteString(f.content)
-			b.WriteString("\n\n")
-		}
-	}
+	b.WriteString(detailPart.String())
 
 	// Rewrite internal .md links to actual Google Drive / Notion URLs.
 	return rewriteInternalLinks(b.String(), urlMap), nil

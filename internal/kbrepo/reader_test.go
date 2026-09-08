@@ -1,6 +1,7 @@
 package kbrepo
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSlugify(t *testing.T) {
@@ -230,5 +232,50 @@ func TestQueryTermsExpandsHangulFragments(t *testing.T) {
 		if term.text != "registration" {
 			t.Errorf("unexpected fragment %q for a Latin token", term.text)
 		}
+	}
+}
+
+// The index layer is always included and grows with every channel added. Once
+// it fills the budget on its own, a plain tail-truncation drops the detail
+// layer entirely — the one part selected because it answers this query.
+func TestBuildContextReservesRoomForDetails(t *testing.T) {
+	files := map[string]string{
+		"slack/channels/04-mgmt/2026-06-18.md": "# 경영지원\n대표번호를 010-2997-7077로 변경했습니다.\n",
+	}
+	// Index content large enough to fill the whole budget by itself.
+	for i := range 12 {
+		files[fmt.Sprintf("slack/channels/ch%02d/README.md", i)] =
+			fmt.Sprintf("# 채널 %d\n%s\n", i, strings.Repeat("배경 설명 문장입니다. ", 400))
+	}
+
+	r := newTestRepo(t, files)
+	r.maxContextBytes = 20000
+
+	ctx, err := r.BuildContext("대표번호")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(ctx, "010-2997-7077") {
+		t.Error("BuildContext() dropped the detail layer to fit the index layer")
+	}
+	if len(ctx) > r.maxContextBytes {
+		t.Errorf("BuildContext() returned %d bytes, over the %d budget", len(ctx), r.maxContextBytes)
+	}
+	if !utf8.ValidString(ctx) {
+		t.Error("BuildContext() split a rune while truncating")
+	}
+}
+
+func TestTruncateUTF8(t *testing.T) {
+	// "한" is 3 bytes; cutting at 4 must back off to the rune boundary.
+	if got := truncateUTF8("한국어", 4); got != "한" {
+		t.Errorf("truncateUTF8() = %q, want %q", got, "한")
+	}
+	if got := truncateUTF8("한국어", 99); got != "한국어" {
+		t.Errorf("truncateUTF8() = %q, want the input unchanged", got)
+	}
+	if got := truncateUTF8("한국어", 0); got != "" {
+		t.Errorf("truncateUTF8() = %q, want empty", got)
 	}
 }

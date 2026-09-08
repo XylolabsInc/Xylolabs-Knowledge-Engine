@@ -191,10 +191,19 @@ How `BuildContext(query)` works:
 6. Also scores every detail file directly, by both its path and its body
 7. Applies a recency boost to files whose path carries a recent date
 8. Loads the top 15 highest-scoring detail files
-9. Returns formatted context string combining indexes + relevant details
+9. Fits both layers into a 400 KB budget, with 30% reserved for the detail layer
+10. Returns formatted context string combining indexes + relevant details
 
 Detail bodies are cached (lowercased, in memory) for the same 30 seconds as the
 index cache and invalidated on a successful `git pull`.
+
+> **Why the detail layer gets a reserved share.** The index layer is always
+> included and grows with every channel added — 44 channel READMEs put it past
+> 200 KB on its own. Rendering indexes first and cutting the tail to fit a
+> budget therefore discards the whole detail layer, which is the part selected
+> because it answers this particular question. The reader now sizes the detail
+> layer first and gives the index layer what remains; `internal/bot` keeps its
+> own cap only as a backstop, at or above the reader's budget.
 
 This keeps context small and focused even as the knowledge repo grows — the bot never loads the entire repo.
 
