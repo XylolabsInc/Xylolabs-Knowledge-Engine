@@ -181,3 +181,54 @@ func TestListDetailFilesWalksRepoRoot(t *testing.T) {
 		}
 	}
 }
+
+// A fact recorded in a detail file that no index links to must still be
+// reachable: the index layer only ever references a small slice of the repo.
+func TestBuildContextFindsFactInUnlinkedDetailFile(t *testing.T) {
+	r := newTestRepo(t, map[string]string{
+		"indexes/topics.md":     "# Topics\n\n## Funding\n- [E-SPARK](../google/docs/espark.md)\n",
+		"google/docs/espark.md": "# E-SPARK\n지원사업 일정입니다.\n",
+		"slack/channels/04-mgmt/2026-06-18.md": "# 경영지원\n" +
+			"법인 명의 회선 개통 완료. 네이버 지도 대표번호를 메인 번호(010-2997-7077)로 변경했습니다.\n",
+	})
+
+	ctx, err := r.BuildContext("대표번호 알려줘")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ctx, "010-2997-7077") {
+		t.Errorf("BuildContext() did not surface the fact from the unlinked detail file:\n%s", ctx)
+	}
+}
+
+// Korean attaches particles to nouns and compounds nouns without spaces, so a
+// query eojeol rarely equals the form stored in the KB.
+func TestQueryTermsExpandsHangulFragments(t *testing.T) {
+	terms := queryTerms("대표전화번호가")
+
+	byText := make(map[string]float64, len(terms))
+	for _, term := range terms {
+		byText[term.text] = term.weight
+	}
+
+	if w := byText["대표전화번호가"]; w != 1.0 {
+		t.Errorf("surface token weight = %v, want 1.0", w)
+	}
+	for _, want := range []string{"대표", "번호", "전화번호"} {
+		w, ok := byText[want]
+		if !ok {
+			t.Errorf("fragment %q missing from %v", want, terms)
+			continue
+		}
+		if w >= 1.0 {
+			t.Errorf("fragment %q weight = %v, want less than the surface token", want, w)
+		}
+	}
+
+	// Latin tokens are left alone — they need no fragment matching.
+	for _, term := range queryTerms("registration") {
+		if term.text != "registration" {
+			t.Errorf("unexpected fragment %q for a Latin token", term.text)
+		}
+	}
+}

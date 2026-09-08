@@ -39,6 +39,9 @@ type Reader struct {
 
 	detailFilesCache   []string
 	detailFilesCacheAt time.Time
+
+	detailContentCache   map[string]string
+	detailContentCacheAt time.Time
 }
 
 // NewReader creates a KB repo reader.
@@ -72,6 +75,7 @@ func (r *Reader) Pull() {
 		r.cacheMu.Lock()
 		r.indexCache = nil // invalidate cache on successful pull
 		r.detailFilesCache = nil
+		r.detailContentCache = nil
 		r.urlMapCache = nil
 		r.cacheMu.Unlock()
 	}
@@ -326,33 +330,53 @@ func extractTitle(content string) string {
 // linkPattern matches markdown links like [text](../path/to/file.md)
 var linkPattern = regexp.MustCompile(`\]\(([^)]+\.md)\)`)
 
-// findRelevantFiles determines which detail files to load based on the query.
-// It scores sections of index files by IDF-weighted keyword match with heading boosts,
-// then extracts file references from the highest-scoring sections.
-func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
-	keywords := tokenize(query)
-	if len(keywords) == 0 {
+const (
+	// maxContextFiles caps how many detail files BuildContext pulls into the
+	// prompt.
+	maxContextFiles = 15
+
+	// contentMatchCap bounds how many occurrences of one term inside a single
+	// detail file can contribute to its score, so a long transcript that
+	// repeats a common word cannot outrank a short document that actually
+	// answers the query.
+	contentMatchCap = 8
+)
+
+// scoreFiles scores every detail file against the query. It scores index-file
+// sections and detail-file bodies by IDF-weighted keyword match with heading
+// boosts, and credits a detail file both for its own matches and for matches in
+// the index sections that link to it.
+func (r *Reader) scoreFiles(query string, indexes []fileEntry) map[string]float64 {
+	terms := queryTerms(query)
+	if len(terms) == 0 {
 		return nil
 	}
 
-	// Compute IDF: count how many sections each keyword appears in.
+	// Compute IDF over both index sections and detail-file bodies, so a term's
+	// weight reflects how rare it is across everything that gets searched.
 	allSections := []string{}
 	for _, idx := range indexes {
 		allSections = append(allSections, splitSections(idx.content)...)
 	}
+	detailContents := r.detailFileContents()
 	allDetails := r.listDetailFiles()
 
 	keywordDocFreq := make(map[string]int)
 	totalSections := len(allSections) + len(allDetails)
-	for _, section := range allSections {
-		lower := strings.ToLower(section)
+	countDocFreq := func(lower string) {
 		seen := make(map[string]bool)
-		for _, kw := range keywords {
-			if !seen[kw] && strings.Contains(lower, kw) {
-				keywordDocFreq[kw]++
-				seen[kw] = true
+		for _, t := range terms {
+			if !seen[t.text] && strings.Contains(lower, t.text) {
+				keywordDocFreq[t.text]++
+				seen[t.text] = true
 			}
 		}
+	}
+	for _, section := range allSections {
+		countDocFreq(strings.ToLower(section))
+	}
+	for _, content := range detailContents {
+		countDocFreq(content)
 	}
 
 	// IDF weight: log(totalSections / (1 + docFreq))
@@ -381,23 +405,23 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		for _, section := range sections {
 			lower := strings.ToLower(section)
 			var score float64
-			for _, kw := range keywords {
-				count := strings.Count(lower, kw)
+			for _, t := range terms {
+				count := strings.Count(lower, t.text)
 				if count == 0 {
 					continue
 				}
-				weight := idfWeight(kw)
+				weight := idfWeight(t.text)
 
 				// Title/heading boost: check if keyword appears in heading lines
 				headingBoost := 1.0
 				for _, line := range strings.Split(section, "\n") {
-					if strings.HasPrefix(line, "#") && strings.Contains(strings.ToLower(line), kw) {
+					if strings.HasPrefix(line, "#") && strings.Contains(strings.ToLower(line), t.text) {
 						headingBoost = 3.0
 						break
 					}
 				}
 
-				score += float64(count) * weight * headingBoost
+				score += float64(count) * weight * headingBoost * t.weight
 			}
 			if score == 0 {
 				continue
@@ -421,9 +445,9 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 	// Direct keyword matching on detail file paths
 	for _, path := range allDetails {
 		lower := strings.ToLower(path)
-		for _, kw := range keywords {
-			if strings.Contains(lower, kw) {
-				fileScores[path] += 2.0 * idfWeight(kw)
+		for _, t := range terms {
+			if strings.Contains(lower, t.text) {
+				fileScores[path] += 2.0 * idfWeight(t.text) * t.weight
 			}
 		}
 		// Date-based matching: boost files whose path contains the date pattern
@@ -431,6 +455,27 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 			if strings.Contains(lower, dp) {
 				fileScores[path] += 3.0
 			}
+		}
+	}
+
+	// Direct keyword matching on detail file bodies. The index layer only ever
+	// links a small fraction of the repo, so without this a fact that lives in
+	// the body of a document nothing links to is unreachable no matter how
+	// exactly the query names it.
+	for path, content := range detailContents {
+		var score float64
+		for _, t := range terms {
+			count := strings.Count(content, t.text)
+			if count == 0 {
+				continue
+			}
+			if count > contentMatchCap {
+				count = contentMatchCap
+			}
+			score += float64(count) * idfWeight(t.text) * t.weight
+		}
+		if score > 0 {
+			fileScores[path] += score
 		}
 	}
 
@@ -452,6 +497,13 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		}
 	}
 
+	return fileScores
+}
+
+// findRelevantFiles ranks the scored files and returns the top maxContextFiles.
+func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
+	fileScores := r.scoreFiles(query, indexes)
+
 	// Sort by score descending and take top results
 	type scored struct {
 		path  string
@@ -471,7 +523,7 @@ func (r *Reader) findRelevantFiles(query string, indexes []fileEntry) []string {
 		return 0
 	})
 
-	maxFiles := 15
+	maxFiles := maxContextFiles
 	if len(ranked) < maxFiles {
 		maxFiles = len(ranked)
 	}
@@ -537,6 +589,43 @@ func (r *Reader) listDetailFiles() []string {
 	r.detailFilesCacheAt = time.Now()
 	r.cacheMu.Unlock()
 	return files
+}
+
+// detailFileContents returns the lowercased body of every detail file, keyed by
+// relative path. Results are cached for indexCacheTTL and invalidated on git
+// pull, so a query scans memory rather than the filesystem.
+func (r *Reader) detailFileContents() map[string]string {
+	r.cacheMu.RLock()
+	if r.detailContentCache != nil && time.Since(r.detailContentCacheAt) < r.indexCacheTTL {
+		cache := r.detailContentCache
+		r.cacheMu.RUnlock()
+		return cache
+	}
+	r.cacheMu.RUnlock()
+
+	paths := r.listDetailFiles()
+
+	root, err := os.OpenRoot(r.repoDir)
+	if err != nil {
+		r.logger.Warn("failed to open repo root", "error", err)
+		return map[string]string{}
+	}
+	defer root.Close()
+
+	contents := make(map[string]string, len(paths))
+	for _, path := range paths {
+		data, err := root.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		contents[path] = strings.ToLower(string(data))
+	}
+
+	r.cacheMu.Lock()
+	r.detailContentCache = contents
+	r.detailContentCacheAt = time.Now()
+	r.cacheMu.Unlock()
+	return contents
 }
 
 // loadFiles reads the specified files from the repo.
@@ -888,6 +977,96 @@ func tokenize(s string) []string {
 	}
 
 	return expanded
+}
+
+// queryTerm is one search term derived from the user's query, together with how
+// much a match on it counts. Surface tokens carry full weight; the sub-token
+// fragments derived from them count for less.
+type queryTerm struct {
+	text   string
+	weight float64
+}
+
+const (
+	// Hangul sub-token fragments are cut at these lengths. Korean glues
+	// particles onto nouns and compounds nouns without spaces, so a query
+	// eojeol ("대표전화번호가") shares no whole token with the text that
+	// answers it ("법인 ... 대표번호를") even though they are about the same
+	// thing. Matching the query's fragments bridges both, in the one direction
+	// that is safe: substrings of the query are still found by Contains inside
+	// longer words in the documents.
+	minHangulGram = 2
+	maxHangulGram = 4
+
+	// maxQueryTerms bounds the per-query scan: every term is swept across every
+	// index section and detail body, so the term count sets the cost.
+	maxQueryTerms = 48
+)
+
+// hasHangul reports whether s contains any Hangul syllable, jamo, or
+// compatibility jamo.
+func hasHangul(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 0xAC00 && r <= 0xD7A3, // syllables
+			r >= 0x1100 && r <= 0x11FF, // jamo
+			r >= 0x3130 && r <= 0x318F: // compatibility jamo
+			return true
+		}
+	}
+	return false
+}
+
+// hangulGrams returns the contiguous character n-grams of tok, longest first,
+// excluding tok itself.
+func hangulGrams(tok string) []string {
+	runes := []rune(tok)
+	var grams []string
+	for n := maxHangulGram; n >= minHangulGram; n-- {
+		if n >= len(runes) {
+			continue
+		}
+		for i := 0; i+n <= len(runes); i++ {
+			grams = append(grams, string(runes[i:i+n]))
+		}
+	}
+	return grams
+}
+
+// queryTerms expands a query into weighted search terms: the tokens themselves
+// at full weight, plus Hangul sub-token fragments at a reduced weight that rises
+// with fragment length.
+func queryTerms(query string) []queryTerm {
+	tokens := tokenize(query)
+
+	terms := make([]queryTerm, 0, len(tokens))
+	seen := make(map[string]bool, len(tokens))
+	for _, tok := range tokens {
+		if seen[tok] {
+			continue
+		}
+		seen[tok] = true
+		terms = append(terms, queryTerm{text: tok, weight: 1.0})
+	}
+
+	for _, tok := range tokens {
+		if !hasHangul(tok) {
+			continue
+		}
+		for _, gram := range hangulGrams(tok) {
+			if seen[gram] {
+				continue
+			}
+			if len(terms) >= maxQueryTerms {
+				return terms
+			}
+			seen[gram] = true
+			// 2-gram → 0.15, 3-gram → 0.30, 4-gram → 0.45.
+			terms = append(terms, queryTerm{text: gram, weight: 0.15 * float64(len([]rune(gram))-1)})
+		}
+	}
+
+	return terms
 }
 
 // koreanMonthPattern matches Korean month references like "1월", "2월", "12월".

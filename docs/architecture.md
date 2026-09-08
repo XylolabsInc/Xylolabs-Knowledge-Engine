@@ -180,19 +180,31 @@ The executor is wired to the bot handler in `main.go` after all connectors are i
 Provides hierarchical access to the markdown-based knowledge repository using a two-stage approach:
 
 1. **Index layer** (always loaded): `indexes/*.md` files (topics, keywords, people, weekly summaries) plus source/channel README files
-2. **Detail layer** (loaded on demand): Only the specific markdown files referenced by index sections that match the user's query
+2. **Detail layer** (loaded on demand): the highest-scoring markdown files for the user's query
 
 How `BuildContext(query)` works:
 1. Runs `git pull --rebase` (rate-limited to once per 30 seconds)
 2. Loads all index files
-3. Splits each index into sections (by `##` headers)
-4. Scores sections by counting keyword matches against the query
-5. Extracts markdown links (`](path.md)`) from high-scoring sections
-6. Also matches keywords against all detail file paths
-7. Loads the top 10 highest-scoring detail files
-8. Returns formatted context string combining indexes + relevant details
+3. Expands the query into weighted terms — whitespace tokens and synonyms at full weight, plus Hangul 2–4 character fragments of those tokens at reduced weight
+4. Splits each index into sections (by `##` headers) and scores sections by IDF-weighted term matches, with a heading boost
+5. Extracts markdown links (`](path.md)`) from high-scoring sections and credits the linked detail files
+6. Also scores every detail file directly, by both its path and its body
+7. Applies a recency boost to files whose path carries a recent date
+8. Loads the top 15 highest-scoring detail files
+9. Returns formatted context string combining indexes + relevant details
+
+Detail bodies are cached (lowercased, in memory) for the same 30 seconds as the
+index cache and invalidated on a successful `git pull`.
 
 This keeps context small and focused even as the knowledge repo grows — the bot never loads the entire repo.
+
+> **Why bodies are scored, not just paths.** The index layer only ever links a
+> small slice of the repo, so scoring index sections and file paths alone leaves
+> any fact that lives in the body of an unlinked document unreachable — no
+> matter how exactly the query names it. Korean fragment matching is the other
+> half: Korean glues particles onto nouns and compounds nouns without spaces, so
+> a query eojeol ("대표전화번호가") shares no whole token with the text that
+> answers it ("대표번호를").
 
 ### `internal/gemini` — Gemini API client
 
@@ -371,9 +383,9 @@ internal/kbrepo Reader
     │
     ├── git pull --rebase (rate-limited)
     ├── Load index files (indexes/*.md, READMEs)
-    ├── Score index sections by query keywords
-    ├── Extract file references from top sections
-    ├── Load top 10 relevant detail files
+    ├── Expand query into weighted terms (+ Hangul fragments)
+    ├── Score index sections, detail paths, and detail bodies
+    ├── Load top 15 relevant detail files
     │
     ▼
 Build Gemini prompt
