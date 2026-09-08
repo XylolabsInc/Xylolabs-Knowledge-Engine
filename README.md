@@ -745,8 +745,18 @@ xylolabs-kb uses **SQLite** with the **FTS5** extension for full-text search.
 > **Malformed queries.** Free-form text is often not valid FTS5 — a trailing
 > full stop is enough to raise `fts5: syntax error`. The query is tried
 > verbatim first, so all of the syntax above keeps working; only if FTS5
-> rejects it is it retried as quoted tokens. Callers therefore never see a
-> syntax error, and operator syntax is never silently reinterpreted.
+> rejects it, or it matches nothing, is it retried as quoted tokens. Callers
+> therefore never see a syntax error, and operator syntax is never silently
+> reinterpreted.
+
+> **Korean queries.** `unicode61` splits only on non-alphanumerics, and Korean
+> attaches its particles directly to the noun — "대표번호를 변경했다" indexes
+> the single token `대표번호를`, so a search for `대표번호` matches nothing.
+> After the two forms above come up empty, the query is retried once more with
+> Korean tokens as phrase-prefix matches (`"대표번호" *`), which finds every
+> inflected form of the stem. Compounds are still literal: `대표전화번호` does
+> not find `대표번호`, so search the shorter noun when a long compound returns
+> nothing.
 
 ## Scripts
 

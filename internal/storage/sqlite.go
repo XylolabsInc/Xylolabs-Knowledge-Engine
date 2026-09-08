@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -206,6 +207,44 @@ func escapeFTS5Query(q string) string {
 	return strings.Join(quoted, " ")
 }
 
+// containsHangul reports whether s holds any Hangul syllable, jamo, or
+// compatibility jamo.
+func containsHangul(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 0xAC00 && r <= 0xD7A3, // syllables
+			r >= 0x1100 && r <= 0x11FF, // jamo
+			r >= 0x3130 && r <= 0x318F: // compatibility jamo
+			return true
+		}
+	}
+	return false
+}
+
+// hangulPrefixFTS5Query is escapeFTS5Query with Korean tokens turned into
+// phrase-prefix matches.
+//
+// The unicode61 tokenizer splits only on non-alphanumerics, and Korean glues
+// its particles straight onto the noun - so the sentence "대표번호를 변경했다"
+// indexes the single token "대표번호를", and a search for "대표번호" matches
+// nothing at all. Only someone who guessed the exact particle would find it.
+// Asking for the prefix instead makes the stem find every inflected form.
+func hangulPrefixFTS5Query(q string) string {
+	var out []string
+	for _, tok := range strings.Fields(q) {
+		tok = strings.ReplaceAll(tok, `"`, `""`)
+		if strings.Trim(tok, `"`) == "" {
+			continue
+		}
+		if containsHangul(tok) {
+			out = append(out, `"`+tok+`" *`)
+		} else {
+			out = append(out, `"`+tok+`"`)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // Search performs a full-text search with optional filters.
 func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 	var conditions []string
@@ -220,12 +259,15 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 
 	// Try the caller's text verbatim first so documented FTS5 syntax keeps
 	// working - phrase queries, prefix matches, boolean operators, column
-	// filters. Only if FTS5 rejects it do we retry with the quoted-token form,
-	// which always parses. Escaping unconditionally would silently reduce
+	// filters. Only if FTS5 rejects it, or it finds nothing, do we fall back to
+	// the quoted-token form (which always parses) and then to Korean
+	// phrase-prefix matching. Escaping unconditionally would silently reduce
 	// `a AND b` to a search for the literal token "AND".
 	matchCandidates := []string{query.Query}
-	if escaped != query.Query {
-		matchCandidates = append(matchCandidates, escaped)
+	for _, candidate := range []string{escaped, hangulPrefixFTS5Query(query.Query)} {
+		if candidate != "" && !slices.Contains(matchCandidates, candidate) {
+			matchCandidates = append(matchCandidates, candidate)
+		}
 	}
 
 	fromClause := `FROM fts_documents fts
@@ -270,9 +312,19 @@ func (s *SQLiteStore) Search(query kb.SearchQuery) (*kb.SearchResponse, error) {
 		countArgs := make([]any, len(args))
 		copy(countArgs, args)
 		countArgs[0] = candidate
-		if countErr = s.db.QueryRow(countQuery, countArgs...).Scan(&total); countErr == nil {
-			args[0] = candidate
-			matched = true
+
+		var candidateTotal int
+		if err := s.db.QueryRow(countQuery, countArgs...).Scan(&candidateTotal); err != nil {
+			countErr = err
+			continue
+		}
+		// The first form FTS5 accepts is the answer, unless a later, looser one
+		// actually finds something.
+		if !matched {
+			matched, total, args[0] = true, candidateTotal, candidate
+		}
+		if candidateTotal > 0 {
+			total, args[0] = candidateTotal, candidate
 			break
 		}
 	}

@@ -432,3 +432,47 @@ func TestSearchPreservesFTS5Operators(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchMatchesKoreanAcrossParticles(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	doc := kb.Document{
+		ID:       "ko-1",
+		Source:   kb.SourceSlack,
+		SourceID: "K1",
+		Title:    "경영지원",
+		Content: "법인 명의 회선 개통 완료. 네이버 지도 대표번호를 " +
+			"메인 번호로 변경했습니다.",
+		Channel:   "04-mgmt",
+		Timestamp: now,
+		UpdatedAt: now,
+		IndexedAt: now,
+	}
+	if err := store.UpsertDocument(doc); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	// unicode61 splits only on non-alphanumerics, so the text above indexes the
+	// token "대표번호를" — particle attached. Searching the bare noun used to
+	// return nothing, and only the exact inflected form anyone happened to type
+	// would hit. Korean queries now fall back to a phrase-prefix match.
+	for _, q := range []string{"대표번호", "대표번호를", "법인 대표번호", "번호"} {
+		res, err := store.Search(kb.SearchQuery{Query: q, Limit: 5})
+		if err != nil {
+			t.Errorf("Search(%q) error = %v", q, err)
+			continue
+		}
+		if len(res.Results) == 0 {
+			t.Errorf("Search(%q) returned no results; want the 04-mgmt document", q)
+		}
+	}
+
+	// A prefix fallback must not invent matches for terms that are simply absent.
+	res, err := store.Search(kb.SearchQuery{Query: "출장정산", Limit: 5})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(res.Results) != 0 {
+		t.Errorf("Search(출장정산) returned %d results; want 0", len(res.Results))
+	}
+}
