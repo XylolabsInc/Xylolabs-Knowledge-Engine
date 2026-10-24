@@ -259,6 +259,10 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		defer b.toolExecutor.ClearAttachments()
 	}
 
+	// Files the model creates with attach_file are collected here and uploaded
+	// after the reply.
+	ctx, outbox := tools.ContextWithOutbox(ctx)
+
 	// 2.5. Extract and fetch URLs from message text for context.
 	if b.extractor != nil {
 		for _, u := range b.platform.ExtractURLs(query) {
@@ -280,7 +284,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 	// 3. Build system prompt with full KB context.
 	userName := b.platform.ResolveUserName(ctx, msg.UserID)
 	now := time.Now().In(b.location)
-	currentTime := now.Format("2006-01-02 (Monday) 15:04 MST")
+	currentTime := now.Format("2006-01-02 (Monday) 15:04 MST") + " (" + b.location.String() + ")"
 	systemPrompt := fmt.Sprintf(b.systemPrompt, userName, platformFormattingInstructions(b.platform.Name())) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	if len(systemPrompt) > maxSystemPromptChars {
@@ -511,7 +515,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		if err := b.platform.PostReply(ctx, msg.Channel, threadID, replyText); err != nil {
 			b.logger.Error("failed to post reply", "platform", b.platform.Name(), "channel", msg.Channel, "error", err)
 		}
-	} else if reactEmoji == "" {
+	} else if reactEmoji == "" && len(outbox.Files()) == 0 {
 		b.logger.Warn("empty response after post-processing, nothing to send",
 			"query", query, "raw_length", len(genResp.Text))
 		// Silence is the worst possible outcome: the user watches the bot read
@@ -522,6 +526,8 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 				"platform", b.platform.Name(), "channel", msg.Channel, "error", err)
 		}
 	}
+
+	b.uploadOutgoingFiles(ctx, msg.Channel, threadID, outbox.Files())
 
 	// Add emoji reaction to the user's original message.
 	if reactEmoji != "" {
@@ -535,6 +541,45 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 				b.logger.Warn("failed to add reaction", "emoji", emoji, "error", err)
 			}
 		}(reactEmoji)
+	}
+}
+
+// uploadOutgoingFiles uploads the files the model attached, after the text
+// reply so they read as part of it. The model has already told the user a file
+// is coming, so a failed upload is reported in the thread rather than only
+// logged.
+func (b *Bot) uploadOutgoingFiles(ctx context.Context, channel, threadID string, files []tools.OutgoingFile) {
+	ctx = context.WithoutCancel(ctx)
+	var failed []string
+	for _, f := range files {
+		uploadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		err := b.platform.UploadFile(uploadCtx, channel, threadID, f.Name, f.Data)
+		cancel()
+		if err != nil {
+			b.logger.Warn("failed to upload generated file",
+				"platform", b.platform.Name(), "file", f.Name, "size_bytes", len(f.Data), "error", err)
+			failed = append(failed, f.Name)
+			continue
+		}
+		b.logger.Info("generated file uploaded",
+			"platform", b.platform.Name(), "channel", channel, "file", f.Name, "size_bytes", len(f.Data))
+	}
+	if len(failed) == 0 {
+		return
+	}
+	if err := b.platform.PostReply(ctx, channel, threadID, b.uploadFailedMessage(failed)); err != nil {
+		b.logger.Error("failed to post upload failure notice", "platform", b.platform.Name(), "error", err)
+	}
+}
+
+// uploadFailedMessage follows the configured LANGUAGE, like emptyResponseFallback.
+func (b *Bot) uploadFailedMessage(names []string) string {
+	list := strings.Join(names, ", ")
+	switch strings.ToLower(b.language) {
+	case "ko":
+		return "파일을 올리지 못했습니다: " + list + ". 잠시 후 다시 요청해 주세요."
+	default:
+		return "I couldn't upload the file: " + list + ". Please ask again in a moment."
 	}
 }
 

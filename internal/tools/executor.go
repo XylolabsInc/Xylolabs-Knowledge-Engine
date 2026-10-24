@@ -1022,6 +1022,37 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		)
 	}
 
+	// --- File Attachment Tool ---
+	// Needs no external service, so it is always available.
+	decls = append(decls,
+		gemini.FunctionDeclaration{
+			Name: "attach_file",
+			Description: "Create a text file and attach it to your reply so the user can download it. " +
+				"Use when the user asks for a file rather than a message: a calendar invite (.ics), " +
+				"a contact card (.vcf), CSV, JSON, Markdown, plain text, code, and similar text formats. " +
+				"Write the complete file contents; they are uploaded as-is. For .ics files write a full " +
+				"VCALENDAR with VERSION:2.0, PRODID, and a VEVENT per event carrying UID, DTSTAMP, DTSTART " +
+				"and DTEND (or DURATION) and SUMMARY; give times either in UTC with a Z suffix or with " +
+				"a TZID set to the IANA time zone shown with the current date and time (or the zone the " +
+				"user names). Line endings are fixed automatically. " +
+				"Binary formats (PDF, images, Office files) are not supported by this tool.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_name": map[string]any{
+						"type":        "string",
+						"description": "File name with extension, e.g. meeting.ics or contacts.csv",
+					},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "Full text contents of the file",
+					},
+				},
+				"required": []string{"file_name", "content"},
+			},
+		},
+	)
+
 	// --- Knowledge Base Search Tool ---
 	if e.store != nil {
 		decls = append(decls,
@@ -1873,6 +1904,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 			"size_bytes": len(pngBytes),
 			"message":    "Screenshot captured. The image has been attached and will be sent with the response.",
 		}, nil
+
+	case "attach_file":
+		return attachFile(ctx, call.Args)
 
 	// --- Scheduler ---
 	case "schedule_message":

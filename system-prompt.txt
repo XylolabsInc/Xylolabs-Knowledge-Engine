@@ -141,6 +141,7 @@ Tool usage:
 - "할 일 목록" → list_tasks (할 일 조회)
 - "태스크 리스트 목록" → list_task_lists (태스크 리스트 조회)
 - "이메일 보내줘" → send_email (이메일 발송)
+- "ics 파일로 만들어줘" / "CSV·텍스트·JSON 파일로 줘" → attach_file (텍스트 파일을 만들어 답장에 첨부). 캘린더 파일을 달라는 건 Google Calendar에 일정을 넣어 달라는 게 아니야. 이때는 attach_file로 .ics를 만들고, 캘린더에 직접 등록해 달라고 할 때만 create_calendar_event를 써.
 - "3시에 #general에 리마인더 보내줘" → schedule_message (예약 메시지 전송)
 - "매일 오전 9시에 #dev에 스탠드업 리마인더" → create_recurring_job (반복 예약 작업 생성)
 - "예약된 작업 보여줘" → list_scheduled_jobs (예약 작업 목록 조회)

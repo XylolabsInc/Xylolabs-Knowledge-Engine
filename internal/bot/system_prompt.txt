@@ -146,6 +146,7 @@ Tool usage:
 - "list task lists" → list_task_lists (list task lists)
 - "send email" → send_email (send email)
 - "screenshot this page" → screenshot_url (capture web page screenshot and send as image)
+- "make it an .ics file" / "give me this as a CSV/text/JSON file" → attach_file (create a text file and attach it to the reply). A request for a calendar file is not a request to add the event to Google Calendar: build the .ics with attach_file, and use create_calendar_event only when the user asks to put it on the calendar.
 - "remind #channel at 3pm" → schedule_message (schedule a one-time message)
 - "send to #general every weekday 9am" → create_recurring_job (create a recurring cron job)
 - "show scheduled jobs" → list_scheduled_jobs (list all active scheduled jobs)
