@@ -10,6 +10,7 @@ import (
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
+	"github.com/xylolabsinc/xylolabs-kb/internal/plugin"
 )
 
 // attachmentsCtxKey is the context key for per-request file attachments.
@@ -37,6 +38,7 @@ type ToolExecutor struct {
 	defaultCalendarID string
 	schedulerManager  *SchedulerManager
 	store             kb.Storage
+	plugins           *plugin.Registry
 
 	mu              sync.Mutex
 	attachments     map[string][]byte // file name → data, from Slack file downloads
@@ -75,6 +77,12 @@ func (e *ToolExecutor) ClearAttachments() {
 	defer e.mu.Unlock()
 	e.attachments = make(map[string][]byte)
 	e.lastSeenEpoch = 0
+}
+
+// SetPlugins adds the tools of the registry's plugins. Call it during wiring,
+// before the executor serves requests.
+func (e *ToolExecutor) SetPlugins(r *plugin.Registry) {
+	e.plugins = r
 }
 
 // PopScreenshot removes and returns the screenshot data if present.
@@ -1105,6 +1113,20 @@ func (e *ToolExecutor) Declarations() []gemini.FunctionDeclaration {
 		)
 	}
 
+	if e.plugins != nil {
+		builtIn := make(map[string]bool, len(decls))
+		for _, d := range decls {
+			builtIn[d.Name] = true
+		}
+		for _, d := range e.plugins.Declarations() {
+			if builtIn[d.Name] {
+				e.logger.Warn("plugin tool skipped: name taken by a built-in tool", "name", d.Name)
+				continue
+			}
+			decls = append(decls, d)
+		}
+	}
+
 	return decls
 }
 
@@ -2051,6 +2073,9 @@ func (e *ToolExecutor) dispatch(ctx context.Context, call gemini.FunctionCall) (
 		return result, nil
 
 	default:
+		if e.plugins != nil && e.plugins.Handles(call.Name) {
+			return e.plugins.Dispatch(ctx, call.Name, call.Args, attachmentsFromContext(ctx))
+		}
 		return nil, fmt.Errorf("unknown tool: %s", call.Name)
 	}
 }
