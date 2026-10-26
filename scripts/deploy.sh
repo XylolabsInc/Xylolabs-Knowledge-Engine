@@ -4,9 +4,12 @@ set -euo pipefail
 # =============================================================================
 # deploy.sh — Deploy xylolabs-kb to AWS server
 #
-# Builds the Go binary for ARM64, uploads it and the DaouOffice plugin
-# (plugins/daouoffice) to the server, installs the plugin's Node packages,
-# restarts the service, and verifies health and plugin registration.
+# Builds the Go binary for ARM64 and stages it on the server with the
+# DaouOffice plugin (plugins/daouoffice) and its Node packages. Only then does
+# it stop the service (which waits for a running plugin submission), swap the
+# staged binary and plugin in, start it, and verify health and plugin
+# registration. A failed step before the stop leaves the running service and
+# its files untouched.
 #
 # Environment:
 #   DAOUOFFICE_CONFIG_LOCAL  Local company config to upload as
@@ -36,6 +39,7 @@ REMOTE_PLUGIN_CONFIG="$REMOTE_DIR/configs/daouoffice.json"
 REMOTE_NODE_DIR="/opt/node"
 PLUGIN_READY_TIMEOUT="${PLUGIN_READY_TIMEOUT:-150}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
+PLUGIN_ENABLED=false # set by detect_plugin from the server's .env
 
 # Build config
 BINARY_NAME="xylolabs-kb"
@@ -60,12 +64,18 @@ human_size() {
     }'
 }
 
+# Keepalives hold the connection through long commands: stopping the service
+# can wait minutes for a running plugin submission.
+SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=20)
+
 ssh_cmd() {
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${SERVER_USER}@${SERVER_HOST}" "$@"
+    # Callers build remote command strings here on purpose (paths, users).
+    # shellcheck disable=SC2029
+    ssh "${SSH_OPTS[@]}" "${SERVER_USER}@${SERVER_HOST}" "$@"
 }
 
 scp_cmd() {
-    scp -i "$SSH_KEY" -o StrictHostKeyChecking=no "$@"
+    scp "${SSH_OPTS[@]}" "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -91,9 +101,10 @@ upload() {
     # Ensure remote directories exist
     ssh_cmd "sudo mkdir -p $REMOTE_DIR/bin $REMOTE_DIR/scripts $REMOTE_DIR/configs"
 
-    # Upload binaries
+    # Stage the service binary; restart() swaps it in once the service has
+    # stopped, so a deploy that fails before then changes nothing that runs.
     scp_cmd "$BUILD_OUTPUT" "${SERVER_USER}@${SERVER_HOST}:/tmp/${BINARY_NAME}"
-    ssh_cmd "sudo mv /tmp/${BINARY_NAME} $REMOTE_DIR/bin/${BINARY_NAME} && sudo chmod +x $REMOTE_DIR/bin/${BINARY_NAME}"
+    ssh_cmd "sudo mv /tmp/${BINARY_NAME} $REMOTE_DIR/bin/${BINARY_NAME}.new && sudo chmod +x $REMOTE_DIR/bin/${BINARY_NAME}.new"
 
     scp_cmd "$PROJECT_DIR/bin/kb-gen-linux-arm64" "${SERVER_USER}@${SERVER_HOST}:/tmp/kb-gen"
     ssh_cmd "sudo mv /tmp/kb-gen $REMOTE_DIR/bin/kb-gen && sudo chmod +x $REMOTE_DIR/bin/kb-gen"
@@ -113,9 +124,9 @@ upload() {
 # -----------------------------------------------------------------------------
 # DaouOffice plugin
 # -----------------------------------------------------------------------------
-upload_plugin() {
+stage_plugin() {
     [ -d "$PLUGIN_SRC" ] || die "Plugin source not found: $PLUGIN_SRC"
-    log "Uploading plugins/daouoffice..."
+    log "Staging plugins/daouoffice in $REMOTE_PLUGIN_DIR.new..."
 
     # Ship the source only: no installed packages, tests, local data or
     # databases, and no local company config.
@@ -135,53 +146,63 @@ upload_plugin() {
     # records, and GNU tar on the host rejects the trailing zeros.
     COPYFILE_DISABLE=1 tar -C "$PROJECT_DIR/plugins" -cf - "${tar_opts[@]}" daouoffice \
         | gzip -c \
-        | ssh_cmd "umask 077 && cat > /tmp/xylolabs-daouoffice.tgz"
+        | ssh_cmd "umask 077 && cat > /tmp/xylolabs-daouoffice.tgz" \
+        || die "Uploading the plugin failed; the running service was not touched"
 
-    # Replace the plugin's files in place. node_modules stays (it is reinstalled
-    # below only when the lockfile or Node changed), and so does anything the
-    # server keeps inside the plugin dir.
-    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_PLUGIN_DATA_DIR" "$SERVER_USER" <<'REMOTE'
+    # Unpack next to the live plugin. The live one keeps running untouched
+    # until restart() swaps the two.
+    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_PLUGIN_DATA_DIR" "$SERVER_USER" <<'REMOTE' \
+        || die "Staging the plugin failed; the running service was not touched"
 set -euo pipefail
 dir=$1 data_dir=$2 owner=$3
+new="$dir.new"
 archive=/tmp/xylolabs-daouoffice.tgz
 trap 'rm -f "$archive"' EXIT
-[ -d "$dir" ] || sudo install -d -o "$owner" -g "$owner" -m 0755 "$dir"
-find "$dir" -mindepth 1 -maxdepth 1 ! -name node_modules ! -name data ! -name config.json -exec rm -rf {} +
-tar -xzf "$archive" -C "$dir" --strip-components=1 --no-same-owner --warning=no-unknown-keyword
+sudo mkdir -p "$(dirname "$dir")"
+sudo rm -rf "$new"
+sudo install -d -o "$owner" -g "$owner" -m 0755 "$new"
+tar -xzf "$archive" -C "$new" --strip-components=1 --no-same-owner --warning=no-unknown-keyword
 [ -d "$data_dir" ] || sudo install -d -o "$owner" -g "$owner" -m 0700 "$data_dir"
 REMOTE
-    log "Plugin uploaded to $REMOTE_PLUGIN_DIR"
+    log "Plugin staged"
 }
-
 # install_plugin_deps installs the plugin's runtime packages with the Node at
 # /opt/node and the headless Chromium Playwright drives. With "true" it also
 # installs Chromium's system packages (needs sudo; used by --provision).
 install_plugin_deps() {
-    local with_deps="${1:-false}"
-    log "Installing plugin packages..."
-    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_NODE_DIR" "$with_deps" <<'REMOTE'
+    local with_deps="${1:-false}" browsers_path="${2:-}"
+    log "Installing plugin packages in the staged plugin..."
+    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_NODE_DIR" "$with_deps" "$browsers_path" <<'REMOTE' \
+        || die "Installing the plugin's packages failed; the running service was not touched"
 set -euo pipefail
-dir=$1 node_dir=$2 with_deps=$3
+dir=$1 node_dir=$2 with_deps=$3 browsers_path=$4
 export PATH="$node_dir/bin:$PATH"
+# Install browsers where the service will look for them.
+if [ -n "$browsers_path" ]; then
+    export PLAYWRIGHT_BROWSERS_PATH="$browsers_path"
+fi
 command -v node >/dev/null || { echo "node not found in $node_dir/bin; run deploy.sh --provision" >&2; exit 1; }
-cd "$dir"
-stamp=node_modules/.xylolabs-deploy-stamp
+cd "$dir.new"
 want="$(node --version) $(sha256sum package-lock.json | cut -d' ' -f1)"
-if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
-    echo "node_modules is current for $(node --version) and this package-lock.json"
+live_stamp="$dir/node_modules/.xylolabs-deploy-stamp"
+if [ -f "$live_stamp" ] && [ "$(cat "$live_stamp")" = "$want" ]; then
+    # Same lockfile and Node: hard-link the live packages instead of
+    # reinstalling. Nothing writes to them, and npm ci would unlink, not edit.
+    cp -al "$dir/node_modules" node_modules
+    echo "Reusing node_modules: same Node ($(node --version)) and package-lock.json"
 else
     npm ci --omit=dev --no-audit --no-fund
-    echo "$want" > "$stamp"
+    echo "$want" > node_modules/.xylolabs-deploy-stamp
 fi
 if [ "$with_deps" = true ]; then
-    ./node_modules/.bin/playwright install --with-deps chromium-headless-shell
-else
-    ./node_modules/.bin/playwright install chromium-headless-shell
+    # System packages need root. Run that part with sudo, and the browser
+    # download as this user, so the browser lands in this user's cache.
+    sudo -n env PATH="$PATH" ./node_modules/.bin/playwright install-deps chromium-headless-shell
 fi
+./node_modules/.bin/playwright install chromium-headless-shell
 REMOTE
     log "Plugin packages ready"
 }
-
 # upload_plugin_config ships the company rules (approval lines, cards,
 # projects). The file holds staff names and card numbers: it is never printed
 # and never committed, and only goes up when DAOUOFFICE_CONFIG_LOCAL names it.
@@ -204,13 +225,15 @@ except (ValueError, OSError) as e:
     sys.exit("invalid JSON at line %s, column %s" % (getattr(e, "lineno", "?"), getattr(e, "colno", "?")))
 PYEOF
     log "Uploading company config ($(human_size "$src")) to $REMOTE_PLUGIN_CONFIG..."
-    ssh_cmd "sudo mkdir -p $REMOTE_DIR/configs && sudo sh -c 'umask 077 && cat > $REMOTE_PLUGIN_CONFIG.tmp && chown $SERVER_USER:$SERVER_USER $REMOTE_PLUGIN_CONFIG.tmp && chmod 0600 $REMOTE_PLUGIN_CONFIG.tmp && mv $REMOTE_PLUGIN_CONFIG.tmp $REMOTE_PLUGIN_CONFIG'" < "$src"
+    ssh_cmd "sudo mkdir -p $REMOTE_DIR/configs && sudo sh -c 'umask 077 && cat > $REMOTE_PLUGIN_CONFIG.tmp && chown $SERVER_USER:$SERVER_USER $REMOTE_PLUGIN_CONFIG.tmp && chmod 0600 $REMOTE_PLUGIN_CONFIG.tmp && mv $REMOTE_PLUGIN_CONFIG.tmp $REMOTE_PLUGIN_CONFIG'" < "$src" \
+        || die "Uploading the company config failed"
     log "Company config uploaded"
 }
 
 # provision installs what the plugin needs on a fresh host: Node.js LTS in
 # /opt/node (checked against nodejs.org's SHA256 list) and Korean fonts.
-# Chromium's system packages follow in install_plugin_deps. Not run by default.
+# Chromium's system packages follow in install_plugin_deps when the plugin is
+# enabled. Not run by default.
 provision() {
     log "Provisioning Node.js ${NODE_VERSION:-$NODE_MAJOR.x} in $REMOTE_NODE_DIR and Korean fonts..."
     ssh_cmd bash -s -- "$REMOTE_NODE_DIR" "$NODE_MAJOR" "${NODE_VERSION:-}" <<'REMOTE'
@@ -264,16 +287,68 @@ REMOTE
 
 # verify_plugin waits for main's registration line after a restart. It fails
 # the deploy when the plugin is enabled on the server but did not register.
+# server_env prints KEY's value as the service will see it through systemd's
+# EnvironmentFile=: the last KEY=value line wins, surrounding whitespace and a
+# CR are dropped, and one pair of outer quotes is removed. systemd has no
+# "export" keyword and keeps a trailing "# comment" as part of the value, so
+# those forms are reported rather than quietly accepted. Exit status 2: the
+# server has no .env.
+server_env() {
+    ssh_cmd bash -s -- "$REMOTE_DIR/.env" "$1" <<'REMOTE'
+set -euo pipefail
+file=$1 key=$2
+sudo test -f "$file" || exit 2
+if sudo grep -qE "^[[:space:]]*export[[:space:]]+${key}[[:space:]]*=" "$file"; then
+    echo "WARNING: $file has 'export ${key}=...'; systemd ignores that line, so drop the 'export'" >&2
+fi
+line=$(sudo grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" | tail -n 1 || true)
+[ -n "$line" ] || exit 0
+value=${line#*=}
+value=$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+case "$value" in
+    \"*\") value=${value#\"}; value=${value%\"} ;;
+    \'*\') value=${value#\'}; value=${value%\'} ;;
+esac
+case "$value" in
+    *[[:space:]]\#*) echo "WARNING: ${key} in $file has a trailing comment; systemd keeps it as part of the value" >&2 ;;
+esac
+printf '%s\n' "$value"
+REMOTE
+}
+
+# detect_plugin reads DAOUOFFICE_ENABLED from the server's .env once and sets
+# PLUGIN_ENABLED. It logs what it decided and why.
+detect_plugin() {
+    local value rc=0
+    value=$(server_env DAOUOFFICE_ENABLED) || rc=$?
+    PLUGIN_ENABLED=false
+    case "$rc" in
+        0) ;;
+        2)
+            log "No $REMOTE_DIR/.env on the server: treating the DaouOffice plugin as disabled"
+            return 0
+            ;;
+        *) die "Could not read $REMOTE_DIR/.env on the server" ;;
+    esac
+    case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+        1 | true | yes | on)
+            PLUGIN_ENABLED=true
+            log "DAOUOFFICE_ENABLED=$value on the server: shipping the DaouOffice plugin"
+            ;;
+        *)
+            log "DAOUOFFICE_ENABLED is '${value:-unset}' on the server: skipping the DaouOffice plugin steps"
+            ;;
+    esac
+}
+
+# verify_plugin waits for main's registration line after a restart and fails
+# the deploy when the enabled plugin did not register.
 verify_plugin() {
     local since=$1
-    if ! ssh_cmd "sudo grep -qiE '^DAOUOFFICE_ENABLED=[\"'\'']?(1|true|yes|on)[\"'\'']?[[:space:]]*$' $REMOTE_DIR/.env"; then
-        log "DaouOffice plugin is not enabled on the server; skipping the plugin check"
-        return 0
-    fi
     log "Waiting up to ${PLUGIN_READY_TIMEOUT}s for the DaouOffice plugin to register..."
     local deadline=$((SECONDS + PLUGIN_READY_TIMEOUT))
     local line tools
-    while [ "$SECONDS" -lt "$deadline" ]; do
+    while :; do
         line=$(ssh_cmd "sudo journalctl -u xylolabs-kb --since @$since -o cat --no-pager | grep -m 1 -E '\"msg\":\"daouoffice plugin (ready|disabled)' || true")
         case "$line" in
             *'daouoffice plugin ready'*)
@@ -284,15 +359,21 @@ verify_plugin() {
             *'daouoffice plugin disabled'*)
                 log "$line"
                 show_plugin_logs "$since"
+                rollback_hint
                 die "DaouOffice plugin is enabled but did not start"
                 ;;
         esac
+        [ "$SECONDS" -lt "$deadline" ] || break
         sleep 5
     done
     show_plugin_logs "$since"
+    rollback_hint
     die "DaouOffice plugin is enabled but did not register within ${PLUGIN_READY_TIMEOUT}s"
 }
 
+rollback_hint() {
+    log "The previous binary is kept as $REMOTE_DIR/bin/${BINARY_NAME}.prev and the previous plugin as $REMOTE_PLUGIN_DIR.prev"
+}
 show_plugin_logs() {
     log "Recent plugin log lines:"
     ssh_cmd "sudo journalctl -u xylolabs-kb --since @$1 -o cat --no-pager | grep -E 'daouoffice|mcpstdio|plugin' | tail -n 30" || true
@@ -353,19 +434,55 @@ upload_system_prompt() {
 # Restart service
 # -----------------------------------------------------------------------------
 restart() {
-    log "Restarting xylolabs-kb service..."
-    ssh_cmd "sudo systemctl daemon-reload && sudo systemctl enable xylolabs-kb && sudo systemctl restart xylolabs-kb"
+    local swap_plugin="${1:-false}"
+    local stop_timeout
+    stop_timeout=$(ssh_cmd "systemctl show -p TimeoutStopUSec --value xylolabs-kb" 2>/dev/null || echo "unknown")
+    log "Stopping xylolabs-kb; it first lets a running plugin submission finish (up to ${stop_timeout})..."
+    ssh_cmd bash -s -- "$REMOTE_DIR/bin/${BINARY_NAME}" "$REMOTE_PLUGIN_DIR" "$swap_plugin" <<'REMOTE' \
+        || die "Restart failed"
+set -euo pipefail
+bin=$1 dir=$2 swap_plugin=$3
+sudo systemctl daemon-reload
+sudo systemctl enable --quiet xylolabs-kb
+started=$SECONDS
+sudo systemctl stop xylolabs-kb
+echo "Stopped after $((SECONDS - started))s"
+
+# Swap in the staged binary and plugin while nothing runs, keeping the
+# previous ones for a rollback.
+if [ -e "$bin.new" ]; then
+    if [ -e "$bin" ]; then
+        sudo mv -f "$bin" "$bin.prev"
+    fi
+    sudo mv "$bin.new" "$bin"
+fi
+if [ "$swap_plugin" = true ] && [ -d "$dir.new" ]; then
+    for keep in data config.json; do
+        if [ -e "$dir/$keep" ] && [ ! -e "$dir.new/$keep" ]; then
+            sudo mv "$dir/$keep" "$dir.new/$keep"
+        fi
+    done
+    sudo rm -rf "$dir.prev"
+    if [ -e "$dir" ]; then
+        sudo mv "$dir" "$dir.prev"
+    fi
+    sudo mv "$dir.new" "$dir"
+    echo "Plugin swapped in"
+fi
+
+sudo systemctl start xylolabs-kb
+REMOTE
     sleep 3
     local status
     status=$(ssh_cmd "systemctl is-active xylolabs-kb" 2>/dev/null || echo "unknown")
     if [ "$status" != "active" ]; then
         log "WARNING: Service status is '$status'"
         ssh_cmd "sudo journalctl -u xylolabs-kb --no-pager -n 20"
+        rollback_hint
         die "Service failed to start"
     fi
     log "Service is active"
 }
-
 # -----------------------------------------------------------------------------
 # Health check
 # -----------------------------------------------------------------------------
@@ -673,23 +790,34 @@ main() {
     build
     upload
 
-    if [ "$with_provision" = true ]; then
-        provision
-    fi
-    upload_plugin
-    install_plugin_deps "$with_provision"
-    upload_plugin_config
-
     if [ "$with_env" = true ]; then
         upload_env
         upload_system_prompt
     fi
 
+    if [ "$with_provision" = true ]; then
+        provision
+    fi
+
+    # Everything up to restart() only stages files; the service keeps running.
+    detect_plugin
+    if [ "$PLUGIN_ENABLED" = true ]; then
+        local browsers_path=""
+        browsers_path=$(server_env PLAYWRIGHT_BROWSERS_PATH) || die "Could not read $REMOTE_DIR/.env on the server"
+        stage_plugin
+        install_plugin_deps "$with_provision" "$browsers_path"
+        upload_plugin_config
+    elif [ "$with_provision" = true ]; then
+        log "Chromium's system packages were not installed because the plugin is disabled; deploy again with --provision after enabling it"
+    fi
+
     local restart_at
     restart_at=$(ssh_cmd "date +%s")
-    restart
+    restart "$PLUGIN_ENABLED"
     verify_health
-    verify_plugin "$restart_at"
+    if [ "$PLUGIN_ENABLED" = true ]; then
+        verify_plugin "$restart_at"
+    fi
     notify_slack
 
     if [ "$with_cron" = true ]; then
