@@ -3,6 +3,7 @@ package plugin
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -50,26 +51,22 @@ func TestSanitizeSchema(t *testing.T) {
 			want: `{"type":"object","properties":{"kind":{"type":"string","enum":["a","b"]}}}`,
 		},
 		{
-			name: "formats other than date and date-time dropped",
-			in: `{"type":"object","properties":{"d":{"type":"string","format":"date"},"t":{"type":"string","format":"date-time"},
+			name: "formats become description hints",
+			in: `{"type":"object","properties":{"d":{"type":"string","format":"date","description":"Paid on"},"t":{"type":"string","format":"date-time"},
 				"e":{"type":"string","format":"email"},"u":{"type":"string","format":"uri","pattern":"^h","minLength":1}}}`,
-			want: `{"type":"object","properties":{"d":{"type":"string","format":"date"},"t":{"type":"string","format":"date-time"},
+			want: `{"type":"object","properties":{"d":{"type":"string","description":"Paid on (YYYY-MM-DD)"},"t":{"type":"string","description":"(RFC 3339 date-time)"},
 				"e":{"type":"string"},"u":{"type":"string"}}}`,
 		},
 		{
-			name: "nested arrays and objects, refs and extras dropped",
+			name: "nested arrays and objects, extras dropped",
 			in: `{"type":"object","$defs":{"x":{"type":"string"}},"properties":{
 				"items":{"type":"array","items":{"type":"object","properties":{"sku":{"type":"string"},"qty":{"type":"number"}},
 					"required":["sku","missing"],"additionalProperties":false},"minItems":1},
-				"tags":{"type":"array"},
-				"ref":{"$ref":"#/$defs/x"},
-				"meta":{"type":"object","additionalProperties":{"type":"string"}}},
+				"tags":{"type":"array"}},
 				"examples":[{}]}`,
 			want: `{"type":"object","properties":{
 				"items":{"type":"array","items":{"type":"object","properties":{"sku":{"type":"string"},"qty":{"type":"number"}},"required":["sku"]}},
-				"tags":{"type":"array","items":{"type":"string"}},
-				"ref":{"type":"string"},
-				"meta":{"type":"object","properties":{}}}}`,
+				"tags":{"type":"array","items":{"type":"string"}}}}`,
 		},
 		{
 			name: "string enum kept, numeric enum becomes a hint",
@@ -94,7 +91,10 @@ func TestSanitizeSchema(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := SanitizeSchema(decodeSchema(t, tt.in))
+			got, jsonArgs := SanitizeSchema(decodeSchema(t, tt.in))
+			if len(jsonArgs) != 0 {
+				t.Errorf("jsonArgs = %v, want none", jsonArgs)
+			}
 			// Compare through JSON so []string and []any match.
 			gotJSON, _ := json.Marshal(got)
 			var gotNorm, wantNorm any
@@ -107,8 +107,77 @@ func TestSanitizeSchema(t *testing.T) {
 	}
 }
 
+// Gemini rejects nested objects without properties, so free-form values
+// below the top level become JSON strings and their paths are reported.
+func TestSanitizeSchemaFreeFormObjects(t *testing.T) {
+	in := decodeSchema(t, `{"type":"object","$defs":{"x":{"type":"string"}},"properties":{
+		"meta":{"type":"object","additionalProperties":{"type":"string"},"description":"Extra fields"},
+		"ref":{"$ref":"#/$defs/x"},
+		"any":{"description":"Anything"},
+		"maybe":{"anyOf":[{"type":"object"},{"type":"null"}]},
+		"rows":{"type":"array","items":{"type":"object","properties":{"memo":{"type":"object"}}}},
+		"blobs":{"type":"array","items":{"type":"object"}},
+		"plain":{"type":"string"}}}`)
+	got, jsonArgs := SanitizeSchema(in)
+	want := `{"type":"object","properties":{
+		"meta":{"type":"string","description":"Extra fields (a JSON object, sent as a string)"},
+		"ref":{"type":"string","description":"(any JSON value; send objects and lists as JSON text)"},
+		"any":{"type":"string","description":"Anything (any JSON value; send objects and lists as JSON text)"},
+		"maybe":{"type":"string","nullable":true,"description":"(a JSON object, sent as a string)"},
+		"rows":{"type":"array","items":{"type":"object","properties":{"memo":{"type":"string","description":"(a JSON object, sent as a string)"}}}},
+		"blobs":{"type":"array","items":{"type":"string","description":"(a JSON object, sent as a string)"}},
+		"plain":{"type":"string"}}}`
+	gotJSON, _ := json.Marshal(got)
+	var gotNorm, wantNorm any
+	_ = json.Unmarshal(gotJSON, &gotNorm)
+	_ = json.Unmarshal([]byte(want), &wantNorm)
+	if !reflect.DeepEqual(gotNorm, wantNorm) {
+		t.Errorf("SanitizeSchema()\n got  %s\n want %s", gotJSON, want)
+	}
+	paths := map[string]bool{}
+	for _, p := range jsonArgs {
+		paths[strings.Join(p, ".")] = true
+	}
+	wantPaths := map[string]bool{"meta": true, "ref": true, "any": true, "maybe": true, "rows.[].memo": true, "blobs.[]": true}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Errorf("jsonArgs = %v, want %v", paths, wantPaths)
+	}
+
+	// A free-form object at the top level stays an object: the model can
+	// still call a tool without arguments.
+	top, topArgs := SanitizeSchema(decodeSchema(t, `{"type":"object","additionalProperties":true}`))
+	if top["type"] != "object" || len(topArgs) != 0 {
+		t.Errorf("top-level free-form = %v, %v", top, topArgs)
+	}
+}
+
+func TestDecodeJSONArgs(t *testing.T) {
+	args := map[string]any{
+		"meta":  `{"a":1}`,
+		"list":  `[1,2]`,
+		"plain": `not json`,
+		"num":   `42`,
+		"rows":  []any{map[string]any{"memo": `{"k":"v"}`}, map[string]any{"memo": "x"}, "skip"},
+		"blobs": []any{`{"b":true}`, 7},
+		"done":  map[string]any{"already": "object"},
+	}
+	DecodeJSONArgs(args, [][]string{{"meta"}, {"list"}, {"plain"}, {"num"}, {"rows", "[]", "memo"}, {"blobs", "[]"}, {"done"}, {"missing", "x"}})
+	want := map[string]any{
+		"meta":  map[string]any{"a": float64(1)},
+		"list":  []any{float64(1), float64(2)},
+		"plain": "not json",
+		"num":   "42",
+		"rows":  []any{map[string]any{"memo": map[string]any{"k": "v"}}, map[string]any{"memo": "x"}, "skip"},
+		"blobs": []any{map[string]any{"b": true}, 7},
+		"done":  map[string]any{"already": "object"},
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("DecodeJSONArgs() =\n %#v\nwant\n %#v", args, want)
+	}
+}
+
 func TestSanitizeSchemaNil(t *testing.T) {
-	got := SanitizeSchema(nil)
+	got, _ := SanitizeSchema(nil)
 	if got["type"] != "object" {
 		t.Errorf("SanitizeSchema(nil) = %v", got)
 	}

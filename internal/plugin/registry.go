@@ -42,8 +42,9 @@ type Store interface {
 type ActionKind string
 
 const (
-	ActionCall      ActionKind = "call"       // run a write tool in Mode execute
-	ActionLoginKick ActionKind = "login_kick" // sign in, ending another session, then re-run the message
+	ActionCall       ActionKind = "call"       // run a write tool in Mode execute
+	ActionLoginKick  ActionKind = "login_kick" // sign in, ending another session, then re-run the message
+	ActionDisconnect ActionKind = "disconnect" // forget the person's stored account
 )
 
 // ActionStatus is where an action is in its life.
@@ -101,6 +102,10 @@ const (
 	maxModelTextRunes = 20000
 	maxModelDataBytes = 64 << 10
 	minSecretLen      = 4
+
+	// stateWriteTimeout bounds a status write made after a call, which must
+	// land even when the call used up its own deadline.
+	stateWriteTimeout = 10 * time.Second
 )
 
 var (
@@ -123,6 +128,8 @@ type Registry struct {
 
 	mu      sync.RWMutex
 	plugins []Plugin
+
+	vaultWarn sync.Once
 }
 
 // NewRegistry creates a Registry. vault may be nil; plugins that need
@@ -296,9 +303,10 @@ func (r *Registry) Declarations() []gemini.FunctionDeclaration {
 			Parameters: pluginParam,
 		},
 		gemini.FunctionDeclaration{
-			Name:        toolAccountsDisconnect,
-			Description: "Forget the user's stored account for the given system. Use only when the user asks to disconnect.",
-			Parameters:  pluginParam,
+			Name: toolAccountsDisconnect,
+			Description: "Ask the user to confirm forgetting their stored account for the given system. It only posts a " +
+				"confirmation button; nothing is removed until the user presses it. Use only when the user asks to disconnect.",
+			Parameters: pluginParam,
 		},
 	)
 }
@@ -364,6 +372,7 @@ func (r *Registry) Dispatch(ctx context.Context, name string, args map[string]an
 	if !ok {
 		return nil, fmt.Errorf("plugin: unknown tool %s", name)
 	}
+	DecodeJSONArgs(args, tool.JSONArgs)
 	c := &call{p: p, tool: tool, id: id, args: args, files: attachments}
 	if len(p.AccountFields()) > 0 {
 		acct, creds, err := r.openAccount(ctx, id.Key(), p)
@@ -481,8 +490,15 @@ func (r *Registry) preview(ctx context.Context, c *call) (map[string]any, error)
 // callFailed turns a plugin error into what the model sees, queueing the
 // prompts the error calls for.
 func (r *Registry) callFailed(ctx context.Context, c *call, err error) (map[string]any, error) {
+	err = redactErr(err, c.secrets)
 	title := c.p.Title()
 	switch {
+	case errors.Is(err, ErrVaultOpen):
+		return map[string]any{
+			"status":  "error",
+			"code":    "SERVER_CONFIG",
+			"message": "서버 설정 문제로 계정을 읽지 못했습니다. 관리자에게 알려 주세요.",
+		}, nil
 	case errors.Is(err, ErrNotConnected):
 		r.queueConnect(ctx, c.id, c.p, fmt.Sprintf("%s 계정이 아직 연결되지 않았습니다. 버튼을 누르면 뜨는 입력 창에 아이디와 비밀번호를 넣어 주세요. 비밀번호는 채팅에 쓰지 마세요.", title))
 		return map[string]any{
@@ -572,12 +588,16 @@ func (r *Registry) Approve(ctx context.Context, actionID string, by Identity) (*
 	if err != nil {
 		return nil, act, err
 	}
-	if act.Kind != ActionCall {
-		return nil, act, fmt.Errorf("plugin: action %s is %s, not a call", actionID, act.Kind)
-	}
 	p := r.plugin(act.Plugin)
 	if p == nil {
 		return nil, act, fmt.Errorf("plugin: action %s: %w: %s", actionID, ErrUnknownPlugin, act.Plugin)
+	}
+	switch act.Kind {
+	case ActionCall:
+	case ActionDisconnect:
+		return r.approveDisconnect(ctx, p, act)
+	default:
+		return nil, act, fmt.Errorf("plugin: action %s is %s, not a call", actionID, act.Kind)
 	}
 	if err := r.claim(ctx, p, act); err != nil {
 		return nil, act, err
@@ -588,14 +608,14 @@ func (r *Registry) Approve(ctx context.Context, actionID string, by Identity) (*
 
 	req := CallRequest{Identity: identityFor(by, act.Origin), Tool: act.Tool, Mode: ModeExecute, Attachments: act.Attachments}
 	if err := json.Unmarshal([]byte(row.Args), &req.Args); err != nil {
-		r.finish(ectx, p, act, StatusFailed, mustJSON(map[string]string{"error": "stored arguments are unreadable"}, ""))
+		r.finish(ctx, p, act, StatusFailed, mustJSON(map[string]string{"error": "stored arguments are unreadable"}, ""))
 		return nil, act, fmt.Errorf("plugin: action %s: decode args: %w", actionID, err)
 	}
 	var secrets []string
 	if len(p.AccountFields()) > 0 {
 		acct, creds, err := r.openAccount(ectx, act.UserKey, p)
 		if err != nil {
-			r.reopen(ectx, act)
+			r.reopen(ctx, act)
 			return nil, act, err
 		}
 		req.Credentials, req.AllowKick, secrets = creds, acct.AllowKick, secretValues(p, creds)
@@ -606,18 +626,19 @@ func (r *Registry) Approve(ctx context.Context, actionID string, by Identity) (*
 	if err != nil {
 		if errors.Is(err, ErrNotConnected) || errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrDuplicateSession) {
 			if errors.Is(err, ErrAuthFailed) {
-				r.markInvalid(ectx, act.UserKey, p)
+				r.markInvalid(ctx, act.UserKey, p)
 			}
-			r.reopen(ectx, act)
-			return nil, act, err
+			r.reopen(ctx, act)
+			return nil, act, redactErr(err, secrets)
 		}
+		err = redactErr(err, secrets)
 		msg := err.Error()
 		var pe *Error
 		if errors.As(err, &pe) {
 			msg = pe.Message
 		}
-		r.finish(ectx, p, act, StatusFailed, mustJSON(map[string]string{"error": redact(msg, secrets)}, ""))
-		r.logger.Warn("plugin action failed", "plugin", p.Name(), "tool", act.Tool, "action", actionID, "error", redact(err.Error(), secrets))
+		r.finish(ctx, p, act, StatusFailed, mustJSON(map[string]string{"error": msg}, ""))
+		r.logger.Warn("plugin action failed", "plugin", p.Name(), "tool", act.Tool, "action", actionID, "error", err)
 		return nil, act, fmt.Errorf("plugin: action %s: %w", actionID, err)
 	}
 	if res == nil {
@@ -626,9 +647,25 @@ func (r *Registry) Approve(ctx context.Context, actionID string, by Identity) (*
 	res.Text = redact(res.Text, secrets)
 	stored := map[string]any{"text": res.Text}
 	addData(stored, res.Data, secrets)
-	r.finish(ectx, p, act, StatusDone, mustJSON(stored, ""))
+	r.finish(ctx, p, act, StatusDone, mustJSON(stored, ""))
 	r.logger.Info("plugin action done", "plugin", p.Name(), "tool", act.Tool, "action", actionID, "files", len(res.Files))
 	return res, act, nil
+}
+
+// approveDisconnect forgets the owner's account after they confirmed it.
+func (r *Registry) approveDisconnect(ctx context.Context, p Plugin, act *Action) (*Result, *Action, error) {
+	if err := r.claim(ctx, p, act); err != nil {
+		return nil, act, err
+	}
+	sctx, cancel := stateCtx(ctx)
+	defer cancel()
+	if err := r.store.DeletePluginAccount(sctx, act.UserKey, act.Plugin); err != nil {
+		r.finish(ctx, p, act, StatusFailed, mustJSON(map[string]string{"error": "could not delete the account"}, ""))
+		return nil, act, fmt.Errorf("plugin: disconnect %s: %w", act.Plugin, err)
+	}
+	r.finish(ctx, p, act, StatusDone, "")
+	r.logger.Info("plugin account disconnected", "plugin", act.Plugin, "user", act.UserKey)
+	return &Result{Text: fmt.Sprintf("%s 계정 연결을 해제했습니다. 저장된 아이디와 비밀번호를 지웠습니다.", p.Title())}, act, nil
 }
 
 // LoginAndResume signs the owner in with permission to end their other
@@ -692,10 +729,10 @@ func (r *Registry) login(ctx context.Context, userKey string, by Identity, p Plu
 		Identity: by, Tool: tool.Name, Args: map[string]any{}, Credentials: creds, AllowKick: true, Mode: ModeExecute,
 	})
 	if errors.Is(err, ErrAuthFailed) {
-		r.markInvalid(cctx, userKey, p)
+		r.markInvalid(ctx, userKey, p)
 	}
 	if err != nil {
-		return fmt.Errorf("plugin: %s: login: %w", p.Name(), err)
+		return redactErr(fmt.Errorf("plugin: %s: login: %w", p.Name(), err), secretValues(p, creds))
 	}
 	r.logger.Info("plugin login with kick", "plugin", p.Name(), "user", userKey)
 	return nil
@@ -841,15 +878,16 @@ func (r *Registry) Connect(ctx context.Context, id Identity, pluginName string, 
 		creds[f.Name] = v
 	}
 
+	secrets := secretValues(p, creds)
 	cctx, cancel := context.WithTimeout(ctx, r.callTimeout)
 	defer cancel()
 	res, err := p.Call(cctx, CallRequest{Identity: id, Tool: tool.Name, Args: args, Credentials: creds, Mode: ModeExecute})
 	if err != nil && !errors.Is(err, ErrDuplicateSession) {
 		var pe *Error
 		if errors.As(err, &pe) {
-			return "", pe
+			return "", redactErr(pe, secrets)
 		}
-		return "", fmt.Errorf("plugin: %s: connect: %w", pluginName, err)
+		return "", redactErr(fmt.Errorf("plugin: %s: connect: %w", pluginName, err), secrets)
 	}
 	name, accountID := profileOf(res, creds)
 
@@ -968,15 +1006,49 @@ func (r *Registry) accountsConnect(ctx context.Context, id Identity, args map[st
 	}, nil
 }
 
+// accountsDisconnect queues a confirmation instead of deleting: the request
+// can come from text the model read (a document, a forwarded message), so
+// only the person's button press removes the account.
 func (r *Registry) accountsDisconnect(ctx context.Context, id Identity, args map[string]any) (map[string]any, error) {
 	p, err := r.accountPluginArg(args)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.Disconnect(ctx, id, p.Name()); err != nil {
-		return nil, err
+	acct, err := r.store.GetPluginAccount(ctx, id.Key(), p.Name())
+	if err != nil {
+		return nil, fmt.Errorf("plugin: disconnect %s: load account: %w", p.Name(), err)
 	}
-	return map[string]any{"status": "disconnected", "plugin": p.Name(), "title": p.Title()}, nil
+	if acct == nil {
+		return map[string]any{
+			"status":  "not_connected",
+			"message": fmt.Sprintf("The user has no connected %s account, so there is nothing to disconnect.", p.Title()),
+		}, nil
+	}
+	actionID := r.newID()
+	now := r.now().UTC()
+	preview := fmt.Sprintf("%s 계정(%s) 연결을 해제할까요? 해제하면 저장된 아이디와 비밀번호를 지웁니다.", p.Title(), acct.AccountName)
+	if err := r.store.CreatePluginAction(ctx, storage.PluginAction{
+		ID:        actionID,
+		Kind:      string(ActionDisconnect),
+		UserKey:   id.Key(),
+		Plugin:    p.Name(),
+		Args:      "{}",
+		Origin:    mustJSON(originOf(id, false), "{}"),
+		Channel:   id.Channel,
+		Thread:    id.ThreadID,
+		Preview:   preview,
+		Status:    string(StatusPending),
+		CreatedAt: now,
+		ExpiresAt: now.Add(r.actionTTL),
+	}); err != nil {
+		return nil, fmt.Errorf("plugin: disconnect %s: store action: %w", p.Name(), err)
+	}
+	r.queuePrompt(ctx, Prompt{Kind: PromptDisconnect, UserKey: id.Key(), Plugin: p.Name(), ActionID: actionID, Text: preview})
+	return map[string]any{
+		"status": "awaiting_confirmation",
+		"message": fmt.Sprintf("Nothing was changed. A message with buttons was posted; the %s account is disconnected "+
+			"only if the user presses the disconnect button. Tell the user briefly.", p.Title()),
+	}, nil
 }
 
 // accountPluginArg reads the "plugin" argument, defaulting to the only
@@ -1014,13 +1086,21 @@ func (r *Registry) openAccount(ctx context.Context, userKey string, p Plugin) (*
 	}
 	creds, err := r.vault.Open(acct.Secret, bindKey(userKey, p.Name()))
 	if err != nil {
-		r.logger.Warn("plugin account does not open; marking invalid", "plugin", p.Name(), "user", userKey, "error", err)
-		return nil, nil, ErrAuthFailed
+		// Not the person's fault: every account fails the same way when the key
+		// changed, so say it once, loudly, and leave the accounts as they are.
+		r.vaultWarn.Do(func() {
+			r.logger.Error("stored plugin accounts do not decrypt; was PLUGIN_SECRET_KEY changed? Accounts are left as they are",
+				"plugin", p.Name(), "error", err)
+		})
+		r.logger.Debug("plugin account does not decrypt", "plugin", p.Name(), "user", userKey)
+		return nil, nil, ErrVaultOpen
 	}
 	return acct, creds, nil
 }
 
 func (r *Registry) markInvalid(ctx context.Context, userKey string, p Plugin) {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
 	if err := r.store.SetPluginAccountStatus(ctx, userKey, p.Name(), accountInvalid); err != nil {
 		r.logger.Warn("plugin: mark account invalid", "plugin", p.Name(), "user", userKey, "error", err)
 	}
@@ -1077,6 +1157,8 @@ func (r *Registry) claim(ctx context.Context, p Plugin, act *Action) error {
 }
 
 func (r *Registry) expire(ctx context.Context, p Plugin, act *Action) {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
 	if ok, err := r.store.TransitionPluginAction(ctx, act.ID, string(StatusPending), string(StatusExpired), ""); err != nil {
 		r.logger.Warn("plugin: expire action", "action", act.ID, "error", err)
 	} else if ok {
@@ -1088,6 +1170,8 @@ func (r *Registry) expire(ctx context.Context, p Plugin, act *Action) {
 // reopen puts a running action back to pending after a failure that happened
 // before the plugin did anything.
 func (r *Registry) reopen(ctx context.Context, act *Action) {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
 	if _, err := r.store.TransitionPluginAction(ctx, act.ID, string(StatusRunning), string(StatusPending), ""); err != nil {
 		r.logger.Warn("plugin: reopen action", "action", act.ID, "error", err)
 		return
@@ -1097,6 +1181,8 @@ func (r *Registry) reopen(ctx context.Context, act *Action) {
 
 // finish ends a running action and removes its attachments.
 func (r *Registry) finish(ctx context.Context, p Plugin, act *Action, status ActionStatus, result string) {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
 	if _, err := r.store.TransitionPluginAction(ctx, act.ID, string(StatusRunning), string(status), result); err != nil {
 		r.logger.Warn("plugin: finish action", "action", act.ID, "status", status, "error", err)
 	}
@@ -1174,6 +1260,30 @@ func secretValues(p Plugin, creds map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// stateCtx gives a status write its own deadline, detached from a call
+// context that may already be over.
+func stateCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), stateWriteTimeout)
+}
+
+// redactErr returns err with any secret value removed from its text. It
+// keeps err (and its chain) when nothing needs removing, and keeps the code
+// of a plugin *Error when something does.
+func redactErr(err error, secrets []string) error {
+	if err == nil || len(secrets) == 0 {
+		return err
+	}
+	msg := err.Error()
+	if redact(msg, secrets) == msg {
+		return err
+	}
+	var pe *Error
+	if errors.As(err, &pe) {
+		return &Error{Code: pe.Code, Message: redact(pe.Message, secrets), OutcomeUnknown: pe.OutcomeUnknown}
+	}
+	return errors.New(redact(msg, secrets))
 }
 
 // redact replaces any secret value in s, in case a plugin echoes one.

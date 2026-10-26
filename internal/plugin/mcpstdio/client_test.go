@@ -114,7 +114,7 @@ func TestClientTools(t *testing.T) {
 		write bool
 		role  string
 	}{
-		"echo": {false, ""}, "submit": {true, ""}, "save_note": {false, ""}, "plain": {true, ""},
+		"echo": {false, ""}, "submit": {true, ""}, "save_note": {false, ""}, "plain": {true, ""}, "harmless_write": {true, ""},
 		"connect": {false, plugin.RoleConnect}, "busy": {false, ""}, "files": {false, ""},
 		"kind_write": {true, ""},
 	} {
@@ -326,18 +326,66 @@ func TestIsWrite(t *testing.T) {
 	tests := []struct {
 		name string
 		a    *mcp.ToolAnnotations
+		kind string
 		want bool
 	}{
-		{"no annotations", nil, true},
-		{"read only", &mcp.ToolAnnotations{ReadOnlyHint: true}, false},
-		{"destructive unset defaults to true", &mcp.ToolAnnotations{}, true},
-		{"destructive false is a local write", &mcp.ToolAnnotations{DestructiveHint: &no}, false},
-		{"read only wins over destructive", &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: &yes}, false},
+		{"no annotations, no kind", nil, "", true},
+		{"read only", &mcp.ToolAnnotations{ReadOnlyHint: true}, "", false},
+		{"not read only", &mcp.ToolAnnotations{}, "", true},
+		{"destructive false no longer opts out", &mcp.ToolAnnotations{DestructiveHint: &no}, "", true},
+		{"kind local", &mcp.ToolAnnotations{DestructiveHint: &no}, "local", false},
+		{"kind read without annotations", nil, "read", false},
+		{"kind write beats read only", &mcp.ToolAnnotations{ReadOnlyHint: true}, "write", true},
+		{"unknown kind falls back to annotations", &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: &yes}, "other", false},
+		{"unknown kind without read only", nil, "other", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isWrite(tt.a); got != tt.want {
+			if got := isWrite(tt.a, tt.kind); got != tt.want {
 				t.Errorf("isWrite() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolError(t *testing.T) {
+	tests := []struct {
+		name    string
+		res     *mcp.CallToolResult
+		want    plugin.Error
+		matches error
+	}{
+		{
+			name:    "coded error",
+			res:     &mcp.CallToolResult{IsError: true, StructuredContent: map[string]any{"code": "AUTH_FAILED", "message": "틀림"}},
+			want:    plugin.Error{Code: "AUTH_FAILED", Message: "틀림"},
+			matches: plugin.ErrAuthFailed,
+		},
+		{
+			name: "login error after a write is an unknown outcome",
+			res: &mcp.CallToolResult{IsError: true, StructuredContent: map[string]any{
+				"code": "UPSTREAM", "message": "중간에 실패", "data": map[string]any{"afterWrite": true, "original": "DUPLICATE_SESSION"},
+			}},
+			want: plugin.Error{Code: "UPSTREAM", Message: "중간에 실패", OutcomeUnknown: true},
+		},
+		{
+			name: "SDK argument rejection has no code",
+			res:  &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Input validation error"}}},
+			want: plugin.Error{Code: plugin.CodeValidation, Message: "Input validation error"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := toolError(tt.res)
+			var pe *plugin.Error
+			if !errors.As(err, &pe) || *pe != tt.want {
+				t.Fatalf("toolError() = %#v, want %#v", err, tt.want)
+			}
+			if tt.matches != nil && !errors.Is(err, tt.matches) {
+				t.Errorf("errors.Is(%v, %v) = false", err, tt.matches)
+			}
+			if tt.want.OutcomeUnknown && errors.Is(err, plugin.ErrDuplicateSession) {
+				t.Error("an after-write failure must not look like a login-stage error")
 			}
 		})
 	}

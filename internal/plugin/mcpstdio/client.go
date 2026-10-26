@@ -1,10 +1,11 @@
 // Package mcpstdio runs a plugin as an MCP server on stdio (any language) and
 // adapts it to plugin.Plugin, using the official MCP Go SDK.
 //
-// Tool annotations decide gating: readOnlyHint → read tool; otherwise
-// destructiveHint (which MCP defaults to true) → write tool behind approval.
-// A tool whose _meta "xylolabs/kind" is "write" is gated whatever its
-// annotations say.
+// Gating fails closed: a tool runs without approval only when its _meta
+// "xylolabs/kind" is "read" or "local", or, with no kind, when its
+// annotations say readOnlyHint. Kind "write" always gates; destructiveHint is
+// ignored, so a plugin cannot opt out of approval by declaring a write
+// harmless.
 // A tool's _meta "xylolabs/role" ("connect", "login") hides it from the
 // model. Each tools/call carries the person and their credentials in request
 // _meta (see the meta* keys). The child process gets a minimal environment, so
@@ -303,11 +304,13 @@ func listTools(ctx context.Context, session *mcp.ClientSession) ([]plugin.Tool, 
 		schema, _ := t.InputSchema.(map[string]any)
 		role, _ := t.Meta[metaRole].(string)
 		kind, _ := t.Meta[metaKind].(string)
+		params, jsonArgs := plugin.SanitizeSchema(schema)
 		tools = append(tools, plugin.Tool{
 			Name:        t.Name,
 			Description: t.Description,
-			Parameters:  plugin.SanitizeSchema(schema),
-			Write:       isWrite(t.Annotations) || kind == "write",
+			Parameters:  params,
+			JSONArgs:    jsonArgs,
+			Write:       isWrite(t.Annotations, kind),
 			Role:        role,
 		})
 		if role == plugin.RoleConnect {
@@ -317,16 +320,16 @@ func listTools(ctx context.Context, session *mcp.ClientSession) ([]plugin.Tool, 
 	return tools, fields, nil
 }
 
-// isWrite applies the MCP defaults: a tool without annotations is not
-// read-only, and destructiveHint defaults to true.
-func isWrite(a *mcp.ToolAnnotations) bool {
-	if a == nil {
+// isWrite reports whether a tool is gated behind approval. Only kind "read"
+// or "local", or readOnlyHint when there is no kind, lets a tool run at once.
+func isWrite(a *mcp.ToolAnnotations, kind string) bool {
+	switch kind {
+	case "write":
 		return true
-	}
-	if a.ReadOnlyHint {
+	case "read", "local":
 		return false
 	}
-	return a.DestructiveHint == nil || *a.DestructiveHint
+	return a == nil || !a.ReadOnlyHint
 }
 
 func requestMeta(req plugin.CallRequest) mcp.Meta {
@@ -380,12 +383,16 @@ func isDone(done chan struct{}) bool {
 
 // toolError maps an isError result to a *plugin.Error. A result without a
 // code is the SDK rejecting the arguments against the input schema, so it
-// counts as VALIDATION.
+// counts as VALIDATION. data.afterWrite means the plugin had already changed
+// something on the server when it failed, so the outcome is unknown.
 func toolError(res *mcp.CallToolResult) error {
 	code, message := "", ""
+	unknown := false
 	if m, ok := res.StructuredContent.(map[string]any); ok {
 		code, _ = m["code"].(string)
 		message, _ = m["message"].(string)
+		data, _ := m["data"].(map[string]any)
+		unknown = data["afterWrite"] == true || m["afterWrite"] == true
 	}
 	if message == "" {
 		message = joinText(res.Content)
@@ -393,7 +400,7 @@ func toolError(res *mcp.CallToolResult) error {
 	if code == "" {
 		code = plugin.CodeValidation
 	}
-	return &plugin.Error{Code: code, Message: message}
+	return &plugin.Error{Code: code, Message: message, OutcomeUnknown: unknown}
 }
 
 func joinText(content []mcp.Content) string {

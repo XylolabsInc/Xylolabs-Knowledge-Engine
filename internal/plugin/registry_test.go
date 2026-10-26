@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,8 @@ type fakePlugin struct {
 	fields  []AccountField
 	dataDir string
 	respond func(req CallRequest) (*Result, error)
+	// blockExecute makes execute calls wait for their context to end.
+	blockExecute bool
 
 	mu    sync.Mutex
 	calls []fakeCall
@@ -43,7 +46,11 @@ func (f *fakePlugin) AccountFields() []AccountField { return f.fields }
 func (f *fakePlugin) DataDir() string               { return f.dataDir }
 func (f *fakePlugin) Close() error                  { return nil }
 
-func (f *fakePlugin) Call(_ context.Context, req CallRequest) (*Result, error) {
+func (f *fakePlugin) Call(ctx context.Context, req CallRequest) (*Result, error) {
+	if f.blockExecute && req.Mode == ModeExecute {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	files := map[string][]byte{}
 	for _, a := range req.Attachments {
 		data, err := os.ReadFile(a.Path)
@@ -801,13 +808,203 @@ func TestAccountTools(t *testing.T) {
 		t.Errorf("accounts_connect(unknown) = %v", err)
 	}
 
-	env.connect(t, false)
-	out, err = env.reg.Dispatch(ctx, "accounts_disconnect", map[string]any{}, nil)
-	if err != nil || out["status"] != "disconnected" {
-		t.Fatalf("accounts_disconnect = %v, %v", out, err)
+}
+
+// accounts_disconnect can be triggered by text the model read, so it only
+// posts a confirmation; the owner's button press removes the account.
+func TestDisconnectNeedsConfirmation(t *testing.T) {
+	env := newTestEnv(t)
+	ctx, prompts := requestCtx(owner)
+	out, err := env.reg.Dispatch(ctx, "accounts_disconnect", map[string]any{}, nil)
+	if err != nil || out["status"] != "not_connected" || len(prompts.List()) != 0 {
+		t.Fatalf("disconnect without an account = %v, %v, prompts %+v", out, err, prompts.List())
 	}
-	if acct, _ := env.store.GetPluginAccount(context.Background(), "slack:U1", "testoffice"); acct != nil {
-		t.Error("account still stored after disconnect")
+
+	env.connect(t, false)
+	stored := func() bool {
+		acct, _ := env.store.GetPluginAccount(context.Background(), "slack:U1", "testoffice")
+		return acct != nil
+	}
+	ask := func() string {
+		ctx, prompts := requestCtx(owner)
+		out, err := env.reg.Dispatch(ctx, "accounts_disconnect", map[string]any{"plugin": "testoffice"}, nil)
+		if err != nil || out["status"] != "awaiting_confirmation" || !strings.Contains(out["message"].(string), "Nothing was changed") {
+			t.Fatalf("accounts_disconnect = %v, %v", out, err)
+		}
+		list := prompts.List()
+		if len(list) != 1 || list[0].Kind != PromptDisconnect || list[0].ActionID == "" || !strings.Contains(list[0].Text, "홍길동 (개발본부)") {
+			t.Fatalf("prompts = %+v", list)
+		}
+		return list[0].ActionID
+	}
+
+	id := ask()
+	if !stored() {
+		t.Fatal("account removed before confirmation")
+	}
+	if _, _, err := env.reg.Approve(context.Background(), id, Identity{Platform: "slack", UserID: "U9"}); !errors.Is(err, ErrNotOwner) || !stored() {
+		t.Errorf("stranger's confirmation = %v; account stored %v", err, stored())
+	}
+	if _, err := env.reg.Cancel(context.Background(), id, owner); err != nil || !stored() {
+		t.Errorf("cancel = %v; account stored %v", err, stored())
+	}
+
+	id = ask()
+	res, act, err := env.reg.Approve(context.Background(), id, owner)
+	if err != nil || act.Status != StatusDone || !strings.Contains(res.Text, "연결을 해제했습니다") {
+		t.Fatalf("Approve(disconnect) = %+v, %+v, %v", res, act, err)
+	}
+	if stored() {
+		t.Error("account still stored after a confirmed disconnect")
+	}
+	if len(env.p.calls) != 1 { // only the connect call
+		t.Errorf("plugin calls = %d; disconnecting should not call the plugin", len(env.p.calls))
+	}
+}
+
+func TestDispatchDecodesJSONArgs(t *testing.T) {
+	env := newTestEnv(t)
+	env.connect(t, false)
+	env.p.tools = append(env.p.tools,
+		Tool{Name: "tag", Description: "Tag", JSONArgs: [][]string{{"meta"}}},
+		Tool{Name: "file_claim", Description: "File", Write: true, JSONArgs: [][]string{{"rows", "[]", "extra"}}},
+	)
+	ctx, prompts := requestCtx(owner)
+	if _, err := env.reg.Dispatch(ctx, "testoffice_tag", map[string]any{"meta": `{"color":"red"}`}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.p.callsTo("tag")[0].req.Args["meta"]; !reflect.DeepEqual(got, map[string]any{"color": "red"}) {
+		t.Errorf("read call got meta %#v, want the decoded object", got)
+	}
+
+	if _, err := env.reg.Dispatch(ctx, "testoffice_file_claim",
+		map[string]any{"rows": []any{map[string]any{"extra": `{"n":1}`}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	id := prompts.List()[0].ActionID
+	if _, _, err := env.reg.Approve(context.Background(), id, owner); err != nil {
+		t.Fatal(err)
+	}
+	calls := env.p.callsTo("file_claim")
+	want := []any{map[string]any{"extra": map[string]any{"n": float64(1)}}}
+	for _, c := range calls {
+		if !reflect.DeepEqual(c.req.Args["rows"], want) {
+			t.Errorf("%s call got rows %#v, want decoded objects", c.req.Mode, c.req.Args["rows"])
+		}
+	}
+	if len(calls) != 2 {
+		t.Errorf("file_claim calls = %d, want preview and execute", len(calls))
+	}
+}
+
+// A changed PLUGIN_SECRET_KEY makes every stored account unreadable. That is
+// a server problem: accounts must not be marked invalid, and nobody is asked
+// to reconnect.
+func TestVaultKeyChange(t *testing.T) {
+	env := newTestEnv(t)
+	env.connect(t, false)
+	id := env.submit(t, nil)
+
+	logs := &syncBuffer{}
+	other, err := NewVault(testKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(env.store, other, slog.New(slog.NewTextHandler(logs, nil)))
+	if err := reg.Register(env.p); err != nil {
+		t.Fatal(err)
+	}
+	before := len(env.p.calls)
+	for range 2 {
+		ctx, prompts := requestCtx(owner)
+		out, err := reg.Dispatch(ctx, "testoffice_card_usage", nil, nil)
+		if err != nil || out["status"] != "error" || out["code"] != "SERVER_CONFIG" || out["message"] != "서버 설정 문제로 계정을 읽지 못했습니다. 관리자에게 알려 주세요." {
+			t.Fatalf("Dispatch() = %v, %v", out, err)
+		}
+		if len(prompts.List()) != 0 {
+			t.Errorf("prompts = %+v; nobody should be asked to reconnect", prompts.List())
+		}
+	}
+	if acct, _ := env.store.GetPluginAccount(context.Background(), "slack:U1", "testoffice"); acct.Status != "ok" {
+		t.Errorf("account status = %s, want ok", acct.Status)
+	}
+	if n := strings.Count(logs.String(), "PLUGIN_SECRET_KEY"); n != 1 {
+		t.Errorf("key warning logged %d times, want once:\n%s", n, logs.String())
+	}
+	if _, act, err := reg.Approve(context.Background(), id, owner); !errors.Is(err, ErrVaultOpen) || act.Status != StatusPending {
+		t.Errorf("Approve() = %v, %+v; want ErrVaultOpen with the action pending again", err, act)
+	}
+	if len(env.p.calls) != before {
+		t.Error("the plugin was called without credentials")
+	}
+}
+
+func TestSecretsRedactedFromErrors(t *testing.T) {
+	t.Run("read call error", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.connect(t, false)
+		env.p.respond = func(CallRequest) (*Result, error) { return nil, errors.New("boom with " + testPassword) }
+		ctx, _ := requestCtx(owner)
+		_, err := env.reg.Dispatch(ctx, "testoffice_card_usage", nil, nil)
+		if err == nil || strings.Contains(err.Error(), testPassword) {
+			t.Errorf("Dispatch() error = %v", err)
+		}
+	})
+
+	t.Run("connect error", func(t *testing.T) {
+		for _, cause := range []error{
+			&Error{Code: CodeUpstream, Message: "rejected " + testPassword},
+			errors.New("pipe " + testPassword),
+		} {
+			env := newTestEnv(t)
+			env.p.respond = func(CallRequest) (*Result, error) { return nil, cause }
+			_, err := env.reg.Connect(context.Background(), owner, "testoffice", map[string]string{"username": "hong", "password": testPassword})
+			if err == nil || strings.Contains(err.Error(), testPassword) {
+				t.Errorf("Connect() error = %v", err)
+			}
+		}
+	})
+
+	t.Run("login error stored on the action", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.connect(t, false)
+		env.p.respond = func(req CallRequest) (*Result, error) {
+			if req.Tool == "login" {
+				return nil, errors.New("login said " + testPassword)
+			}
+			return nil, &Error{Code: CodeDuplicateSession}
+		}
+		ctx, prompts := requestCtx(owner)
+		if _, err := env.reg.Dispatch(ctx, "testoffice_save_photos", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		id := prompts.List()[0].ActionID
+		_, _, err := env.reg.LoginAndResume(context.Background(), id, owner)
+		if err == nil || strings.Contains(err.Error(), testPassword) {
+			t.Errorf("LoginAndResume() error = %v", err)
+		}
+		row, _ := env.store.GetPluginAction(context.Background(), id)
+		if row.Status != "failed" || strings.Contains(row.Result, testPassword) {
+			t.Errorf("stored action = %s %q", row.Status, row.Result)
+		}
+	})
+}
+
+// An execute that runs into its deadline must still be marked failed; the
+// status write gets its own context.
+func TestApproveDeadlineStillFinishes(t *testing.T) {
+	env := newTestEnv(t)
+	env.connect(t, false)
+	id := env.submit(t, nil)
+	env.reg.executeTimeout = 50 * time.Millisecond
+	env.p.blockExecute = true
+	_, act, err := env.reg.Approve(context.Background(), id, owner)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Approve() error = %v, want deadline exceeded", err)
+	}
+	row, _ := env.store.GetPluginAction(context.Background(), id)
+	if row.Status != "failed" || act.Status != StatusFailed {
+		t.Errorf("status = %s / %s, want failed (not stuck running)", row.Status, act.Status)
 	}
 }
 

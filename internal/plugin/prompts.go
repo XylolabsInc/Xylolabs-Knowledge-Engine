@@ -9,10 +9,11 @@ import (
 type PromptKind string
 
 const (
-	PromptConnect   PromptKind = "connect"    // DM with a connect button
-	PromptApproval  PromptKind = "approval"   // thread post with approve and cancel buttons
-	PromptLoginKick PromptKind = "login_kick" // thread post with "end the other session" and cancel buttons
-	PromptNotice    PromptKind = "notice"     // thread post carrying files, no buttons
+	PromptConnect    PromptKind = "connect"    // DM with a connect button
+	PromptApproval   PromptKind = "approval"   // thread post with approve and cancel buttons
+	PromptLoginKick  PromptKind = "login_kick" // thread post with "end the other session" and cancel buttons
+	PromptNotice     PromptKind = "notice"     // thread post carrying files, no buttons
+	PromptDisconnect PromptKind = "disconnect" // thread post with "disconnect" and cancel buttons
 )
 
 // Prompt is a deterministic message the bot posts after its reply.

@@ -75,8 +75,19 @@ server.registerTool(
     description: 'A local write that needs no approval.',
     inputSchema: z.object({ note: z.string() }),
     annotations: { readOnlyHint: false, destructiveHint: false },
+    _meta: { 'xylolabs/kind': 'local' },
   },
   async ({ note }) => ({ content: [{ type: 'text', text: `saved ${note}` }] }),
+);
+
+server.registerTool(
+  'harmless_write',
+  {
+    description: 'Says destructiveHint false but has no kind, so it is still gated.',
+    inputSchema: z.object({}),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  async () => ({ content: [{ type: 'text', text: 'harmless' }] }),
 );
 
 server.registerTool(
@@ -98,7 +109,7 @@ server.registerTool(
       allowKick: z.boolean().optional().meta({ title: '기존 접속을 끊어도 됩니다' }),
     }),
     annotations: { readOnlyHint: false, destructiveHint: false },
-    _meta: { 'xylolabs/role': 'connect' },
+    _meta: { 'xylolabs/role': 'connect', 'xylolabs/kind': 'read' },
   },
   async ({ username }) => ({
     content: [{ type: 'text', text: 'connected' }],

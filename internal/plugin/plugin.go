@@ -68,8 +68,12 @@ type Tool struct {
 	Name        string         // without the plugin prefix
 	Description string         // shown to the model
 	Parameters  map[string]any // sanitized JSON Schema (Gemini subset)
-	Write       bool           // gated behind approval
-	Role        string         // "" for model tools; RoleConnect or RoleLogin are hidden
+	// JSONArgs lists argument paths whose free-form objects the model sends
+	// as JSON strings (see SanitizeSchema); the registry decodes them back
+	// before the call.
+	JSONArgs [][]string
+	Write    bool   // gated behind approval
+	Role     string // "" for model tools; RoleConnect or RoleLogin are hidden
 }
 
 // AccountField is one input of a plugin's account form, taken from the

@@ -20,6 +20,9 @@ const (
 type Error struct {
 	Code    string
 	Message string // Korean, safe to show the user
+	// OutcomeUnknown is set when the plugin failed after it had started
+	// changing the other system, so the change may or may not have happened.
+	OutcomeUnknown bool
 }
 
 func (e *Error) Error() string {
@@ -51,4 +54,7 @@ var (
 	ErrNotOwner       = errors.New("plugin: only the person who asked can decide this action")
 	ErrNotPending     = errors.New("plugin: action is no longer pending")
 	ErrExpired        = errors.New("plugin: action expired")
+	// ErrVaultOpen means a stored account no longer decrypts, which points at
+	// a changed PLUGIN_SECRET_KEY rather than at the person's password.
+	ErrVaultOpen = errors.New("plugin: stored account does not decrypt with PLUGIN_SECRET_KEY")
 )

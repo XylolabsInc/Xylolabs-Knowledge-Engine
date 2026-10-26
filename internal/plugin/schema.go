@@ -12,25 +12,44 @@ import (
 // SanitizeSchema converts a tool's JSON Schema (draft 2020-12, as MCP servers
 // emit it) to the subset Gemini function declarations accept. It keeps type,
 // properties, required, items, enum (strings only), description, nullable,
-// format (date and date-time only), and minimum/maximum inside the int32
-// range. Unions with null become nullable; other unions keep their first
-// branch, or one string enum when every branch is a string constant. Keys
-// Gemini rejects ($schema, $ref, $defs, additionalProperties, default,
-// examples and the rest) are dropped. The result is always an object schema.
-func SanitizeSchema(schema map[string]any) map[string]any {
+// and minimum/maximum inside the int32 range. Unions with null become
+// nullable; other unions keep their first branch, or one string enum when
+// every branch is a string constant. A date or date-time format becomes a
+// hint in the description. Keys Gemini rejects ($schema, $ref, $defs,
+// additionalProperties, format, default, examples and the rest) are dropped.
+// The result is always an object schema.
+//
+// Gemini rejects a nested object without properties, so a free-form object
+// below the top level (a map, z.record, a dropped $ref, an untyped value)
+// becomes a string the model fills with JSON. SanitizeSchema returns the
+// paths of those arguments, as property names with "[]" for array elements;
+// the registry decodes them back to objects before calling the plugin.
+func SanitizeSchema(schema map[string]any) (map[string]any, [][]string) {
+	empty := map[string]any{"type": "object", "properties": map[string]any{}}
 	if schema == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
+		return empty, nil
 	}
-	out := sanitizeNode(schema)
+	s := &sanitizer{}
+	out := s.node(schema, nil)
 	if out["type"] != "object" {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
+		return empty, nil
 	}
-	return out
+	return out, s.jsonArgs
 }
 
-func sanitizeNode(in map[string]any) map[string]any {
+const (
+	hintJSONObject = "(a JSON object, sent as a string)"
+	hintJSONValue  = "(any JSON value; send objects and lists as JSON text)"
+)
+
+type sanitizer struct {
+	jsonArgs [][]string
+}
+
+func (s *sanitizer) node(in map[string]any, path []string) map[string]any {
 	node, nullable := flatten(in)
 	typ, _ := node["type"].(string)
+	desc, _ := node["description"].(string)
 	if typ == "" || typ == "null" {
 		switch {
 		case typ == "null":
@@ -40,13 +59,16 @@ func sanitizeNode(in map[string]any) map[string]any {
 			typ = "object"
 		case node["items"] != nil:
 			typ = "array"
+		case node["enum"] != nil:
+			typ = "string"
+		case len(path) > 0:
+			return s.jsonString(path, desc, hintJSONValue, nullable)
 		default:
 			typ = "string"
 		}
 	}
 
 	out := map[string]any{"type": typ}
-	desc, _ := node["description"].(string)
 	if nullable || node["nullable"] == true {
 		out["nullable"] = true
 	}
@@ -57,9 +79,12 @@ func sanitizeNode(in map[string]any) map[string]any {
 		if p, ok := node["properties"].(map[string]any); ok {
 			for name, v := range p {
 				if m, ok := v.(map[string]any); ok {
-					props[name] = sanitizeNode(m)
+					props[name] = s.node(m, append(slices.Clip(path), name))
 				}
 			}
+		}
+		if len(props) == 0 && len(path) > 0 {
+			return s.jsonString(path, desc, hintJSONObject, nullable || node["nullable"] == true)
 		}
 		out["properties"] = props
 		if req := requiredNames(node["required"], props); len(req) > 0 {
@@ -68,15 +93,18 @@ func sanitizeNode(in map[string]any) map[string]any {
 	case "array":
 		items := map[string]any{"type": "string"}
 		if m, ok := node["items"].(map[string]any); ok {
-			items = sanitizeNode(m)
+			items = s.node(m, append(slices.Clip(path), "[]"))
 		}
 		out["items"] = items
 	case "string":
 		if vals, ok := stringEnum(node["enum"]); ok && len(vals) > 0 {
 			out["enum"] = vals
 		}
-		if f, _ := node["format"].(string); f == "date" || f == "date-time" {
-			out["format"] = f
+		switch f, _ := node["format"].(string); f {
+		case "date":
+			desc = appendSentence(desc, "(YYYY-MM-DD)")
+		case "date-time":
+			desc = appendSentence(desc, "(RFC 3339 date-time)")
 		}
 	case "integer", "number":
 		for _, k := range []string{"minimum", "maximum"} {
@@ -93,6 +121,55 @@ func sanitizeNode(in map[string]any) map[string]any {
 		out["description"] = desc
 	}
 	return out
+}
+
+// jsonString declares an argument the model sends as JSON text and records its path.
+func (s *sanitizer) jsonString(path []string, desc, hint string, nullable bool) map[string]any {
+	s.jsonArgs = append(s.jsonArgs, slices.Clone(path))
+	out := map[string]any{"type": "string", "description": appendSentence(desc, hint)}
+	if nullable {
+		out["nullable"] = true
+	}
+	return out
+}
+
+// DecodeJSONArgs replaces, in place, each argument at paths that holds JSON
+// text for an object or a list with the decoded value. Anything else is left
+// as it is, so the plugin's own validation reports a bad value.
+func DecodeJSONArgs(args map[string]any, paths [][]string) {
+	for _, p := range paths {
+		decodeAt(args, p)
+	}
+}
+
+func decodeAt(v any, path []string) any {
+	if len(path) == 0 {
+		text, ok := v.(string)
+		if !ok {
+			return v
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(text), &decoded); err == nil {
+			switch decoded.(type) {
+			case map[string]any, []any:
+				return decoded
+			}
+		}
+		return v
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		if child, ok := x[path[0]]; ok && path[0] != "[]" {
+			x[path[0]] = decodeAt(child, path[1:])
+		}
+	case []any:
+		if path[0] == "[]" {
+			for i := range x {
+				x[i] = decodeAt(x[i], path[1:])
+			}
+		}
+	}
+	return v
 }
 
 // flatten resolves the constructs Gemini lacks (type arrays, anyOf, oneOf,
