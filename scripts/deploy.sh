@@ -4,8 +4,17 @@ set -euo pipefail
 # =============================================================================
 # deploy.sh — Deploy xylolabs-kb to AWS server
 #
-# Builds the Go binary for ARM64, uploads to server, restarts the service,
-# and verifies health.
+# Builds the Go binary for ARM64, uploads it and the DaouOffice plugin
+# (plugins/daouoffice) to the server, installs the plugin's Node packages,
+# restarts the service, and verifies health and plugin registration.
+#
+# Environment:
+#   DAOUOFFICE_CONFIG_LOCAL  Local company config to upload as
+#                            /opt/xylolabs-kb/configs/daouoffice.json (0600).
+#                            Unset or missing: the server copy is left alone.
+#   PLUGIN_READY_TIMEOUT     Seconds to wait for the plugin to register (150).
+#   NODE_MAJOR, NODE_VERSION For --provision: Node major line (24) or an exact
+#                            version (e.g. 24.22.1).
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +26,16 @@ SERVER_USER="${SERVER_USER:-ubuntu}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/xylolabs-bots.pem}"
 REMOTE_DIR="/opt/xylolabs-kb"
 REMOTE_KB_DIR="/opt/knowledge"
+
+# DaouOffice plugin. Its data dir holds per-person sessions and records and is
+# never touched by a deploy.
+PLUGIN_SRC="$PROJECT_DIR/plugins/daouoffice"
+REMOTE_PLUGIN_DIR="$REMOTE_DIR/plugins/daouoffice"
+REMOTE_PLUGIN_DATA_DIR="$REMOTE_DIR/data/plugins/daouoffice"
+REMOTE_PLUGIN_CONFIG="$REMOTE_DIR/configs/daouoffice.json"
+REMOTE_NODE_DIR="/opt/node"
+PLUGIN_READY_TIMEOUT="${PLUGIN_READY_TIMEOUT:-150}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
 
 # Build config
 BINARY_NAME="xylolabs-kb"
@@ -89,6 +108,194 @@ upload() {
     ssh_cmd "sudo mv /tmp/xylolabs-kb.service /etc/systemd/system/xylolabs-kb.service"
 
     log "Upload complete"
+}
+
+# -----------------------------------------------------------------------------
+# DaouOffice plugin
+# -----------------------------------------------------------------------------
+upload_plugin() {
+    [ -d "$PLUGIN_SRC" ] || die "Plugin source not found: $PLUGIN_SRC"
+    log "Uploading plugins/daouoffice..."
+
+    # Ship the source only: no installed packages, tests, local data or
+    # databases, and no local company config.
+    local -a tar_opts=(
+        --exclude=node_modules
+        --exclude=daouoffice/test
+        --exclude=daouoffice/data
+        --exclude='*.db*'
+        --exclude=daouoffice/config.json
+        --exclude=.DS_Store
+        --exclude='._*'
+    )
+    if tar --version 2>/dev/null | grep -q bsdtar; then
+        tar_opts+=(--no-xattrs --no-mac-metadata)
+    fi
+    # Compress with gzip, not tar -z: bsdtar pads its -z output to whole
+    # records, and GNU tar on the host rejects the trailing zeros.
+    COPYFILE_DISABLE=1 tar -C "$PROJECT_DIR/plugins" -cf - "${tar_opts[@]}" daouoffice \
+        | gzip -c \
+        | ssh_cmd "umask 077 && cat > /tmp/xylolabs-daouoffice.tgz"
+
+    # Replace the plugin's files in place. node_modules stays (it is reinstalled
+    # below only when the lockfile or Node changed), and so does anything the
+    # server keeps inside the plugin dir.
+    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_PLUGIN_DATA_DIR" "$SERVER_USER" <<'REMOTE'
+set -euo pipefail
+dir=$1 data_dir=$2 owner=$3
+archive=/tmp/xylolabs-daouoffice.tgz
+trap 'rm -f "$archive"' EXIT
+[ -d "$dir" ] || sudo install -d -o "$owner" -g "$owner" -m 0755 "$dir"
+find "$dir" -mindepth 1 -maxdepth 1 ! -name node_modules ! -name data ! -name config.json -exec rm -rf {} +
+tar -xzf "$archive" -C "$dir" --strip-components=1 --no-same-owner --warning=no-unknown-keyword
+[ -d "$data_dir" ] || sudo install -d -o "$owner" -g "$owner" -m 0700 "$data_dir"
+REMOTE
+    log "Plugin uploaded to $REMOTE_PLUGIN_DIR"
+}
+
+# install_plugin_deps installs the plugin's runtime packages with the Node at
+# /opt/node and the headless Chromium Playwright drives. With "true" it also
+# installs Chromium's system packages (needs sudo; used by --provision).
+install_plugin_deps() {
+    local with_deps="${1:-false}"
+    log "Installing plugin packages..."
+    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_NODE_DIR" "$with_deps" <<'REMOTE'
+set -euo pipefail
+dir=$1 node_dir=$2 with_deps=$3
+export PATH="$node_dir/bin:$PATH"
+command -v node >/dev/null || { echo "node not found in $node_dir/bin; run deploy.sh --provision" >&2; exit 1; }
+cd "$dir"
+stamp=node_modules/.xylolabs-deploy-stamp
+want="$(node --version) $(sha256sum package-lock.json | cut -d' ' -f1)"
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+    echo "node_modules is current for $(node --version) and this package-lock.json"
+else
+    npm ci --omit=dev --no-audit --no-fund
+    echo "$want" > "$stamp"
+fi
+if [ "$with_deps" = true ]; then
+    ./node_modules/.bin/playwright install --with-deps chromium-headless-shell
+else
+    ./node_modules/.bin/playwright install chromium-headless-shell
+fi
+REMOTE
+    log "Plugin packages ready"
+}
+
+# upload_plugin_config ships the company rules (approval lines, cards,
+# projects). The file holds staff names and card numbers: it is never printed
+# and never committed, and only goes up when DAOUOFFICE_CONFIG_LOCAL names it.
+upload_plugin_config() {
+    local src="${DAOUOFFICE_CONFIG_LOCAL:-}"
+    if [ -z "$src" ]; then
+        log "DAOUOFFICE_CONFIG_LOCAL not set; leaving the server's company config as it is"
+        return 0
+    fi
+    if [ ! -f "$src" ]; then
+        log "WARNING: DAOUOFFICE_CONFIG_LOCAL file not found; leaving the server's company config as it is"
+        return 0
+    fi
+    # Report only where the JSON breaks, never the content.
+    python3 - "$src" <<'PYEOF' || die "DAOUOFFICE_CONFIG_LOCAL is not valid JSON; not uploading it"
+import json, sys
+try:
+    json.load(open(sys.argv[1], encoding="utf-8"))
+except (ValueError, OSError) as e:
+    sys.exit("invalid JSON at line %s, column %s" % (getattr(e, "lineno", "?"), getattr(e, "colno", "?")))
+PYEOF
+    log "Uploading company config ($(human_size "$src")) to $REMOTE_PLUGIN_CONFIG..."
+    ssh_cmd "sudo mkdir -p $REMOTE_DIR/configs && sudo sh -c 'umask 077 && cat > $REMOTE_PLUGIN_CONFIG.tmp && chown $SERVER_USER:$SERVER_USER $REMOTE_PLUGIN_CONFIG.tmp && chmod 0600 $REMOTE_PLUGIN_CONFIG.tmp && mv $REMOTE_PLUGIN_CONFIG.tmp $REMOTE_PLUGIN_CONFIG'" < "$src"
+    log "Company config uploaded"
+}
+
+# provision installs what the plugin needs on a fresh host: Node.js LTS in
+# /opt/node (checked against nodejs.org's SHA256 list) and Korean fonts.
+# Chromium's system packages follow in install_plugin_deps. Not run by default.
+provision() {
+    log "Provisioning Node.js ${NODE_VERSION:-$NODE_MAJOR.x} in $REMOTE_NODE_DIR and Korean fonts..."
+    ssh_cmd bash -s -- "$REMOTE_NODE_DIR" "$NODE_MAJOR" "${NODE_VERSION:-}" <<'REMOTE'
+set -euo pipefail
+node_dir=$1 major=$2 version=$3
+case "$(uname -m)" in
+    aarch64|arm64) arch=arm64 ;;
+    x86_64) arch=x64 ;;
+    *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+if [ -n "$version" ]; then
+    dist="https://nodejs.org/dist/v${version#v}"
+else
+    dist="https://nodejs.org/dist/latest-v${major}.x"
+fi
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# The SHA256 list comes over HTTPS from nodejs.org; it guards against a
+# corrupt or swapped download, not against a compromised nodejs.org.
+curl -fsSL "$dist/SHASUMS256.txt" -o "$work/SHASUMS256.txt"
+line=$(grep -E "  node-v[0-9]+\.[0-9]+\.[0-9]+-linux-${arch}\.tar\.xz$" "$work/SHASUMS256.txt" | head -n 1 || true)
+[ -n "$line" ] || { echo "no linux-$arch tarball listed in $dist/SHASUMS256.txt" >&2; exit 1; }
+sum=${line%% *}
+file=${line##* }
+want=${file#node-}
+want=${want%%-linux-*}
+
+current=$("$node_dir/bin/node" --version 2>/dev/null || true)
+if [ "$current" = "$want" ]; then
+    echo "Node.js $want is already installed in $node_dir"
+else
+    curl -fsSL "$dist/$file" -o "$work/$file"
+    (cd "$work" && echo "$sum  $file" | sha256sum -c -)
+    sudo rm -rf "$node_dir.new" "$node_dir.old"
+    sudo mkdir -p "$node_dir.new"
+    sudo tar -xJf "$work/$file" -C "$node_dir.new" --strip-components=1 --no-same-owner
+    if [ -e "$node_dir" ]; then
+        sudo mv "$node_dir" "$node_dir.old"
+    fi
+    sudo mv "$node_dir.new" "$node_dir"
+    sudo rm -rf "$node_dir.old"
+    echo "Installed Node.js $("$node_dir/bin/node" --version) in $node_dir"
+fi
+
+sudo apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fonts-nanum
+REMOTE
+    log "Provisioning done"
+}
+
+# verify_plugin waits for main's registration line after a restart. It fails
+# the deploy when the plugin is enabled on the server but did not register.
+verify_plugin() {
+    local since=$1
+    if ! ssh_cmd "sudo grep -qiE '^DAOUOFFICE_ENABLED=[\"'\'']?(1|true|yes|on)[\"'\'']?[[:space:]]*$' $REMOTE_DIR/.env"; then
+        log "DaouOffice plugin is not enabled on the server; skipping the plugin check"
+        return 0
+    fi
+    log "Waiting up to ${PLUGIN_READY_TIMEOUT}s for the DaouOffice plugin to register..."
+    local deadline=$((SECONDS + PLUGIN_READY_TIMEOUT))
+    local line tools
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        line=$(ssh_cmd "sudo journalctl -u xylolabs-kb --since @$since -o cat --no-pager | grep -m 1 -E '\"msg\":\"daouoffice plugin (ready|disabled)' || true")
+        case "$line" in
+            *'daouoffice plugin ready'*)
+                tools=$(printf '%s\n' "$line" | sed -n 's/.*"tools":\([0-9][0-9]*\).*/\1/p')
+                log "DaouOffice plugin registered with ${tools:-an unknown number of} tools"
+                return 0
+                ;;
+            *'daouoffice plugin disabled'*)
+                log "$line"
+                show_plugin_logs "$since"
+                die "DaouOffice plugin is enabled but did not start"
+                ;;
+        esac
+        sleep 5
+    done
+    show_plugin_logs "$since"
+    die "DaouOffice plugin is enabled but did not register within ${PLUGIN_READY_TIMEOUT}s"
+}
+
+show_plugin_logs() {
+    log "Recent plugin log lines:"
+    ssh_cmd "sudo journalctl -u xylolabs-kb --since @$1 -o cat --no-pager | grep -E 'daouoffice|mcpstdio|plugin' | tail -n 30" || true
 }
 
 # -----------------------------------------------------------------------------
@@ -440,19 +647,24 @@ main() {
     local with_env=false
     local with_cron=false
     local with_nginx=false
+    local with_provision=false
 
     for arg in "$@"; do
         case "$arg" in
             --with-env)   with_env=true ;;
             --with-cron)  with_cron=true ;;
             --with-nginx) with_nginx=true ;;
+            --provision)  with_provision=true ;;
             --help)
-                echo "Usage: $0 [--with-env] [--with-cron] [--with-nginx]"
+                echo "Usage: $0 [--with-env] [--with-cron] [--with-nginx] [--provision]"
                 echo "  --with-env    Also upload .env file"
                 echo "  --with-cron   Also install crontab"
                 echo "  --with-nginx  Also upload nginx config"
+                echo "  --provision   Also install Node.js LTS in /opt/node, Chromium's system packages and Korean fonts"
+                echo "Set DAOUOFFICE_CONFIG_LOCAL=<file> to upload the DaouOffice company config."
                 exit 0
                 ;;
+            *) die "Unknown option: $arg (see --help)" ;;
         esac
     done
 
@@ -461,13 +673,23 @@ main() {
     build
     upload
 
+    if [ "$with_provision" = true ]; then
+        provision
+    fi
+    upload_plugin
+    install_plugin_deps "$with_provision"
+    upload_plugin_config
+
     if [ "$with_env" = true ]; then
         upload_env
         upload_system_prompt
     fi
 
+    local restart_at
+    restart_at=$(ssh_cmd "date +%s")
     restart
     verify_health
+    verify_plugin "$restart_at"
     notify_slack
 
     if [ "$with_cron" = true ]; then
