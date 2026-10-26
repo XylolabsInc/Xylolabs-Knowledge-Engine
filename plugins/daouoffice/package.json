@@ -1,0 +1,24 @@
+{
+  "name": "@xylolabs/daouoffice-plugin",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DaouOffice plugin for the Xylolabs knowledge bot (MCP over stdio)",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "heic-convert": "^2.1.0",
+    "playwright": "1.64.1",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
+  }
+}

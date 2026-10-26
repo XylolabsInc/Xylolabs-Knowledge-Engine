@@ -1,0 +1,34 @@
+{
+  "baseUrl": "https://example.daouoffice.com",
+  "people": {
+    "ceo": "<ceo name>",
+    "cfo": "<cfo name>",
+    "cto": "<cto name>"
+  },
+  "cfoFrom": 1000000,
+  "projects": {
+    "<project>": { "reviewer": "<reviewer name>", "subProjects": [] }
+  },
+  "budgets": ["운영자금", "프로젝트 사업비"],
+  "cards": {
+    "1234": { "project": "<project>", "budget": "프로젝트 사업비", "issuer": "<issuer>" }
+  },
+  "lines": {
+    "purchase": "project",
+    "claim": [{ "role": "ceo", "type": "결재" }],
+    "inspection": "ctoFinal"
+  },
+  "trip": {
+    "approvers": [{ "role": "ceo", "type": "결재" }],
+    "referers": [{ "name": "<referer name>", "dept": "<referer department>" }]
+  },
+  "purposeMap": [],
+  "minPurchaseKrw": 100000,
+  "departments": {
+    "<department name>": { "code": "<org tree code>" }
+  },
+  "cardMatch": {
+    "vendorAliases": { "<receipt vendor>": "<card merchant>" },
+    "subscriptionMerchants": ["<SUBSCRIPTION MERCHANT REGEX>"]
+  }
+}
