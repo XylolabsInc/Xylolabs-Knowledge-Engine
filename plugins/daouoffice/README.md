@@ -174,6 +174,21 @@ and the connect check also per chat user; disconnecting does not reset the limit
 is not retried. `rt.sessions.withScratchContext(fn)` gives a cookie-less context of the same browser
 (product pages, exchange rates) under the same page limit.
 
+## Legacy import
+
+Run on the host against a copy of the private repository; nothing from it is committed here.
+
+```bash
+node --disable-warning=ExperimentalWarning scripts/import-legacy.mjs --repo <private repo> --owner <login id> \
+  [--db <path>] [--data-dir <dir>] [--config <file>] [--replace] [--dry-run]
+```
+
+It imports `PURCHASES` (with `refiled.json`), `TRIPS`, the card-match and inspection exception tables,
+the trip-expense confirmations (as `tripExpense` overrides), `records/` (as filings of kind
+`record:cards` and `record:ali-orders`) and the quote captures, for one owner. Rows already present are
+skipped unless `--replace`, which keeps a purchase's existing `data.serials` when the source entry has
+none. It prints counts only.
+
 ## Tests
 
 ```bash
