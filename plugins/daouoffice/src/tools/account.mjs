@@ -8,8 +8,9 @@ import * as z from 'zod';
  *   and an optional boolean as a checkbox. It signs in to check the credentials and reads the
  *   person's name and department. It never kicks anyone: the duplicate-login modal only shows after
  *   a correct password, so seeing it is enough, and the plugin backs out.
- * login (hidden, role "login")      Signs in with `_meta["xylolabs/allowKick"]`; used after the person
- *   pressed "끊고 진행" on the duplicate-session prompt.
+ * login (hidden, role "login")      Signs in and ends the other session if there is one. The bot calls it
+ *   only after the person pressed "끊고 진행" on the duplicate-session prompt, so consent is implied by
+ *   the call itself; it takes no arguments.
  * me                                The connected account and department.
  */
 
@@ -50,10 +51,10 @@ export function register(server, rt) {
   rt.tool(server, 'login', {
     kind: 'read',
     role: 'login',
-    description: 'Signs in to DaouOffice for the caller, ending another session only when _meta allowKick is true. Called by the bot after the person agreed, never by the model.',
+    description: 'Signs in to DaouOffice for the caller and ends the other session of the account if there is one. Called by the bot only after the person pressed 끊고 진행, never by the model.',
     input: z.object({}),
   }, async (args, call) => {
-    const account = await rt.session(call, async () => rt.db.account(call.owner));
+    const account = await rt.session(call, async () => rt.db.account(call.owner), { allowKick: true });
     const accountName = rt.accountName(account, call.owner);
     return {
       text: `다우오피스에 로그인했습니다: ${accountName}`,

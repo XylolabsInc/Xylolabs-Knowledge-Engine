@@ -68,7 +68,9 @@ function fakeDaou() {
     verifyResult: { duplicate: false, fresh: true },
     logins: 0,
     async verify() { this.logins++; return this.verifyResult; },
+    opts: [],
     async withSession(owner, creds, opts, fn) {
+      this.opts.push(opts);
       return fn({ page, api, context: {}, owner, baseUrl: BASE, fresh: false });
     },
   };
@@ -110,6 +112,14 @@ describe('tools against a fake DaouOffice', () => {
     assert.equal(r.structuredContent.duplicate, true);
     assert.equal(r.structuredContent.accountName, 'kim');
     assert.match(r.content[0].text, /끊지 않았습니다/);
+  });
+
+  test('login always signs in with consent to end the other session', async () => {
+    daou.sessions.opts.length = 0;
+    const r = await client.callTool({ name: 'login', arguments: {}, _meta: { ...CREDS, 'xylolabs/allowKick': false } });
+    assert.ok(!r.isError, r.content[0].text);
+    assert.deepEqual(daou.sessions.opts, [{ allowKick: true }]);
+    assert.equal(r.structuredContent.accountId, 'hong');
   });
 
   test('me reads the stored account', async () => {

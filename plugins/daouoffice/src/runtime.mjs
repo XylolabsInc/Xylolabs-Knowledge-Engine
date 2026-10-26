@@ -16,8 +16,12 @@ import { readProfile } from './dao/org.mjs';
  *          'write' → destructiveHint: true; the bot gates it behind a person's approval.
  *                    The handler must be `{ preview(args, call), execute(args, call) }`.
  *                    `execute` runs only when `_meta["xylolabs/mode"] === "execute"`; any other value
- *                    (or none) runs `preview`. Both run inside the write guard, so a preview that
- *                    reaches a submitting DAO function by mistake throws instead of submitting.
+ *                    (or none) runs `preview`.
+ *          Every handler runs inside the write guard (src/guard.mjs). Only an approved `execute` may
+ *          reach a DAO function that changes DaouOffice; a preview, read or local tool that does
+ *          throws instead of submitting. Once a write has started, a later AUTH_FAILED,
+ *          DUPLICATE_SESSION, NOT_CONNECTED or RATE_LIMITED is reported as UPSTREAM with
+ *          `data.afterWrite`, because the bot re-offers actions that fail with those codes.
  * role     'connect' | 'login' → tool `_meta["xylolabs/role"]`; the bot hides these from the model
  * account  false for tools that work without a connected account (guide)
  *
@@ -206,6 +210,9 @@ export function toPluginError(e) {
 
 // ------------------------------------------------------------------ runtime
 
+/** Codes the bot reads as "nothing happened, offer it again"; unsafe once a write has started. */
+const AFTER_WRITE_UNSAFE = new Set(['AUTH_FAILED', 'DUPLICATE_SESSION', 'NOT_CONNECTED', 'RATE_LIMITED']);
+
 export function createRuntime({ config, db, sessions, dataDir, logger = createLogger() }) {
   const rt = {
     config, db, sessions, dataDir, logger,
@@ -233,16 +240,27 @@ export function createRuntime({ config, db, sessions, dataDir, logger = createLo
     async invoke(name, spec, handler, args, meta) {
       const started = Date.now();
       let call = null;
+      const guard = {};
       try {
         call = buildCall(meta, spec, args);
         logger.addSecret(call.creds?.password);
-        const execute = spec.kind !== 'write' || call.mode === 'execute';
-        const fn = spec.kind === 'write' ? (execute ? handler.execute : handler.preview) : handler;
-        const out = await runWithMode(execute ? 'execute' : 'preview', () => fn(args, call));
+        const write = spec.kind === 'write';
+        const execute = write && call.mode === 'execute';
+        const fn = write ? (execute ? handler.execute : handler.preview) : handler;
+        // Only an approved write may change DaouOffice; read and local tools run under their own
+        // kind so the guard refuses them too.
+        const out = await runWithMode(write ? call.mode : spec.kind, () => fn(args, call), guard);
         logger.info('tool call', { tool: name, user: call.user.key, owner: call.owner, mode: call.mode, ms: Date.now() - started, outcome: 'ok' });
-        return toToolResult(out, { preview: spec.kind === 'write' && !execute });
+        return toToolResult(out, { preview: write && !execute });
       } catch (e) {
-        const err = toPluginError(e);
+        let err = toPluginError(e);
+        if (guard.wrote && AFTER_WRITE_UNSAFE.has(err.code)) {
+          // The bot treats these codes as "nothing was submitted" and re-offers the action. Once a
+          // write has started that is no longer known, so report an unknown outcome instead.
+          err = new PluginError('UPSTREAM',
+            '제출을 시작한 뒤 다우오피스 로그인이 끊겨 결과를 확인하지 못했습니다. 다시 올리기 전에 다우오피스에서 문서를 확인해 주세요.',
+            { cause: err, data: { afterWrite: true, original: err.code } });
+        }
         const cause = err.cause ?? (err === e ? null : e);
         const fields = { tool: name, user: call?.user.key ?? null, owner: call?.owner ?? null, ms: Date.now() - started, outcome: err.code };
         if (err.code === 'INTERNAL') logger.error('tool call failed', { ...fields, error: cause ?? err, stack: cause?.stack ?? err.stack });

@@ -85,7 +85,7 @@ success. It returns `{ accountId, accountName, duplicate }`; `login` returns the
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `connect`, `login` | hidden | Account check from the connect form; sign-in after the person allowed a kick |
+| `connect`, `login` | hidden | Account check from the connect form; `login` (no arguments) signs in and ends the other session, called only after the person pressed 끊고 진행 |
 | `me` | read | Connected account, department, department code |
 | `attendance_today`, `leave_balance` | read | 근태, 연차 |
 | `approval_inbox` | read | 결재할 문서 건수와 목록 |
@@ -121,9 +121,14 @@ export function register(server, rt) {
   logged-in DaouOffice page. `api(path, { method, body })` returns `{ status, ok, data }` and never
   the raw body. `rt.db.account(call.owner)` has the name and department (`deptId`, `deptCode`).
 - Write guard: `submitDocument`, `approveDocument`, `withdrawDocument`, `deleteDraft`, `postComment`
-  and every non-read `api()` call throw unless the call is an approved execute. Read-only POST
-  endpoints are listed in `READ_ONLY_POSTS` (`src/dao/api.mjs`); add one there only after checking it
-  changes nothing.
+  and every non-read `api()` call throw unless the call is an approved execute of a write tool (read
+  and local tools are refused too). Read-only POST endpoints are listed in `READ_ONLY_POSTS`
+  (`src/dao/api.mjs`); add one there only after checking it changes nothing. A new DAO function that
+  changes DaouOffice calls `assertExecute('<what>')` first.
+- Login errors are only safe before a write starts: the bot re-offers an action that fails with
+  AUTH_FAILED or DUPLICATE_SESSION. After the first `assertExecute()` the runtime reports those as
+  UPSTREAM (`data.afterWrite`). Do an execute's whole job in one `rt.session()` call.
+- The bot deletes its inbox files when the call ends; copy any attachment you keep.
 - Never log arguments, credentials or responses. Use `rt.logger` with plain fields.
 
 ## Sessions

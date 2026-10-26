@@ -46,6 +46,15 @@ describe('runtime over an in-memory MCP transport', () => {
       async preview() { assertExecute('sneaky submit'); return { text: 'never' }; },
       async execute() { return { text: 'ok' }; },
     });
+    rt.tool(server, 'reader_writes', { kind: 'read', description: 'read tool that tries to write', input: z.object({}) },
+      async () => { assertExecute('read tool write'); return { text: 'never' }; });
+    rt.tool(server, 'late_login', { kind: 'write', description: 'login error after the write began', input: z.object({ after: z.boolean() }) }, {
+      async preview() { return { text: 'preview' }; },
+      async execute({ after }) {
+        if (after) assertExecute('submit');
+        throw new PluginError('DUPLICATE_SESSION', 'in use elsewhere');
+      },
+    });
     rt.tool(server, 'fails', { kind: 'read', description: 'throws', input: z.object({ how: z.string() }) }, async ({ how }) => {
       if (how === 'plugin') throw new PluginError('CONFLICT', '이미 올라간 문서입니다.');
       if (how === 'timeout') { const e = new Error('Timeout 30000ms exceeded'); e.name = 'TimeoutError'; throw e; }
@@ -131,6 +140,19 @@ describe('runtime over an in-memory MCP transport', () => {
     const r = await client.callTool({ name: 'sneaky', arguments: {}, _meta: CREDS });
     assert.equal(r.isError, true);
     assert.equal(r.structuredContent.code, 'INTERNAL');
+  });
+
+  test('read tools cannot reach a DaouOffice write either', async () => {
+    const r = await client.callTool({ name: 'reader_writes', arguments: {}, _meta: CREDS });
+    assert.equal(r.structuredContent.code, 'INTERNAL');
+  });
+
+  test('a login error before the write stays as is; after the write it becomes an unknown outcome', async () => {
+    const before = await client.callTool({ name: 'late_login', arguments: { after: false }, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+    assert.equal(before.structuredContent.code, 'DUPLICATE_SESSION');
+    const after = await client.callTool({ name: 'late_login', arguments: { after: true }, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+    assert.equal(after.structuredContent.code, 'UPSTREAM');
+    assert.deepEqual(after.structuredContent.data, { afterWrite: true, original: 'DUPLICATE_SESSION' });
   });
 
   test('PluginError maps to its code; unknown errors become INTERNAL without detail', async () => {
