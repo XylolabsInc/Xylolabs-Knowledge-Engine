@@ -374,7 +374,7 @@ func (r *Registry) Dispatch(ctx context.Context, name string, args map[string]an
 	}
 	DecodeJSONArgs(args, tool.JSONArgs)
 	c := &call{p: p, tool: tool, id: id, args: args, files: attachments}
-	if len(p.AccountFields()) > 0 {
+	if len(p.AccountFields()) > 0 && !tool.NoAccount {
 		acct, creds, err := r.openAccount(ctx, id.Key(), p)
 		if err != nil {
 			return r.callFailed(ctx, c, err)

@@ -111,20 +111,22 @@ func TestClientTools(t *testing.T) {
 		tools[tool.Name] = tool
 	}
 	for name, want := range map[string]struct {
-		write bool
-		role  string
+		write     bool
+		role      string
+		noAccount bool
 	}{
-		"echo": {false, ""}, "submit": {true, ""}, "save_note": {false, ""}, "plain": {true, ""}, "harmless_write": {true, ""},
-		"connect": {false, plugin.RoleConnect}, "busy": {false, ""}, "files": {false, ""},
-		"kind_write": {true, ""},
+		"echo": {false, "", false}, "submit": {true, "", false}, "save_note": {false, "", false}, "plain": {true, "", false},
+		"harmless_write": {true, "", false}, "connect": {false, plugin.RoleConnect, false}, "busy": {false, "", false},
+		"files": {false, "", false}, "kind_write": {true, "", false}, "help": {false, "", true},
 	} {
 		got, ok := tools[name]
 		if !ok {
 			t.Errorf("tool %s missing", name)
 			continue
 		}
-		if got.Write != want.write || got.Role != want.role {
-			t.Errorf("tool %s: write=%v role=%q, want write=%v role=%q", name, got.Write, got.Role, want.write, want.role)
+		if got.Write != want.write || got.Role != want.role || got.NoAccount != want.noAccount {
+			t.Errorf("tool %s: write=%v role=%q noAccount=%v, want write=%v role=%q noAccount=%v",
+				name, got.Write, got.Role, got.NoAccount, want.write, want.role, want.noAccount)
 		}
 	}
 

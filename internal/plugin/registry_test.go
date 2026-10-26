@@ -88,6 +88,7 @@ func newFakePlugin(t *testing.T) *fakePlugin {
 			{Name: "card_usage", Description: "Card usage", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
 			{Name: "save_photos", Description: "Save photos"},
 			{Name: "submit_purchase", Description: "Submit a purchase requisition", Write: true},
+			{Name: "guide", Description: "Rules", NoAccount: true},
 			{Name: "connect", Role: RoleConnect},
 			{Name: "login", Role: RoleLogin},
 		},
@@ -189,7 +190,7 @@ func TestDeclarations(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"testoffice_card_usage", "testoffice_save_photos", "testoffice_submit_purchase",
-		"accounts_status", "accounts_connect", "accounts_disconnect"} {
+		"testoffice_guide", "accounts_status", "accounts_connect", "accounts_disconnect"} {
 		if _, ok := byName[want]; !ok {
 			t.Errorf("missing declaration %s", want)
 		}
@@ -199,8 +200,8 @@ func TestDeclarations(t *testing.T) {
 			t.Errorf("hidden tool %s is declared", hidden)
 		}
 	}
-	if len(decls) != 6 {
-		t.Errorf("got %d declarations, want 6", len(decls))
+	if len(decls) != 7 {
+		t.Errorf("got %d declarations, want 7", len(decls))
 	}
 	if !strings.Contains(byName["testoffice_submit_purchase"], "nothing is submitted") {
 		t.Errorf("write tool description lacks the approval note: %q", byName["testoffice_submit_purchase"])
@@ -283,6 +284,25 @@ func TestDispatchNotConnected(t *testing.T) {
 	}
 	if again, _ := env.reg.NeedsConnectPrompt(context.Background(), "slack:U2"); len(again) != 0 {
 		t.Errorf("NeedsConnectPrompt after MarkPrompted = %+v", again)
+	}
+}
+
+func TestDispatchNoAccountTool(t *testing.T) {
+	env := newTestEnv(t)
+	ctx, prompts := requestCtx(owner)
+	out, err := env.reg.Dispatch(ctx, "testoffice_guide", map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("Dispatch(guide) error = %v", err)
+	}
+	if out["status"] == "not_connected" {
+		t.Fatalf("Dispatch(guide) = %v; a tool marked NoAccount must run without an account", out)
+	}
+	calls := env.p.callsTo("guide")
+	if len(calls) != 1 || calls[0].req.Credentials != nil || calls[0].req.Mode != ModeExecute {
+		t.Errorf("guide calls = %+v; want one execute call without credentials", calls)
+	}
+	if len(prompts.List()) != 0 {
+		t.Errorf("prompts = %+v; want no connect prompt", prompts.List())
 	}
 }
 

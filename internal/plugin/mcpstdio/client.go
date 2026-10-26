@@ -7,7 +7,8 @@
 // ignored, so a plugin cannot opt out of approval by declaring a write
 // harmless.
 // A tool's _meta "xylolabs/role" ("connect", "login") hides it from the
-// model. Each tools/call carries the person and their credentials in request
+// model, and "xylolabs/account": false lets a read or local tool run before
+// the person connects an account. Each tools/call carries the person and their credentials in request
 // _meta (see the meta* keys). The child process gets a minimal environment, so
 // the bot's own secrets (tokens, PLUGIN_SECRET_KEY) never reach it.
 package mcpstdio
@@ -42,6 +43,7 @@ const (
 	metaAttachments = "xylolabs/attachments"
 	metaRole        = "xylolabs/role"
 	metaKind        = "xylolabs/kind"
+	metaAccount     = "xylolabs/account"
 	metaPrivate     = "xylolabs/private"
 	metaName        = "xylolabs/name"
 )
@@ -304,14 +306,17 @@ func listTools(ctx context.Context, session *mcp.ClientSession) ([]plugin.Tool, 
 		schema, _ := t.InputSchema.(map[string]any)
 		role, _ := t.Meta[metaRole].(string)
 		kind, _ := t.Meta[metaKind].(string)
+		account, hasAccount := t.Meta[metaAccount].(bool)
 		params, jsonArgs := plugin.SanitizeSchema(schema)
+		write := isWrite(t.Annotations, kind)
 		tools = append(tools, plugin.Tool{
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  params,
 			JSONArgs:    jsonArgs,
-			Write:       isWrite(t.Annotations, kind),
+			Write:       write,
 			Role:        role,
+			NoAccount:   hasAccount && !account && !write,
 		})
 		if role == plugin.RoleConnect {
 			fields = plugin.AccountFieldsFromSchema(schema)

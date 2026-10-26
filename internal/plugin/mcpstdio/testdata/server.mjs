@@ -183,9 +183,20 @@ server.registerTool(
     description: 'Annotated as read-only but tagged as a write by _meta.',
     inputSchema: z.object({}),
     annotations: { readOnlyHint: true },
-    _meta: { 'xylolabs/kind': 'write' },
+    // account: false is ignored on a write: approving one always needs the account.
+    _meta: { 'xylolabs/kind': 'write', 'xylolabs/account': false },
   },
   async () => ({ content: [{ type: 'text', text: 'kind' }] }),
+);
+
+server.registerTool(
+  'help',
+  {
+    description: 'Rules that need no account.',
+    inputSchema: z.object({}),
+    _meta: { 'xylolabs/kind': 'read', 'xylolabs/account': false },
+  },
+  async () => ({ content: [{ type: 'text', text: 'rules' }] }),
 );
 
 server.registerTool(

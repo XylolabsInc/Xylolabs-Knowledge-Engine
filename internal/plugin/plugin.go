@@ -74,6 +74,9 @@ type Tool struct {
 	JSONArgs [][]string
 	Write    bool   // gated behind approval
 	Role     string // "" for model tools; RoleConnect or RoleLogin are hidden
+	// NoAccount marks a read or local tool that works before the person has
+	// connected an account (a rules guide). Write tools always need one.
+	NoAccount bool
 }
 
 // AccountField is one input of a plugin's account form, taken from the
