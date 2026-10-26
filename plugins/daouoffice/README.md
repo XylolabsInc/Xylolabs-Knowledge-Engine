@@ -73,6 +73,8 @@ Request `_meta` on every `tools/call`:
 Tools: `annotations` read = `{readOnlyHint: true}`, local (plugin DB only) = `{readOnlyHint: false,
 destructiveHint: false}`, write = `{readOnlyHint: false, destructiveHint: true}` (gated by the bot).
 Tool `_meta`: `xylolabs/kind` and, on the hidden tools, `xylolabs/role` (`connect`, `login`).
+`xylolabs/account: false` marks a read or local tool that works without a connected account (`guide`),
+so the bot runs it instead of asking the person to connect first.
 
 Results: `content[0]` is Korean text (never empty), then `image` blocks and `resource` blocks with a
 base64 `blob` (`resource.uri` `file:///<name>`; `_meta["xylolabs/private"]` on the block and the
@@ -104,7 +106,7 @@ success. It returns `{ accountId, accountName, duplicate }`; `login` returns the
 | `withdraw_document` | write | 상신취소 |
 | `guide` | read | Rules by topic from `guide/*.md` (no account needed) |
 | `save_photos` | local | Strip, date and store inspection photos from the attachments; link them to requisitions (`alsoFor`, `otherCard`, serials) |
-| `save_receipt` | local | Store receipts, invoices and order pages (image or PDF) under the receipt naming convention |
+| `save_receipt` | local | Store receipts, invoices and order pages under the receipt naming convention; images are stripped like photos, PDFs lose their info dictionary, XMP and private data |
 | `mark_inspection` | local | Per requisition: handled elsewhere, photos missing an item, item amounts |
 | `mark_payment` | local | Per card payment: handled elsewhere, refunded, claim as is, pinned receipts (card-match overrides) |
 | `inspection_candidates` | read | Payments that need a 검수조서, with photos, checklist, serials and whether it can be filed |
@@ -124,14 +126,24 @@ success. It returns `{ accountId, accountName, duplicate }`; `login` returns the
 ## Writing a tool module
 
 ```js
+import { digestOf } from '../runtime.mjs';
+
 export function register(server, rt) {
   rt.tool(server, 'submit_thing', {
     kind: 'write',                       // 'read' | 'local' | 'write'
+    previewDigest: true,                 // execute must do exactly what the preview showed
     description: '언제 쓰고, 먼저 무엇을 물어야 하는지',
     input: z.object({ key: z.string() }),
   }, {
-    async preview(args, call) { /* validate, show the field table; change nothing */ },
-    async execute(args, call) { /* validate again, fill, submit, re-read and compare */ },
+    async preview(args, call) {          // validate, show the field table; change nothing
+      const plan = await makePlan(args, call);
+      return { text: show(plan), digest: digestOf(plan) };
+    },
+    async execute(args, call) {          // validate again, compare, fill, submit, re-read and compare
+      const plan = await makePlan(args, call);
+      call.assertPreviewed(digestOf(plan));
+      …
+    },
   });
 }
 ```
@@ -148,9 +160,23 @@ export function register(server, rt) {
   and local tools are refused too). Read-only POST endpoints are listed in `READ_ONLY_POSTS`
   (`src/dao/api.mjs`); add one there only after checking it changes nothing. A new DAO function that
   changes DaouOffice calls `assertExecute('<what>')` first.
-- Login errors are only safe before a write starts: the bot re-offers an action that fails with
-  AUTH_FAILED or DUPLICATE_SESSION. After the first `assertExecute()` the runtime reports those as
-  UPSTREAM (`data.afterWrite`). Do an execute's whole job in one `rt.session()` call.
+- Once a write has started (`assertExecute()` or `markSent()`, which the DAO functions above and
+  non-read `api()` calls already do), every error of the call carries `data.afterWrite: true` and
+  `data.original`. The bot reports an unknown outcome ("결과를 확인하지 못했습니다") instead of a
+  failure that invites a second try. The error's own `data` is kept, login codes become UPSTREAM,
+  and the message never suggests retrying. Use `requireExecute()` for an early permission check that
+  marks nothing, and `markSent('<what>')` right before your own final click or submitting POST. Do an
+  execute's whole job in one `rt.session()` call.
+- Preview digests (`previewDigest: true`): the preview returns `digest`, the plan object (or its
+  `digestOf()` string) covering everything it showed and everything execute will act on (title, fields, rows, approvers, each attachment's
+  sha256, target and old document ids). The runtime keeps it per (owner, tool, arguments) for 35
+  minutes in the plugin DB (table `previews`, so a restart between preview and approval is fine) and
+  never returns it to the bot. Execute recomputes the plan and calls `call.assertPreviewed(plan)` (sync)
+  before any write; a missing, expired, already used or different digest is CONFLICT
+  "미리보기 뒤에 내용이 바뀌었습니다". With the flag set the guard refuses writes until that call
+  passed. The bot re-sends exactly the previewed arguments on approval.
+- Record a filing with a pending status right before the irreversible step, and complete it after
+  the read-back, so a run that stops halfway leaves a trace the next preview can settle.
 - The bot deletes its inbox files when the call ends; copy any attachment you keep.
 - Never log arguments, credentials or responses. Use `rt.logger` with plain fields.
 

@@ -26,8 +26,10 @@ const PAYMENT_KINDS = new Set(['refunded', 'elsewhere', 'pinned', 'claimAsIs']);
 const PURCHASE_KINDS = new Set(['inspectionDone', 'inspectionIncomplete', 'itemOverride']);
 const present = (v) => v !== undefined && v !== null && v !== '';
 
-const SCHEMA_VERSION = 1;
-
+/**
+ * Schema versions in `PRAGMA user_version`. Version 1 is the base schema below; each later entry of
+ * `MIGRATIONS` moves the database one version up, inside a transaction. A new database runs them all.
+ */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS accounts (
   owner      TEXT PRIMARY KEY,
@@ -149,6 +151,21 @@ CREATE TABLE IF NOT EXISTS fx_rates (
 );
 `;
 
+const MIGRATIONS = [
+  // 2: what each write tool's preview showed, so execute can refuse a plan that changed since.
+  `CREATE TABLE IF NOT EXISTS previews (
+    owner      TEXT NOT NULL,
+    tool       TEXT NOT NULL,
+    args_key   TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY (owner, tool, args_key)
+  );`,
+];
+
+export const SCHEMA_VERSION = 1 + MIGRATIONS.length;
+
 const json = (v, fallback) => JSON.stringify(v ?? fallback);
 const parse = (text, fallback) => {
   if (text === null || text === undefined || text === '') return fallback;
@@ -213,8 +230,33 @@ export class Db {
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
     this.#db = new DatabaseSync(file);
     this.#db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-    this.#db.exec(SCHEMA);
-    this.#db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    this.#migrate();
+  }
+
+  #migrate() {
+    let version = Number(this.#db.prepare('PRAGMA user_version').get().user_version);
+    if (version > SCHEMA_VERSION) {
+      throw new Error(`plugin database is version ${version}, newer than this plugin (${SCHEMA_VERSION})`);
+    }
+    if (version === 0) {
+      this.transaction(() => {
+        this.#db.exec(SCHEMA);
+        this.#db.exec('PRAGMA user_version = 1');
+      });
+      version = 1;
+    }
+    for (; version < SCHEMA_VERSION; version++) {
+      const sql = MIGRATIONS[version - 1];
+      this.transaction(() => {
+        this.#db.exec(sql);
+        this.#db.exec(`PRAGMA user_version = ${version + 1}`);
+      });
+    }
+  }
+
+  /** The schema version in the file. */
+  get version() {
+    return Number(this.#db.prepare('PRAGMA user_version').get().user_version);
   }
 
   #q(sql) {
@@ -491,6 +533,31 @@ export class Db {
       INSERT INTO fx_rates (day, rate, at, source) VALUES (:day, :rate, :at, :source)
       ON CONFLICT (day) DO UPDATE SET rate = excluded.rate, at = excluded.at, source = excluded.source
       RETURNING *`).get({ day, rate: Number(rate), at: n(at), source: n(source) }));
+  }
+
+  // ------------------------------------------------------------------ previews
+
+  /** Stores (or replaces) the digest of what a write tool's preview showed. `ttlMs` from now. */
+  putPreview({ owner, tool, argsKey, digest, ttlMs, now = Date.now() }) {
+    this.#q('DELETE FROM previews WHERE expires_at <= ?').run(now);
+    this.#q(`
+      INSERT INTO previews (owner, tool, args_key, digest, created_at, expires_at)
+      VALUES (:owner, :tool, :argsKey, :digest, :at, :expires)
+      ON CONFLICT (owner, tool, args_key) DO UPDATE SET
+        digest = excluded.digest, created_at = excluded.created_at, expires_at = excluded.expires_at`)
+      .run({ owner, tool, argsKey, digest, at: kstIso(), expires: now + ttlMs });
+  }
+
+  /** The stored digest, or null when there is none or it expired. */
+  previewDigest({ owner, tool, argsKey, now = Date.now() }) {
+    const r = this.#q('SELECT digest FROM previews WHERE owner = ? AND tool = ? AND args_key = ? AND expires_at > ?')
+      .get(owner, tool, argsKey, now);
+    return r?.digest ?? null;
+  }
+
+  /** Forgets a preview once its execute has started, so it cannot be used twice. */
+  dropPreview({ owner, tool, argsKey }) {
+    this.#q('DELETE FROM previews WHERE owner = ? AND tool = ? AND args_key = ?').run(owner, tool, argsKey);
   }
 
   // ------------------------------------------------------------------ helpers

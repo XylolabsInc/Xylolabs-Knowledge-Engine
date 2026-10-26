@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { Writable } from 'node:stream';
 import sharp from 'sharp';
+import { PDFDocument, PDFName } from 'pdf-lib';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { Client } from '@modelcontextprotocol/client';
 import { createRuntime, createLogger } from '../src/runtime.mjs';
@@ -13,6 +14,7 @@ import { openDb } from '../src/db.mjs';
 import { parseConfig } from '../src/config.mjs';
 import { makeApi } from '../src/dao/api.mjs';
 import { jpegSegments } from '../src/photos.mjs';
+import { kstIso } from '../src/dao/kst.mjs';
 import { registerAll } from '../src/tools/index.mjs';
 
 /**
@@ -217,7 +219,13 @@ describe('inspection tools', () => {
 
     fs.writeFileSync(path.join(inbox, 'IMG_1.jpg'), await jpeg('#c33', '2026-03-05'));
     fs.writeFileSync(path.join(inbox, 'IMG_2.jpg'), await jpeg('#3c3', '2026-03-06'));
-    fs.writeFileSync(path.join(inbox, 'receipt.pdf'), '%PDF-1.4\n% test receipt\n');
+    // A receipt PDF with an author, a creator tool and an XMP packet, as scanners and shops write them.
+    const pdf = await PDFDocument.create();
+    pdf.addPage([200, 200]);
+    pdf.setAuthor('Test Author'); pdf.setCreator('TestScanner'); pdf.setTitle('테스트 영수증');
+    const xmp = pdf.context.stream('<x:xmpmeta xmlns:x="adobe:ns:meta/"><dc:creator>XMPAUTHOR</dc:creator></x:xmpmeta>', { Type: 'Metadata', Subtype: 'XML' });
+    pdf.catalog.set(PDFName.of('Metadata'), pdf.context.register(xmp));
+    fs.writeFileSync(path.join(inbox, 'receipt.pdf'), await pdf.save({ useObjectStreams: false }));
     fs.writeFileSync(path.join(inbox, 'shot.png'), await sharp({ create: { width: 60, height: 40, channels: 3, background: '#fff' } }).png().toBuffer());
   });
 
@@ -248,6 +256,11 @@ describe('inspection tools', () => {
       '2026-03-10_재료비_A_알리익스프레스_20USD_주문내역.jpg',
     ]);
     assert.ok(fs.existsSync(path.join(dataDir, 'files', 'hong', 'receipts', rows[0].file)));
+    const original = fs.readFileSync(path.join(inbox, 'receipt.pdf')).toString('latin1');
+    assert.ok(original.includes('XMPAUTHOR') && original.includes('/Author'), 'the fixture carries metadata');
+    const kept = fs.readFileSync(path.join(dataDir, 'files', 'hong', 'receipts', rows[0].file));
+    for (const bit of ['XMPAUTHOR', '/Author', '/Creator', '/Metadata', '/Title']) assert.ok(!kept.toString('latin1').includes(bit), `${bit} removed`);
+    assert.equal((await PDFDocument.load(kept)).getPageCount(), 1, 'the pages survive');
     assert.equal(rows[1].data.cardLast4, '1234');
     assert.equal(rows[0].data.cardLast4, undefined);
     const again = await call('save_receipt', { receipts: [receipts[0]] }, meta);
@@ -278,6 +291,13 @@ describe('inspection tools', () => {
     const fix = await call('save_photos', { photos: [{ photoId: photos[1].id, shows: '렌즈 필터 두 개와 포장' }] });
     assert.ok(!fix.isError, fix.content[0].text);
     assert.equal(db.photo('hong', photos[1].id).shows, '렌즈 필터 두 개와 포장');
+    // Sending the same picture again changes only what was given: date, links and serials stay.
+    const again = await call('save_photos', { photos: [{ index: 1, purchaseKey: 'cam', shows: '카메라 상자와 모델명 라벨' }] }, meta);
+    assert.ok(!again.isError, again.content[0].text);
+    const kept = db.photo('hong', photos[0].id);
+    assert.equal(kept.takenDate, '2026-03-05');
+    assert.deepEqual(kept.data.serials, [{ item: '테스트 카메라', numbers: ['TC-0001'] }]);
+    assert.deepEqual(db.purchase('hong', 'cam').data.serials, { '테스트 카메라': ['TC-0001'] });
   });
 
   test('mark_inspection and mark_payment record what a person said', async () => {
@@ -336,6 +356,36 @@ describe('inspection tools', () => {
     assert.equal(nophoto.structuredContent.code, 'VALIDATION');
   });
 
+  test('execute refuses when the plan changed after the preview, or when there was no preview', async () => {
+    const args = { payment: '2026-03-02/120000' };
+    const before = site.state.docs.size;
+    assert.ok(!(await call('file_inspection_report', args)).isError);
+    const photo = db.photos('hong')[1];
+    await call('save_photos', { photos: [{ photoId: photo.id, takenDate: '2026-03-07' }] });   // 입고일자 moves
+    const changed = await call('file_inspection_report', args, execute(CREDS));
+    assert.equal(changed.structuredContent.code, 'CONFLICT');
+    assert.equal(changed.structuredContent.data.previewChanged, true);
+    assert.match(changed.content[0].text, /미리보기 뒤에 내용이 바뀌었습니다/);
+    const unseen = await call('file_inspection_report', { ...args, card: '1234' }, execute(CREDS));
+    assert.equal(unseen.structuredContent.code, 'CONFLICT', 'no preview for these arguments');
+    assert.equal(site.state.docs.size, before, 'nothing reached DaouOffice');
+    await call('save_photos', { photos: [{ photoId: photo.id, takenDate: '2026-03-06' }] });
+  });
+
+  test('an unconfirmed submission blocks the payment for a while, then settles', async () => {
+    const args = { payment: '2026-03-02/120000' };
+    const title = '2026년 3월 (1234/rnd/홍길동) 검수조서 - 테스트 카메라 외 1종';
+    const f = db.addFiling({ owner: 'hong', kind: 'inspection', ref: '2026-03-02/120000', title, status: 'submitting', detail: { withdrawn: ['1999999999999999'] } });
+    const blocked = await call('file_inspection_report', args);
+    assert.equal(blocked.structuredContent.code, 'CONFLICT');
+    assert.match(blocked.content[0].text, /내 기안함/);
+    assert.match(blocked.content[0].text, /1999999999999999/);
+    db.updateFiling('hong', f.id, { filedAt: kstIso(new Date(Date.now() - 20 * 60_000)) });
+    const ok = await call('file_inspection_report', args);
+    assert.ok(!ok.isError, ok.content[0].text);
+    assert.equal(db.filings('hong', { kind: 'inspection' }).find((x) => x.id === f.id).status, 'lost');
+  });
+
   test('file_inspection_report execute fills, attaches, submits and verifies on the server', { timeout: 120_000 }, async (t) => {
     if (!browser) return t.skip('chromium is not installed');
     const r = await call('file_inspection_report', { payment: '2026-03-02/120000' }, execute(CREDS));
@@ -347,8 +397,8 @@ describe('inspection tools', () => {
     assert.equal(doc.values[1], '법인카드');
     assert.equal(doc.values[9], '테스트 카메라 (S/N TC-0001)');
     assert.equal(doc.values[11], '1', '수량 keeps digits only');
-    const filing = db.filings('hong', { kind: 'inspection' })[0];
-    assert.equal(filing.docId, r.structuredContent.docId);
+    const filing = db.filings('hong', { kind: 'inspection' }).find((f) => f.docId === r.structuredContent.docId);
+    assert.equal(filing.status, '진행중', 'the submitting row was completed with the document');
     assert.equal(filing.ref, '2026-03-02/120000');
     assert.deepEqual(filing.detail.purchaseKeys, ['cam']);
     assert.equal(filing.detail.purchaseId, 'u1');
@@ -360,13 +410,27 @@ describe('inspection tools', () => {
 
   test('file_inspection_report fix withdraws the filed report and files it again', { timeout: 120_000 }, async (t) => {
     if (!browser) return t.skip('chromium is not installed');
-    const old = db.filings('hong', { kind: 'inspection' })[0].docId;
+    const old = db.filings('hong', { kind: 'inspection' }).find((f) => f.docId).docId;
+    // Another payment's report with the very same title: the filings, not the title, pick what to withdraw.
+    const title = site.state.docs.get(old).title;
+    const foreign = '2999999999999999';
+    site.state.docs.set(foreign, { title, form: '검수조서', status: '진행중', drafter: '홍길동', docNum: 'INS-999', values: [], files: [] });
     const preview = await call('file_inspection_report', { payment: '2026-03-02/120000', action: 'fix' });
-    assert.match(preview.content[0].text, new RegExp(`${old} 를 상신취소`));
+    assert.ok(!preview.isError, preview.content[0].text);
+    assert.match(preview.content[0].text, new RegExp(`${old} \\(`));
+    assert.doesNotMatch(preview.content[0].text, new RegExp(foreign));
     const r = await call('file_inspection_report', { payment: '2026-03-02/120000', action: 'fix' }, execute(CREDS));
     assert.ok(!r.isError, r.content[0].text);
     assert.equal(site.state.docs.get(old).status, '임시저장');
+    assert.equal(site.state.docs.get(foreign).status, '진행중', 'the other payment\'s report is untouched');
     assert.notEqual(r.structuredContent.docId, old);
+    assert.deepEqual(r.structuredContent.withdrawn, [old]);
+    // A report drafted by someone else is never withdrawn.
+    const theirs = '2999999999999998';
+    site.state.docs.set(theirs, { title, form: '검수조서', status: '진행중', drafter: '김철수', docNum: 'INS-998', values: [], files: [] });
+    const refused = await call('file_inspection_report', { payment: '2026-03-02/120000', action: 'fix', oldDocId: theirs });
+    assert.equal(refused.structuredContent.code, 'CONFLICT');
+    assert.match(refused.content[0].text, /다른 사람/);
   });
 
   test('attach_photos_to_claim previews, posts one comment with both photos, and never posts twice', { timeout: 120_000 }, async (t) => {
@@ -385,5 +449,12 @@ describe('inspection tools', () => {
     assert.ok(db.photos('hong').every((p) => p.comments.some((c) => c.target === 'claim' && c.docId === CLAIM)));
     const none = await call('attach_photos_to_claim', { from: '2026-03-01', to: '2026-03-31' });
     assert.equal(none.structuredContent.code, 'VALIDATION');
+    // If the records were lost after posting, the same comment on the server is found and not posted again.
+    for (const p of db.photos('hong')) db.updatePhoto('hong', p.id, { comments: [] });
+    assert.ok(!(await call('attach_photos_to_claim', { from: '2026-03-01', to: '2026-03-31' })).isError);
+    const again = await call('attach_photos_to_claim', { from: '2026-03-01', to: '2026-03-31' }, execute(CREDS));
+    assert.ok(!again.isError, again.content[0].text);
+    assert.match(again.content[0].text, /이미 있어/);
+    assert.equal(site.state.comments.get(CLAIM).length, 1, 'still one comment');
   });
 });

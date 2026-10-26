@@ -264,6 +264,12 @@ test('payment status lists what is missing per payment', () => {
   assert.match(describeStatus(s, { title: '현황' }), /검수 사진 1건/);
 });
 
+test('receipt file names stay under the file system limit in UTF-8 bytes', () => {
+  const name = receiptFileName({ date: '2026-03-02', category: '재료비', item: '가'.repeat(60), vendor: '나'.repeat(40), amount: 120000, currency: '원', kind: '거래명세서' }, 'pdf', 3);
+  assert.ok(Buffer.byteLength(name) <= 240, `${Buffer.byteLength(name)} bytes`);
+  assert.match(name, /^2026-03-02_재료비_가+_나*_120000원_거래명세서-3\.pdf$/);
+});
+
 test('receipt file names follow the folder convention the matcher reads', () => {
   assert.equal(receiptFileName({ date: '2026-03-02', category: '재료비', item: '테스트 보드 외 2건', vendor: '테스트_상점', amount: 45000, currency: '원', kind: '영수증' }, 'pdf'),
     '2026-03-02_재료비_테스트-보드-외-2건_테스트-상점_45000원_영수증.pdf');

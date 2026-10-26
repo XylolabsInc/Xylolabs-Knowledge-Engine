@@ -1,12 +1,14 @@
 import { dismissDialogs } from './dialogs.mjs';
 import { PluginError } from '../errors.mjs';
-import { assertExecute } from '../guard.mjs';
+import { requireExecute, markSent } from '../guard.mjs';
 
 /**
  * 결재선 편집, 상신, 승인, 상신취소, 삭제, 문서 연결, 댓글. 원본 저장소 `approval.mjs` 의
  * DOM 흐름을 그대로 옮겼다. 바뀐 것은 실패를 `PluginError` 로 던지는 것, 실패 스크린샷
  * (`recon/`)을 남기지 않는 것, 서버를 바꾸는 동작(상신, 승인, 상신취소, 삭제, 댓글)이
- * 승인된 실행에서만 돌게 `assertExecute()` 를 부르는 것이다.
+ * 승인된 실행에서만 돌게 처음에 `requireExecute()` 로 막는 것, 되돌릴 수 없는 마지막 클릭 직전에
+ * `markSent()` 를 부르는 것이다. 그 뒤의 실패만 결과를 모르는 것으로 보고된다. 확인 창을 여는 첫
+ * 클릭, 문서 연결, 결재선 편집은 열려 있는 기안 창만 바꾸므로 쓰기로 세지 않는다.
  *
  * 결재선 편집기의 `확인` 은 화면 안에서만 유지된다. 편집과 상신을 같은 페이지 세션에서 끝낸다.
  */
@@ -469,7 +471,7 @@ export async function readDocumentApprovalLine(page) {
 
 /** `결재요청` 을 누르고 뒤따르는 확인 팝업까지 처리한다. */
 export async function submitDocument(page) {
-  assertExecute('결재요청');
+  requireExecute('결재요청');   // this click only opens the confirm popup
   const found = await page.evaluate(() => {
     const btn = [...document.querySelectorAll('a, button')]
       .find((e) => (e.innerText || '').trim() === '결재요청' && e.offsetParent !== null);
@@ -484,10 +486,12 @@ export async function submitDocument(page) {
     const btn = [...document.querySelectorAll('a.btn_major_s, .go_popup a, [role=dialog] button')]
       .find((e) => /^(확인|예|결재요청)$/.test((e.innerText || '').trim()) && e.offsetParent !== null);
     if (!btn) return null;
-    btn.click();
+    window.__daoConfirm = btn;
     return btn.innerText.trim();
   });
   if (!confirmed) throw fail('상신 확인 팝업의 버튼을 찾지 못했다');
+  markSent('결재요청');
+  await page.evaluate(() => { window.__daoConfirm.click(); delete window.__daoConfirm; });
   await page.waitForTimeout(9000);
   return confirmed;
 }
@@ -497,7 +501,7 @@ export async function submitDocument(page) {
  * 의견 팝업의 `승인`(`a.btn_major_s`)까지 처리한다.
  */
 export async function approveDocument(page) {
-  assertExecute('결재 승인');
+  requireExecute('결재 승인');   // the first click opens the opinion popup
   await page.locator('a#act_approve').first().click({ timeout: 20_000 });
   await page.waitForTimeout(3000);
 
@@ -505,10 +509,12 @@ export async function approveDocument(page) {
     const btn = [...document.querySelectorAll('a.btn_major_s, .go_popup a, [role=dialog] button')]
       .find((e) => /^(승인|확인|예)$/.test((e.innerText || '').trim()) && e.offsetParent !== null);
     if (!btn) return null;
-    btn.click();
+    window.__daoConfirm = btn;
     return btn.innerText.trim();
   });
   if (!clicked) throw fail('결재 의견 팝업의 승인 버튼을 찾지 못했다');
+  markSent('결재 승인');
+  await page.evaluate(() => { window.__daoConfirm.click(); delete window.__daoConfirm; });
   await page.waitForTimeout(8000);
   return clicked;
 }
@@ -546,7 +552,7 @@ async function findPerson(page, name, dept) {
  * 상태 문자열을 돌려준다. `임시저장` 이 아니면 실패다.
  */
 export async function withdrawDocument(page, api, baseUrl, docId) {
-  assertExecute('상신취소');
+  requireExecute('상신취소');
   checkDocId(docId);
   const status = async () => (await api(`/gw/api/approval/document/${docId}`)).data?.data?.document?.docStatusName ?? '';
   if ((await status()) === '임시저장') return '임시저장';
@@ -577,6 +583,7 @@ async function withdrawOnPage(page, baseUrl, docId, status) {
     const el = document.querySelector('.go_popup.layer_approval');
     return el && el.getBoundingClientRect().width > 0;
   }, null, { timeout: 60_000, polling: 500 });
+  markSent('상신취소');
   await page.click('.go_popup.layer_approval a.btn_major_s');
   // 원본은 8초를 기다렸다. 상태가 임시저장으로 바뀌는 것을 직접 본다.
   const until = Date.now() + 30_000;
@@ -642,7 +649,7 @@ export async function removeDuplicateApprovers(page) {
  * 임시저장이 아니면(진행중, 완료) 거부한다. 삭제 뒤 문서를 다시 읽어 없어졌는지 본다.
  */
 export async function deleteDraft(page, api, baseUrl, docId) {
-  assertExecute('임시저장 문서 삭제');
+  requireExecute('임시저장 문서 삭제');
   checkDocId(docId);
   const read = async () => (await api(`/gw/api/approval/document/${docId}`));
   const before = (await read()).data?.data?.document?.docStatusName ?? '';
@@ -662,6 +669,7 @@ export async function deleteDraft(page, api, baseUrl, docId) {
   // 확인 창을 특정해서 누른다. 보이는 아무 주 버튼이나 누르지 않는다.
   await page.waitForFunction(() => [...document.querySelectorAll('.go_popup')]
     .some((p) => p.getBoundingClientRect().width > 0 && /삭제/.test(p.innerText || '')), null, { timeout: 20_000, polling: 500 });
+  markSent('임시저장 문서 삭제');
   await page.evaluate(() => {
     const pop = [...document.querySelectorAll('.go_popup')].find((p) => p.getBoundingClientRect().width > 0 && /삭제/.test(p.innerText || ''));
     pop.querySelector('a.btn_major_s').click();
@@ -683,6 +691,7 @@ export async function deleteDraft(page, api, baseUrl, docId) {
  * 연결된 문서 ID 목록을 돌려준다. 이미 연결된 것은 건너뛴다.
  */
 export async function linkDocuments(page, docs) {
+  requireExecute('관련문서 연결');   // edits the open draft only; nothing is saved until the submit
   for (const d of docs) {
     if (await page.$(`#refDocPart li[data-id="${d.id}"]`)) continue;
     await page.click('#addRelatedDocument');
@@ -714,11 +723,20 @@ export async function linkDocuments(page, docs) {
  *
  * 새 댓글 객체를 돌려준다.
  */
-export async function postComment(page, api, baseUrl, docId, text, files = []) {
-  assertExecute('결재 문서 댓글');
+export async function postComment(page, api, baseUrl, docId, text, files = [], { authorName } = {}) {
+  requireExecute('결재 문서 댓글');   // the upload before the click posts nothing; markSent comes right before it
   checkDocId(docId);
   const list = async () => (await api(`/gw/api/approval/document/${docId}/comment`)).data?.data ?? [];
-  const before = (await list()).length;
+  const same = (c) => String(c.message ?? '').trim() === text.trim();
+  // UNVERIFIED: shape not observed — the author field of a comment row; checked only when present.
+  const byMe = (c) => {
+    const who = c.writerName ?? c.writer?.name ?? c.userName ?? c.user?.name ?? c.author?.name ?? null;
+    return !authorName || !who || who === authorName;
+  };
+  // 같은 글의 댓글이 이미 있으면(앞선 실행이 등록 뒤에 멈췄다) 다시 달지 않고 그 댓글을 돌려준다.
+  const already = (await list()).find((c) => same(c) && byMe(c));
+  if (already) return { ...already, existing: true };
+
   await page.goto(`${baseUrl}/gw/app/approval/document/${docId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
   await page.waitForTimeout(3000);
@@ -736,17 +754,18 @@ export async function postComment(page, api, baseUrl, docId, text, files = []) {
   const answer = page.waitForResponse((r) => r.request().method() === 'POST' && /\/comment/.test(r.url()), { timeout: 30_000 })
     .then((r) => ({ status: r.status() }))
     .catch(() => null);
+  markSent('결재 문서 댓글');
   await page.evaluate(() => document.getElementById('apprComment')?.click());
   const res = await answer;
   if (res && res.status >= 400) throw fail(`댓글을 서버가 거절했다 (${docId}): HTTP ${res.status}`);
+  // 글이 같은 댓글을 찾는다. 첫 댓글을 짐작으로 고르지 않는다.
   const until = Date.now() + 30_000;
-  let now = await list();
-  while (now.length <= before && Date.now() < until) {
+  let made = (await list()).find((c) => same(c) && byMe(c));
+  while (!made && Date.now() < until) {
     await page.waitForTimeout(2000);
-    now = await list();
+    made = (await list()).find((c) => same(c) && byMe(c));
   }
-  if (now.length <= before) throw fail(`댓글이 등록되지 않았다 (${docId})`);
-  const made = now.find((c) => String(c.message ?? '').trim() === text.trim()) ?? now[0];
+  if (!made) throw fail(`댓글이 등록됐는지 확인하지 못했다 (${docId})`);
   // 첨부가 실제로 붙었는지 본다. 화면에 올라간 것만 보고 믿지 않는다.
   if ((made.attaches ?? []).length !== files.length) {
     throw fail(`댓글 첨부 수가 다르다: ${(made.attaches ?? []).length}/${files.length} (${docId})`);

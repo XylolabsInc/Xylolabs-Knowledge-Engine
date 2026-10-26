@@ -1,4 +1,4 @@
-import { assertExecute } from '../guard.mjs';
+import { markSent } from '../guard.mjs';
 import { PluginError } from '../errors.mjs';
 
 /**
@@ -39,7 +39,8 @@ const isReadOnly = (method, path) => method === 'GET'
 export function makeApi(page, { onUnauthorized } = {}) {
   return async function call(path, { method = 'GET', body } = {}) {
     const m = String(method).toUpperCase();
-    if (!isReadOnly(m, path)) assertExecute(`${m} ${String(path).split('?')[0]}`);
+    // A non-read call is the irreversible request itself: once sent, failures are unknown outcomes.
+    if (!isReadOnly(m, path)) markSent(`${m} ${String(path).split('?')[0]}`);
     let result;
     try {
       result = await page.evaluate(

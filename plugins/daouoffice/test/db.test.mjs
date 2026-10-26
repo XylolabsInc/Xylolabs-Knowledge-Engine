@@ -134,3 +134,26 @@ test('transactions roll back together', () => {
   db.transaction(() => db.upsertPurchase({ owner: 'hong', key: 'c', title: 'c' }));
   assert.equal(db.purchases('hong').length, 1);
 });
+
+test('a version 1 database is migrated: the previews table appears, data stays', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mig-'));
+  const file = path.join(dir, 'daouoffice.db');
+  const db = openDb(file);
+  db.upsertAccount({ owner: 'hong', name: '홍길동' });
+  db.close();
+  // Turn it back into what the first release wrote.
+  const raw = new DatabaseSync(file);
+  raw.exec('DROP TABLE previews; PRAGMA user_version = 1;');
+  raw.close();
+  const again = openDb(file);
+  assert.equal(again.version, 2);
+  assert.equal(again.account('hong').name, '홍길동');
+  again.putPreview({ owner: 'hong', tool: 't', argsKey: 'k', digest: 'd', ttlMs: 60_000 });
+  assert.equal(again.previewDigest({ owner: 'hong', tool: 't', argsKey: 'k' }), 'd');
+  assert.equal(again.previewDigest({ owner: 'hong', tool: 't', argsKey: 'k', now: Date.now() + 120_000 }), null, 'expired');
+  again.dropPreview({ owner: 'hong', tool: 't', argsKey: 'k' });
+  assert.equal(again.previewDigest({ owner: 'hong', tool: 't', argsKey: 'k' }), null);
+  again.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

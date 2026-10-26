@@ -5,6 +5,8 @@ import * as z from 'zod';
 import { PluginError } from '../errors.mjs';
 import { kstDate, kstIso, addDays, monthRange } from '../dao/kst.mjs';
 import { ingestPhoto, stripImage, thumbnail } from '../photos.mjs';
+import { stripPdf } from '../pdf.mjs';
+import { digestOf } from '../runtime.mjs';
 import { listCards, chooseCard, last4Of } from '../dao/cards.mjs';
 import { matchCard, OVERRIDE_KINDS, overrideMatches } from '../dao/card-match.mjs';
 import { findForm } from '../dao/forms.mjs';
@@ -106,8 +108,11 @@ async function docNumbers(api, ids) {
   return out;
 }
 
+/** 미리보기에 작게 싣는 사진 수. 넘는 것은 글로 센다. */
+const THUMBS = 6;
+
 /** 사진 몇 장을 작게 줄여 미리보기에 싣는다. */
-async function thumbnails(paths, max = 6) {
+async function thumbnails(paths, max = THUMBS) {
   const out = [];
   for (const p of paths.slice(0, max)) out.push({ data: await thumbnail(p), mimeType: 'image/jpeg' });
   return out;
@@ -177,8 +182,14 @@ export function register(server, rt) {
         });
         row = added;
         if (!added.created) {
-          notes.push(`${label}: 이미 저장한 사진(사진 ${added.id})이라 짝과 설명을 새로 적었습니다.`);
-          row = rt.db.updatePhoto(call.owner, added.id, { ...fields, data: { ...added.data, warn: e.warn ?? added.data.warn ?? null, serials } });
+          // The same picture again: change only what this call gave; keep the rest (date, links, serials).
+          notes.push(`${label}: 이미 저장한 사진(사진 ${added.id})이라 이번에 적은 값만 고쳤습니다.`);
+          const patch = {};
+          for (const k of ['purchaseKey', 'alsoFor', 'shows', 'otherCard']) if (e[k] !== undefined) patch[k] = e[k];
+          const taken = e.takenDate ?? added.takenDate ?? saved.takenDate;
+          if (taken !== added.takenDate) patch.takenDate = taken;
+          patch.data = { ...added.data, ...(e.warn !== undefined ? { warn: e.warn } : {}), ...(serials.length ? { serials } : {}) };
+          row = rt.db.updatePhoto(call.owner, added.id, patch);
         }
       } else {
         const ph = rt.db.photo(call.owner, e.photoId);
@@ -245,8 +256,10 @@ export function register(server, rt) {
       let data;
       let ext;
       if (isPdf(att)) {
-        data = fs.readFileSync(att.path);
-        if (data.subarray(0, 5).toString('latin1') !== '%PDF-') throw new PluginError('VALIDATION', `첨부 ${r.index} (${att.name}) 은 PDF 가 아닙니다.`);
+        const raw = fs.readFileSync(att.path);
+        if (raw.subarray(0, 5).toString('latin1') !== '%PDF-') throw new PluginError('VALIDATION', `첨부 ${r.index} (${att.name}) 은 PDF 가 아닙니다.`);
+        // Author, creator, XMP and the like go before the file is kept or attached anywhere.
+        data = await stripPdf(raw);
         ext = 'pdf';
       } else if (isImage(att)) {
         ({ data } = await stripImage(fs.readFileSync(att.path)));
@@ -494,8 +507,81 @@ export function register(server, rt) {
 
   // ------------------------------------------------------------------ file_inspection_report
 
-  /** 미리보기와 실행이 같은 계산을 한다. 실행은 이것을 처음부터 다시 돈다. */
-  async function prepareReport(call, { page, api }, { payment, purchaseKey, card, action = 'new' }) {
+  /** sha256 of a stored file, for the preview digest: a re-sent photo or receipt changes it. */
+  const fileHash = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+  /** How long an unconfirmed submission blocks the payment before the draft box is trusted. */
+  const PENDING_MS = 15 * 60_000;
+
+  /**
+   * Filings left at `submitting` (the run stopped after it reached DaouOffice) are settled first:
+   * found in the draft box → recorded with that document; otherwise they block the payment for
+   * PENDING_MS, then they are marked `lost`.
+   */
+  function settlePending(call, records, filed) {
+    for (const f of records.filter((r) => r.status === 'submitting')) {
+      const skip = new Set((f.detail?.oldIds ?? []).map(String));
+      const docs = (filed.get(f.title) ?? []).filter((d) => !skip.has(String(d.documentId)));
+      if (docs.length) {
+        rt.db.updateFiling(call.owner, f.id, {
+          docId: String(docs[0].documentId), status: docs[0].docStatusName, detail: { ...f.detail, settledAt: kstIso() },
+        });
+        continue;
+      }
+      const withdrawn = f.detail?.withdrawn ?? [];
+      if (Date.now() - Date.parse(f.filedAt) < PENDING_MS) {
+        throw new PluginError('CONFLICT', [
+          `이 결제의 직전 상신(${f.title}) 결과를 아직 확인하지 못했습니다. 내 기안함(my_drafts)이나 read_document 로 올라갔는지 확인해 주세요.`,
+          withdrawn.length ? `그때 옛 문서 ${withdrawn.join(', ')} 는 상신취소돼 임시저장에 있습니다.` : null,
+          '몇 분 뒤 다시 요청하면 내 기안함을 다시 확인합니다.',
+        ].filter(Boolean).join(' '), { data: { pendingFiling: f.id } });
+      }
+      rt.db.updateFiling(call.owner, f.id, { status: 'lost', detail: { ...f.detail, settledAt: kstIso() } });
+    }
+  }
+
+  const SUFFIX = / \(\d+월 \d+일 결제\)$/;
+
+  /**
+   * The old reports a fix or refile acts on. They come from this payment's filings first (by
+   * document id), so a report of another payment with the same title is never touched. Only when no
+   * filing names one does the title decide, and then only if exactly one report matches (or
+   * `oldDocId` picks it). Each must be a 검수조서 drafted by this person.
+   */
+  async function resolveOldReports(call, api, plan, records, filed, oldDocId, me) {
+    const recorded = records.filter((f) => f.docId && !['submitting', 'lost'].includes(f.status)).map((f) => f.docId);
+    let olds;
+    if (oldDocId) {
+      olds = await oldReports(api, [oldDocId]);
+      if (!olds.length) throw new PluginError('NOT_FOUND', `문서 ${oldDocId} 를 찾지 못했습니다.`);
+      const base = plan.title.replace(SUFFIX, '');
+      if (!recorded.includes(String(oldDocId)) && !olds[0].title.startsWith(base)) {
+        throw new PluginError('VALIDATION', `문서 ${oldDocId} 는 이 결제의 검수조서가 아닙니다 (${olds[0].title}).`);
+      }
+    } else if (recorded.length) {
+      olds = (await oldReports(api, recorded)).filter((o) => o.status !== '임시저장');
+    } else {
+      const base = plan.title;
+      const matches = [...filed.entries()].filter(([title]) => title === base || (title.startsWith(`${base} (`) && SUFFIX.test(title)))
+        .flatMap(([, docs]) => docs);
+      if (matches.length > 1) {
+        throw new PluginError('VALIDATION', `같은 제목의 검수조서가 ${matches.length}건 있습니다: ${matches.map((d) => `${d.documentId} (${d.title})`).join(', ')}. 어느 문서인지 물어 oldDocId 로 알려 주세요.`);
+      }
+      olds = await oldReports(api, matches.map((d) => d.documentId));
+    }
+    olds = olds.filter((o) => o.status !== '임시저장');
+    if (!olds.length) {
+      throw new PluginError('VALIDATION', `고치거나 대신할 옛 검수조서를 찾지 못했습니다: ${plan.title}. 이미 상신취소해 임시저장으로 돌아갔다면 action new 로 올립니다.`);
+    }
+    for (const o of olds) {
+      if (o.formName && o.formName !== FORM_NAME) throw new PluginError('CONFLICT', `문서 ${o.id} 는 검수조서가 아닙니다 (${o.formName}).`);
+      if (o.drafter && me && o.drafter !== me) throw new PluginError('CONFLICT', `문서 ${o.id} 는 다른 사람(${o.drafter})이 올린 문서라 건드리지 않습니다.`);
+    }
+    return olds;
+  }
+
+  /** 미리보기와 실행이 같은 계산을 한다. 실행은 이것을 처음부터 다시 돌고, 미리보기와 다르면 멈춘다. */
+  async function prepareReport(call, { api }, { payment, purchaseKey, card, action = 'new', oldDocId }) {
     const [day, amountText] = payment.split('/');
     const [mStart, mEnd] = monthRange(day.slice(0, 7));
     const today = kstDate();
@@ -519,13 +605,21 @@ export function register(server, rt) {
     });
 
     const filed = await filedByTitle(api);
+    settlePending(call, rt.db.filings(call.owner, { kind: 'inspection', ref: plan.key }), filed);
+    const records = rt.db.filings(call.owner, { kind: 'inspection', ref: plan.key });
     const opts = { withdraw: [], links: [], oldIds: [] };
     const notes = [];
     if (action === 'new') {
+      // A filing counts while its document is still up (a manually withdrawn one sits in 임시저장).
+      const liveIds = new Set([...filed.values()].flat().map((d) => String(d.documentId)));
+      const mine = records.filter((f) => f.docId && liveIds.has(String(f.docId)));
+      if (mine.length) {
+        throw new PluginError('CONFLICT', `이 결제의 검수조서가 이미 올라가 있습니다 (문서 ${mine.map((f) => f.docId).join(', ')}). 고치려면 action fix, 끝난 문서를 대신하려면 refile 입니다.`);
+      }
       if (filed.has(plan.title)) {
         // 같은 구독을 같은 달에 두 번 결제하면 제목이 겹친다. 다른 결제로 올린 기록이 있으면 결제일을 붙여 가른다.
-        const records = rt.db.filings(call.owner, { kind: 'inspection' }).filter((f) => f.title === plan.title);
-        const otherKey = records.some((f) => f.ref !== plan.key) && !records.some((f) => f.ref === plan.key);
+        const sameTitle = rt.db.filings(call.owner, { kind: 'inspection' }).filter((f) => f.title === plan.title);
+        const otherKey = sameTitle.some((f) => f.ref !== plan.key);
         if (!otherKey) {
           throw new PluginError('CONFLICT', `같은 제목의 검수조서가 이미 올라가 있습니다 (문서 ${filed.get(plan.title).map((d) => d.documentId).join(', ')}). 고치려면 action fix, 끝난 문서를 대신하려면 refile 입니다.`);
         }
@@ -534,10 +628,10 @@ export function register(server, rt) {
         if (filed.has(plan.title)) throw new PluginError('CONFLICT', `같은 제목의 검수조서가 이미 올라가 있습니다: ${plan.title}`);
       }
     } else {
-      const olds = await oldReports(api, filed.get(plan.title) ?? []);
-      if (!olds.length) {
-        throw new PluginError('VALIDATION', `고치거나 대신할 옛 검수조서를 제목으로 찾지 못했습니다: ${plan.title}. 이미 상신취소해 임시저장으로 돌아갔다면 action new 로 올립니다.`);
-      }
+      const olds = await resolveOldReports(call, api, plan, records, filed, oldDocId, ctx.account?.name);
+      // 고친 문서는 옛 문서가 쓰던 결제일 꼬리표를 그대로 단다(같은 달 같은 구독을 가르는 표시).
+      const suffix = olds.map((o) => SUFFIX.exec(o.title)?.[0]).find(Boolean);
+      if (suffix && !SUFFIX.test(plan.title)) plan.title = `${plan.title}${suffix}`;
       if (action === 'refile') {
         const live = olds.filter((o) => o.status !== '완료');
         if (live.length) throw new PluginError('CONFLICT', `진행 중인 옛 문서가 있습니다 (${live.map((o) => o.id).join(', ')}). 결재 전이면 action fix 로 상신취소하고 고쳐 올립니다.`);
@@ -551,55 +645,87 @@ export function register(server, rt) {
         if (locked.length) throw new PluginError('CONFLICT', `결재가 진행돼 상신취소할 수 없습니다 (${locked.map((o) => o.id).join(', ')}). 결재자나 회계에게 반려를 부탁해야 합니다.`);
         opts.withdraw = olds.map((o) => o.id);
         opts.oldIds = olds.map((o) => o.id);
-        notes.push(`옛 문서 ${olds.map((o) => o.id).join(', ')} 를 상신취소한 뒤 새로 올립니다.`);
+        notes.push(`새 문서를 다 채운 뒤 옛 문서 ${olds.map((o) => `${o.id} (${o.title})`).join(', ')} 를 상신취소하고 바로 올립니다.`);
       }
     }
-    return { ctx, plan, opts, notes };
+    const digest = digestOf({
+      action, key: plan.key, title: plan.title, header: plan.header, total: plan.total,
+      lines: plan.lines.map((l) => [l.name, l.vendor, l.qty, l.supply, l.vat, l.total]),
+      approvers: plan.approvers,
+      files: plan.files.map((f) => [f.kind, f.name, fileHash(f.path)]),
+      photoIds: plan.photoIds, withdraw: opts.withdraw, links: opts.links.map((l) => l.id), oldIds: opts.oldIds,
+    });
+    return { ctx, plan, opts, notes, digest };
   }
 
   rt.tool(server, 'file_inspection_report', {
     kind: 'write',
+    previewDigest: true,
     description: [
       '카드 결제 한 건의 검수조서를 올린다. 이 도구는 미리보기(제목, 칸, 세부내역, 첨부, 결재선, 사진)를 만들 뿐이고, 사람이 승인 버튼을 눌러야 상신된다.',
       '품목이 모두 찍힌 사진이 있어야 한다. 구독과 이용료는 사진 대신 인보이스를 붙인다. 먼저 inspection_candidates 로 "올릴 수 있음" 인지 확인하고, 사람에게 어느 결제를 올릴지 확인받는다.',
       '주문마다 품의를 따로 쓰는 결제는 purchaseKey 로 품의를 고른다. action: new(새로), fix(결재 전 문서를 상신취소하고 고쳐 올림), refile(결재가 끝난 문서를 대신할 새 문서를 올리고 연결).',
+      '같은 제목의 옛 문서가 여럿이면 어느 것인지 물어 oldDocId 로 준다.',
     ].join(' '),
     input: z.object({
       payment: z.string().regex(/^\d{4}-\d{2}-\d{2}\/-?\d+$/, 'YYYY-MM-DD/금액').describe('결제 키. 예: 2026-03-02/45000'),
       purchaseKey: keyArg.optional().describe('주문마다 한 장씩 쓰는 결제에서 고를 품의'),
       card: cardArg,
       action: z.enum(['new', 'fix', 'refile']).optional().describe('기본 new'),
+      oldDocId: z.string().regex(/^\d{6,25}$/).optional().describe('fix, refile 에서 고칠 옛 문서 ID. 같은 제목이 여럿일 때만'),
     }),
   }, {
     async preview(args, call) {
       return rt.session(call, async (s) => {
-        const { plan, notes } = await prepareReport(call, s, args);
+        const { plan, notes, digest } = await prepareReport(call, s, args);
         const photos = plan.files.filter((f) => f.kind === 'photo').map((f) => f.path);
         return {
-          text: [describePlan(plan), ...notes.map((n) => `동작: ${n}`), '', '승인하면 이대로 상신합니다. 올린 뒤 서버의 문서를 칸마다 다시 읽어 대조합니다.'].join('\n'),
+          text: [
+            describePlan(plan),
+            ...notes.map((n) => `동작: ${n}`),
+            photos.length > THUMBS ? `사진 ${photos.length}장 가운데 앞의 ${THUMBS}장만 아래에 작게 보입니다. 나머지도 모두 첨부됩니다.` : null,
+            '',
+            '승인하면 이대로 상신합니다. 그사이 사진, 영수증, 품의가 바뀌면 상신하지 않고 미리보기를 다시 만듭니다. 올린 뒤 서버의 문서를 칸마다 다시 읽어 대조합니다.',
+          ].filter((l) => l !== null).join('\n'),
           images: await thumbnails(photos),
-          data: { payment: plan.key, title: plan.title, action: args.action ?? 'new', files: plan.files.map((f) => f.name), approvers: plan.approvers },
+          data: { payment: plan.key, title: plan.title, action: args.action ?? 'new', files: plan.files.map((f) => f.name), photos: photos.length, approvers: plan.approvers },
+          digest,
         };
       });
     },
     async execute(args, call) {
       return rt.session(call, async (s) => {
-        const { ctx, plan, opts } = await prepareReport(call, s, args);
+        const { ctx, plan, opts, digest } = await prepareReport(call, s, args);
+        call.assertPreviewed(digest);
         const form = await findForm(s.api, FORM_NAME);
-        const res = await fileReport(s.page, s.api, s.baseUrl, plan, { formId: form.id, deptId: ctx.account?.deptId, ...opts });
+        const detail = {
+          action: args.action ?? 'new', oldIds: opts.oldIds, files: plan.files.map((f) => f.name), photoIds: plan.photoIds,
+          purchaseKeys: plan.purchases.map((p) => p.key), purchaseId: plan.payment.rowId, withdrawn: [],
+        };
+        let filing = null;
+        // Recorded right before the first irreversible step, so a run that stops after it leaves a trace.
+        const onStage = (stage, info) => {
+          filing ??= rt.db.addFiling({ owner: call.owner, kind: 'inspection', ref: plan.key, title: plan.title, status: 'submitting', detail });
+          if (stage === 'withdrawn') {
+            detail.withdrawn.push(info.id);
+            rt.db.updateFiling(call.owner, filing.id, { detail });
+          }
+        };
+        let res;
+        try {
+          res = await fileReport(s.page, s.api, s.baseUrl, plan, { formId: form.id, deptId: ctx.account?.deptId, ...opts, onStage });
+        } catch (e) {
+          if (!detail.withdrawn.length || !(e instanceof PluginError)) throw e;
+          throw new PluginError(e.code,
+            `${e.message} 옛 문서 ${detail.withdrawn.join(', ')} 는 상신취소돼 임시저장에 있습니다. 내 기안함에서 확인한 뒤 action new 로 다시 올립니다.`,
+            { cause: e, data: { ...(e.data ?? {}), withdrawn: detail.withdrawn } });
+        }
         const problems = [
           ...(res.titleOk ? [] : ['제목']),
           ...(res.attachCount === plan.files.length ? [] : [`첨부 ${res.attachCount}/${plan.files.length}`]),
           ...res.diffs.map((d) => `칸 ${d.index + 1}: "${d.got ?? ''}" (기대 "${d.want}")`),
         ];
-        rt.db.addFiling({
-          owner: call.owner, kind: 'inspection', ref: plan.key, docId: res.docId, title: plan.title,
-          status: problems.length ? 'mismatch' : res.status,
-          detail: {
-            action: args.action ?? 'new', oldIds: opts.oldIds, files: plan.files.map((f) => f.name), photoIds: plan.photoIds, problems,
-            purchaseKeys: plan.purchases.map((p) => p.key), purchaseId: plan.payment.rowId,
-          },
-        });
+        rt.db.updateFiling(call.owner, filing.id, { docId: res.docId, status: problems.length ? 'mismatch' : res.status, detail: { ...detail, problems } });
         if (problems.length) {
           throw new PluginError('UPSTREAM',
             `검수조서는 올라갔지만(문서 ${res.docId}) 서버 내용이 계획과 다릅니다: ${problems.slice(0, 6).join('; ')}. 다우오피스에서 확인하고, 결재 전이면 action fix 로 고쳐 올려 주세요.`,
@@ -607,7 +733,7 @@ export function register(server, rt) {
         }
         return {
           text: `검수조서를 올렸습니다: ${plan.title} (문서 ${res.docId}, ${res.status}). 서버 문서의 제목, 칸 ${plan.lines.length}줄, 첨부 ${plan.files.length}개가 계획과 같습니다.`,
-          data: { docId: res.docId, status: res.status, title: plan.title, payment: plan.key, verified: true },
+          data: { docId: res.docId, status: res.status, title: plan.title, payment: plan.key, verified: true, withdrawn: res.withdrawn },
         };
       });
     },
@@ -676,11 +802,15 @@ export function register(server, rt) {
         comments.push({ docId: g.docId, docTitle: g.title, text, photos });
       });
     }
-    return { comments, skipped, from: f, to: t };
+    const digest = digestOf(comments.map((c) => ({
+      docId: c.docId, text: c.text, photos: c.photos.map((ph) => [ph.id, ph.sha256]),
+    })));
+    return { comments, skipped, from: f, to: t, me, digest };
   }
 
   rt.tool(server, 'attach_photos_to_claim', {
     kind: 'write',
+    previewDigest: true,
     description: [
       '검수 사진을 그 물건 결제가 들어간 지출결의(법인카드 지출품의서)에 댓글로 붙인다. 아직 붙이지 않은 사진만 붙이고, 붙인 사진은 기록해 다시 올리지 않는다.',
       '댓글은 결재선 사람에게 알림이 가므로 사람이 붙이라고 했을 때만 쓴다. 이 도구는 미리보기를 만들 뿐이고 사람이 승인 버튼을 눌러야 올라간다.',
@@ -695,42 +825,47 @@ export function register(server, rt) {
   }, {
     async preview(args, call) {
       return rt.session(call, async (s) => {
-        const { comments, skipped } = await planComments(call, s, args);
+        const { comments, skipped, digest } = await planComments(call, s, args);
         if (!comments.length) {
           throw new PluginError('VALIDATION', ['붙일 사진이 없습니다.', ...skipped].join('\n'));
         }
         const L = [];
         for (const c of comments) L.push(`지출결의 ${c.docId} (${c.docTitle}) · 사진 ${c.photos.length}장`, c.text, '');
         if (skipped.length) L.push('건너뜀:', ...skipped.map((x) => `- ${x}`), '');
-        L.push('승인하면 이 댓글을 답니다. 결재선 사람에게 알림이 갑니다.');
+        const total = comments.reduce((t, c) => t + c.photos.length, 0);
+        if (total > THUMBS) L.push(`사진 ${total}장 가운데 앞의 ${THUMBS}장만 아래에 작게 보입니다.`);
+        L.push('승인하면 이 댓글을 답니다. 결재선 사람에게 알림이 갑니다. 그사이 사진이나 짝이 바뀌면 달지 않고 미리보기를 다시 만듭니다.');
         const dir = photosDir(call.owner);
         return {
           text: L.join('\n'),
           images: await thumbnails(comments.flatMap((c) => c.photos).map((ph) => inside(dir, ph.file)).filter(Boolean)),
           data: { comments: comments.map((c) => ({ docId: c.docId, photoIds: c.photos.map((ph) => ph.id) })), skipped },
+          digest,
         };
       });
     },
     async execute(args, call) {
       return rt.session(call, async (s) => {
-        const { comments, skipped } = await planComments(call, s, args);
+        const { comments, skipped, me, digest } = await planComments(call, s, args);
+        call.assertPreviewed(digest);
         if (!comments.length) throw new PluginError('CONFLICT', ['붙일 사진이 없습니다.', ...skipped].join('\n'));
         const dir = photosDir(call.owner);
         const done = [];
         for (const c of comments) {
           const files = c.photos.map((ph) => inside(dir, ph.file));
           if (files.some((f) => !f)) throw new PluginError('VALIDATION', `사진 파일이 저장돼 있지 않습니다 (지출결의 ${c.docId}).`);
-          const made = await postComment(s.page, s.api, s.baseUrl, c.docId, c.text, files);
+          // postComment skips a comment that is already there with the same text (a run that stopped after posting).
+          const made = await postComment(s.page, s.api, s.baseUrl, c.docId, c.text, files, { authorName: me });
           const at = kstIso();
           // 하나 올릴 때마다 적는다. 중간에 멈춰도 올린 사진은 다시 올리지 않는다.
           for (const ph of c.photos) {
             rt.db.updatePhoto(call.owner, ph.id, { comments: [...(ph.comments ?? []), { target: 'claim', docId: c.docId, commentId: made?.id ?? null, at }] });
           }
-          done.push({ docId: c.docId, commentId: made?.id ?? null, photos: c.photos.length });
+          done.push({ docId: c.docId, commentId: made?.id ?? null, photos: c.photos.length, existing: Boolean(made?.existing) });
         }
         return {
           text: [`지출결의 댓글 ${done.length}개에 사진 ${done.reduce((t, d) => t + d.photos, 0)}장을 붙였습니다. 서버에서 첨부 수를 확인했습니다.`,
-            ...done.map((d) => `- 지출결의 ${d.docId}: 사진 ${d.photos}장`),
+            ...done.map((d) => `- 지출결의 ${d.docId}: 사진 ${d.photos}장${d.existing ? ' (같은 댓글이 이미 있어 다시 달지 않았습니다)' : ''}`),
             ...(skipped.length ? ['건너뜀:', ...skipped.map((x) => `- ${x}`)] : [])].join('\n'),
           data: { comments: done, skipped },
         };
@@ -739,11 +874,35 @@ export function register(server, rt) {
   });
 }
 
-/** 영수증 파일 이름: `날짜_비목_품명_구매처_금액통화_종류.확장자`. 카드 짝짓기의 예외(pin)가 이 이름을 본다. */
+/**
+ * 영수증 파일 이름: `날짜_비목_품명_구매처_금액통화_종류.확장자`. 카드 짝짓기의 예외(pin)가 이 이름을 본다.
+ * 파일 시스템의 이름 한도(255바이트)를 넘지 않게 UTF-8 바이트로 자른다. 한글은 글자당 3바이트다.
+ */
+export const RECEIPT_NAME_MAX_BYTES = 240;
+const cutBytes = (text, max) => {
+  let out = '';
+  for (const ch of text) {
+    if (Buffer.byteLength(out + ch) > max) break;
+    out += ch;
+  }
+  return out;
+};
 export function receiptFileName(r, ext, n = 1) {
   const clean = (s, max) => String(s).normalize('NFC').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
     .replace(/_/g, '-').replace(/\s+/g, ' ').trim().slice(0, max);
-  const item = clean(r.item, 60).replace(/ /g, '-');
+  let item = clean(r.item, 60).replace(/ /g, '-');
+  let vendor = clean(r.vendor, 40);
+  let category = clean(r.category, 20);
   const amount = r.currency === '원' ? String(Math.round(r.amount)) : String(r.amount);
-  return `${r.date}_${clean(r.category, 20)}_${item}_${clean(r.vendor, 40)}_${amount}${r.currency}_${r.kind}${n > 1 ? `-${n}` : ''}.${ext}`;
+  const tail = `_${amount}${r.currency}_${r.kind}${n > 1 ? `-${n}` : ''}.${ext}`;
+  const build = () => `${r.date}_${category}_${item}_${vendor}${tail}`;
+  // Shorten the free-text parts, longest first, until the name fits.
+  for (const part of ['item', 'vendor', 'category']) {
+    const over = Buffer.byteLength(build()) - RECEIPT_NAME_MAX_BYTES;
+    if (over <= 0) break;
+    const current = { item, vendor, category }[part];
+    const keep = cutBytes(current, Math.max(1, Buffer.byteLength(current) - over));
+    if (part === 'item') item = keep; else if (part === 'vendor') vendor = keep; else category = keep;
+  }
+  return build();
 }

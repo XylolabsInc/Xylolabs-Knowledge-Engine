@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import { PluginError } from './errors.mjs';
 import { runWithMode } from './guard.mjs';
@@ -19,11 +20,19 @@ import { readProfile } from './dao/org.mjs';
  *                    (or none) runs `preview`.
  *          Every handler runs inside the write guard (src/guard.mjs). Only an approved `execute` may
  *          reach a DAO function that changes DaouOffice; a preview, read or local tool that does
- *          throws instead of submitting. Once a write has started, a later AUTH_FAILED,
- *          DUPLICATE_SESSION, NOT_CONNECTED or RATE_LIMITED is reported as UPSTREAM with
- *          `data.afterWrite`, because the bot re-offers actions that fail with those codes.
+ *          throws instead of submitting. Once a write has started (`assertExecute()`, `markSent()`),
+ *          every error carries `data.afterWrite` (outcome unknown; login codes become UPSTREAM), keeps
+ *          its original `data`, and its message tells the person to check DaouOffice, not to retry.
+ * previewDigest  true for write tools whose execute must do exactly what the preview showed.
+ *          The preview returns `digest`: the plan object (title, fields, lines, approvers, file
+ *          hashes, target ids…), which the runtime hashes with `digestOf()`, or that hash as a string.
+ *          It is stored per (owner, tool, arguments) for 35 minutes in the plugin DB and never sent to
+ *          the bot. Execute recomputes the plan and calls `call.assertPreviewed(plan)` (sync; object or
+ *          string) before writing: a missing, expired, used or different digest is CONFLICT, and the
+ *          stored digest is consumed. Until it passes the guard refuses writes.
  * role     'connect' | 'login' → tool `_meta["xylolabs/role"]`; the bot hides these from the model
- * account  false for tools that work without a connected account (guide)
+ * account  false for read/local tools that work without a connected account (guide); the tool's
+ *          `_meta["xylolabs/account"] = false` tells the bot not to ask the person to connect first
  *
  * The handler gets `(args, call)` with
  *   call = { user, creds, allowKick, mode, attachments, owner }
@@ -50,6 +59,7 @@ const META = {
   attachments: 'xylolabs/attachments',
   role: 'xylolabs/role',
   kind: 'xylolabs/kind',
+  account: 'xylolabs/account',
   private: 'xylolabs/private',
   name: 'xylolabs/name',
 };
@@ -213,12 +223,67 @@ export function toPluginError(e) {
   return new PluginError('INTERNAL', '플러그인 내부 오류가 발생했습니다.', { cause: e });
 }
 
+// ------------------------------------------------------------------ previews
+
+/** JSON with object keys sorted at every level, so equal values give equal text. */
+export function canonicalJson(value) {
+  return JSON.stringify(value, (key, v) => (v && typeof v === 'object' && !Array.isArray(v) && !Buffer.isBuffer(v)
+    ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]]))
+    : v));
+}
+
+/** sha256 of the canonical JSON. What a preview showed, as one string. */
+export function digestOf(value) {
+  return createHash('sha256').update(canonicalJson(value ?? null)).digest('hex');
+}
+
+export const PREVIEW_TTL_MS = 35 * 60_000;
+
+/** Preview digests in the plugin DB (they survive a restart); a Map when there is no DB (tests). */
+function previewStore(db) {
+  if (db?.putPreview) {
+    return {
+      put: (k, digest) => db.putPreview({ ...k, digest, ttlMs: PREVIEW_TTL_MS }),
+      get: (k) => db.previewDigest(k),
+      drop: (k) => db.dropPreview(k),
+    };
+  }
+  const mem = new Map();
+  const id = (k) => `${k.owner}\u0000${k.tool}\u0000${k.argsKey}`;
+  return {
+    put: (k, digest) => mem.set(id(k), { digest, until: Date.now() + PREVIEW_TTL_MS }),
+    get: (k) => { const r = mem.get(id(k)); return r && r.until > Date.now() ? r.digest : null; },
+    drop: (k) => mem.delete(id(k)),
+  };
+}
+
 // ------------------------------------------------------------------ runtime
 
 /** Codes the bot reads as "nothing happened, offer it again"; unsafe once a write has started. */
 const AFTER_WRITE_UNSAFE = new Set(['AUTH_FAILED', 'DUPLICATE_SESSION', 'NOT_CONNECTED', 'RATE_LIMITED']);
 
+const CHECK_FIRST = '다시 올리기 전에 다우오피스에서 문서를 확인해 주세요.';
+
+/**
+ * Any error once a write has started: the outcome is unknown. `data.afterWrite` makes the bot say so
+ * and mark the action failed instead of offering it again, the original `data` (document ids and the
+ * like) is kept, and the message never suggests simply retrying.
+ */
+export function afterWriteError(err, thrown) {
+  let message;
+  if (AFTER_WRITE_UNSAFE.has(err.code)) message = '다우오피스 로그인이 끊겨 결과를 확인하지 못했습니다.';
+  else if (thrown?.name === 'TimeoutError') message = '다우오피스 화면이 제때 응답하지 않아 결과를 확인하지 못했습니다.';
+  else if (err.code === 'INTERNAL') message = '플러그인 내부 오류로 결과를 확인하지 못했습니다.';
+  else message = err.message.replace(/\s*(잠시 뒤 )?다시 시도해 주세요\.?/g, '').trim();
+  if (!/다우오피스에서 (문서를 )?확인|내 기안함/.test(message)) message = `${message} ${CHECK_FIRST}`;
+  return new PluginError(AFTER_WRITE_UNSAFE.has(err.code) ? 'UPSTREAM' : err.code, message, {
+    cause: err.cause ?? err,
+    data: { ...(err.data ?? {}), afterWrite: true, original: err.code },
+  });
+}
+
 export function createRuntime({ config, db, sessions, dataDir, logger = createLogger() }) {
+  const previews = previewStore(db);
   const rt = {
     config, db, sessions, dataDir, logger,
 
@@ -237,7 +302,11 @@ export function createRuntime({ config, db, sessions, dataDir, logger = createLo
         description,
         inputSchema: input ?? z.object({}),
         annotations: ANNOTATIONS[kind],
-        _meta: { [META.kind]: kind, ...(role ? { [META.role]: role } : {}) },
+        _meta: {
+          [META.kind]: kind,
+          ...(role ? { [META.role]: role } : {}),
+          ...(spec.account === false && kind !== 'write' ? { [META.account]: false } : {}),
+        },
       }, (args, ctx) => rt.invoke(name, spec, handler, args ?? {}, ctx?.mcpReq?._meta ?? {}));
     },
 
@@ -252,20 +321,38 @@ export function createRuntime({ config, db, sessions, dataDir, logger = createLo
         const write = spec.kind === 'write';
         const execute = write && call.mode === 'execute';
         const fn = write ? (execute ? handler.execute : handler.preview) : handler;
+        const key = { owner: call.owner ?? '', tool: name, argsKey: digestOf(args) };
+        if (write && spec.previewDigest && execute) {
+          guard.requirePreviewed = true;
+          call.assertPreviewed = (plan) => {
+            const digest = typeof plan === 'string' ? plan : digestOf(plan);
+            const shown = previews.get(key);
+            if (!shown || shown !== digest) {
+              throw new PluginError('CONFLICT', shown
+                ? '미리보기 뒤에 내용이 바뀌었습니다. 미리보기를 다시 만듭니다.'
+                : '승인한 미리보기를 찾지 못했습니다(만료됐거나 다른 내용입니다). 미리보기를 다시 만듭니다.',
+              { data: { previewChanged: true } });
+            }
+            previews.drop(key);   // one approval, one execute
+            guard.previewed = true;
+          };
+        }
         // Only an approved write may change DaouOffice; read and local tools run under their own
         // kind so the guard refuses them too.
-        const out = await runWithMode(write ? call.mode : spec.kind, () => fn(args, call), guard);
+        let out = await runWithMode(write ? call.mode : spec.kind, () => fn(args, call), guard);
+        if (write && spec.previewDigest && !execute) {
+          if (out?.digest === undefined || out.digest === null) throw new TypeError(`write tool ${name}: preview must return a digest`);
+          previews.put(key, typeof out.digest === 'string' ? out.digest : digestOf(out.digest));
+        }
+        if (out && typeof out === 'object' && 'digest' in out) {
+          const { digest, ...rest } = out;
+          out = rest;
+        }
         logger.info('tool call', { tool: name, user: call.user.key, owner: call.owner, mode: call.mode, ms: Date.now() - started, outcome: 'ok' });
         return toToolResult(out, { preview: write && !execute });
       } catch (e) {
         let err = toPluginError(e);
-        if (guard.wrote && AFTER_WRITE_UNSAFE.has(err.code)) {
-          // The bot treats these codes as "nothing was submitted" and re-offers the action. Once a
-          // write has started that is no longer known, so report an unknown outcome instead.
-          err = new PluginError('UPSTREAM',
-            '제출을 시작한 뒤 다우오피스 로그인이 끊겨 결과를 확인하지 못했습니다. 다시 올리기 전에 다우오피스에서 문서를 확인해 주세요.',
-            { cause: err, data: { afterWrite: true, original: err.code } });
-        }
+        if (guard.wrote && !err.data?.afterWrite) err = afterWriteError(err, e);
         const cause = err.cause ?? (err === e ? null : e);
         const fields = { tool: name, user: call?.user.key ?? null, owner: call?.owner ?? null, ms: Date.now() - started, outcome: err.code };
         if (err.code === 'INTERNAL') logger.error('tool call failed', { ...fields, error: cause ?? err, stack: cause?.stack ?? err.stack });

@@ -4,9 +4,13 @@ import { Writable } from 'node:stream';
 import * as z from 'zod';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { Client } from '@modelcontextprotocol/client';
-import { createRuntime, createLogger, buildCall, toToolResult, ownerKey } from '../src/runtime.mjs';
+import { createRuntime, createLogger, buildCall, toToolResult, ownerKey, digestOf, canonicalJson } from '../src/runtime.mjs';
+import { openDb } from '../src/db.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PluginError } from '../src/errors.mjs';
-import { assertExecute, currentMode } from '../src/guard.mjs';
+import { assertExecute, currentMode, markSent } from '../src/guard.mjs';
 import { makeApi } from '../src/dao/api.mjs';
 
 const CREDS = { 'xylolabs/credentials': { username: 'Hong', password: 'pw-secret-1234' } };
@@ -17,6 +21,8 @@ function capture() {
   const stream = new Writable({ write(chunk, _enc, cb) { lines.push(String(chunk)); cb(); } });
   return { stream, lines };
 }
+
+let planVersion = 1;
 
 describe('runtime over an in-memory MCP transport', () => {
   const log = capture();
@@ -54,6 +60,32 @@ describe('runtime over an in-memory MCP transport', () => {
         if (after) assertExecute('submit');
         throw new PluginError('DUPLICATE_SESSION', 'in use elsewhere');
       },
+    });
+    rt.tool(server, 'gated', { kind: 'write', previewDigest: true, description: 'compares with its preview', input: z.object({ n: z.number() }) }, {
+      async preview({ n }) { return { text: `plan ${n}`, digest: digestOf({ plan: n, version: planVersion }) }; },
+      async execute({ n }, call) {
+        if (n === 99) { assertExecute('skips the comparison'); return { text: 'never' }; }
+        call.assertPreviewed(digestOf({ plan: n, version: planVersion }));
+        assertExecute('gated write');
+        return { text: `done ${n}` };
+      },
+    });
+    rt.tool(server, 'wrote_then', { kind: 'write', description: 'fails in various ways after a write began', input: z.object({ how: z.string() }) }, {
+      async preview() { return { text: 'p' }; },
+      async execute({ how }) {
+        assertExecute('first server change');
+        if (how === 'retry') throw new PluginError('NOT_FOUND', '문서를 찾지 못했습니다. 잠시 뒤 다시 시도해 주세요.', { data: { docId: '1000000000000001' } });
+        if (how === 'timeout') { const e = new Error('Timeout 30000ms exceeded'); e.name = 'TimeoutError'; throw e; }
+        throw new Error('unexpected');
+      },
+    });
+    rt.tool(server, 'object_digest', { kind: 'write', previewDigest: true, description: 'digest as a plain object', input: z.object({}) }, {
+      async preview() { return { text: 'p', digest: { b: 2, a: [1, { y: 1, x: 2 }] } }; },
+      async execute(args, call) { call.assertPreviewed({ a: [1, { x: 2, y: 1 }], b: 2 }); assertExecute('w'); return { text: 'done' }; },
+    });
+    rt.tool(server, 'sent_then_fails', { kind: 'write', description: 'fails after sending', input: z.object({}) }, {
+      async preview() { return { text: 'p' }; },
+      async execute() { markSent('final click'); throw new PluginError('VALIDATION', '읽어 온 값이 다릅니다.'); },
     });
     rt.tool(server, 'fails', { kind: 'read', description: 'throws', input: z.object({ how: z.string() }) }, async ({ how }) => {
       if (how === 'plugin') throw new PluginError('CONFLICT', '이미 올라간 문서입니다.');
@@ -154,6 +186,66 @@ describe('runtime over an in-memory MCP transport', () => {
     const after = await client.callTool({ name: 'late_login', arguments: { after: true }, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
     assert.equal(after.structuredContent.code, 'UPSTREAM');
     assert.deepEqual(after.structuredContent.data, { afterWrite: true, original: 'DUPLICATE_SESSION' });
+  });
+
+  test('previewDigest: execute runs only what the preview showed, once', async () => {
+    const EXEC = { ...CREDS, 'xylolabs/mode': 'execute' };
+    const none = await client.callTool({ name: 'gated', arguments: { n: 1 }, _meta: EXEC });
+    assert.equal(none.structuredContent.code, 'CONFLICT', 'no preview yet');
+    const p = await client.callTool({ name: 'gated', arguments: { n: 1 }, _meta: CREDS });
+    assert.equal(p.content[0].text, 'plan 1');
+    assert.equal(p.structuredContent.digest, undefined, 'the digest stays inside the plugin');
+    planVersion = 2;   // the data changed between preview and approval
+    const changed = await client.callTool({ name: 'gated', arguments: { n: 1 }, _meta: EXEC });
+    assert.equal(changed.structuredContent.code, 'CONFLICT');
+    assert.match(changed.content[0].text, /미리보기 뒤에 내용이 바뀌었습니다/);
+    await client.callTool({ name: 'gated', arguments: { n: 1 }, _meta: CREDS });
+    const ok = await client.callTool({ name: 'gated', arguments: { n: 1 }, _meta: EXEC });
+    assert.equal(ok.content[0].text, 'done 1');
+    const twice = await client.callTool({ name: 'gated', arguments: { n: 1 }, _meta: EXEC });
+    assert.equal(twice.structuredContent.code, 'CONFLICT', 'one preview, one execute');
+    await client.callTool({ name: 'gated', arguments: { n: 99 }, _meta: CREDS });
+    const skipped = await client.callTool({ name: 'gated', arguments: { n: 99 }, _meta: EXEC });
+    assert.equal(skipped.structuredContent.code, 'INTERNAL', 'a write without the comparison is refused by the guard');
+  });
+
+  test('every error after a write began is an unknown outcome that does not suggest a retry', async () => {
+    const EXEC = { ...CREDS, 'xylolabs/mode': 'execute' };
+    const retry = await client.callTool({ name: 'wrote_then', arguments: { how: 'retry' }, _meta: EXEC });
+    assert.equal(retry.structuredContent.code, 'NOT_FOUND');
+    assert.deepEqual(retry.structuredContent.data, { docId: '1000000000000001', afterWrite: true, original: 'NOT_FOUND' });
+    assert.doesNotMatch(retry.content[0].text, /다시 시도/);
+    assert.match(retry.content[0].text, /다우오피스에서 문서를 확인해 주세요/);
+    const timeout = await client.callTool({ name: 'wrote_then', arguments: { how: 'timeout' }, _meta: EXEC });
+    assert.equal(timeout.structuredContent.code, 'UPSTREAM');
+    assert.equal(timeout.structuredContent.data.afterWrite, true);
+    assert.match(timeout.content[0].text, /결과를 확인하지 못했습니다/);
+    assert.doesNotMatch(timeout.content[0].text, /다시 시도/);
+    const boom = await client.callTool({ name: 'wrote_then', arguments: { how: 'boom' }, _meta: EXEC });
+    assert.equal(boom.structuredContent.code, 'INTERNAL');
+    assert.equal(boom.structuredContent.data.afterWrite, true);
+    assert.doesNotMatch(boom.content[0].text, /unexpected/);
+  });
+
+  test('a preview digest may be the plan object itself; key order does not matter', async () => {
+    const EXEC = { ...CREDS, 'xylolabs/mode': 'execute' };
+    assert.ok(!(await client.callTool({ name: 'object_digest', arguments: {}, _meta: CREDS })).isError);
+    const r = await client.callTool({ name: 'object_digest', arguments: {}, _meta: EXEC });
+    assert.equal(r.content[0].text, 'done');
+  });
+
+  test('tools that work without an account say so in their metadata', async () => {
+    const { tools } = await client.listTools();
+    const by = Object.fromEntries(tools.map((t) => [t.name, t]));
+    assert.equal(by.free._meta['xylolabs/account'], false);
+    assert.equal('xylolabs/account' in by.echo._meta, false);
+  });
+
+  test('an error after the request was sent is an unknown outcome', async () => {
+    const r = await client.callTool({ name: 'sent_then_fails', arguments: {}, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+    assert.equal(r.structuredContent.code, 'VALIDATION');
+    assert.equal(r.structuredContent.data.afterWrite, true);
+    assert.equal(r.structuredContent.data.original, 'VALIDATION');
   });
 
   test('PluginError maps to its code; unknown errors become INTERNAL without detail', async () => {
@@ -257,4 +349,31 @@ test('api marks 401 and hides the raw body', async () => {
   assert.equal(r.data, null);
   assert.equal(r.raw, undefined);
   assert.equal(unauthorized, 1);
+});
+
+test('canonical JSON ignores key order; digests are stable', () => {
+  assert.equal(canonicalJson({ b: 1, a: { d: [1, { y: 1, x: 2 }], c: 3 } }), '{"a":{"c":3,"d":[1,{"x":2,"y":1}]},"b":1}');
+  assert.equal(digestOf({ a: 1, b: 2 }), digestOf({ b: 2, a: 1 }));
+  assert.notEqual(digestOf({ a: 1 }), digestOf({ a: 2 }));
+});
+
+test('preview digests live in the plugin DB and survive a restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-prev-'));
+  const file = path.join(dir, 'daouoffice.db');
+  const sink = new Writable({ write(_c, _e, cb) { cb(); } });
+  const spec = { kind: 'write', previewDigest: true, description: 'x', input: z.object({ n: z.number() }) };
+  const handler = {
+    async preview({ n }) { return { text: 'p', digest: digestOf({ n }) }; },
+    async execute({ n }, call) { call.assertPreviewed(digestOf({ n })); return { text: 'ok' }; },
+  };
+  const first = openDb(file);
+  const rt1 = createRuntime({ config: {}, db: first, sessions: null, dataDir: dir, logger: createLogger({ stream: sink }) });
+  await rt1.invoke('t', spec, handler, { n: 1 }, CREDS);
+  first.close();
+  const second = openDb(file);
+  const rt2 = createRuntime({ config: {}, db: second, sessions: null, dataDir: dir, logger: createLogger({ stream: sink }) });
+  const r = await rt2.invoke('t', spec, handler, { n: 1 }, { ...CREDS, 'xylolabs/mode': 'execute' });
+  assert.ok(!r.isError, r.content[0].text);
+  second.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

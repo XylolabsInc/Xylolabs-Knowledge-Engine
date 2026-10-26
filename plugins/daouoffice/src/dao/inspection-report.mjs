@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PluginError } from '../errors.mjs';
-import { assertExecute } from '../guard.mjs';
+import { requireExecute } from '../guard.mjs';
 import { dismissDialogs } from './dialogs.mjs';
 import { setApprovalLine, submitDocument, linkDocuments, withdrawDocument } from './approval.mjs';
 import { inspectionLine, describeLine } from './approvers.mjs';
@@ -176,16 +176,24 @@ export async function filedByTitle(api) {
 }
 
 /** 같은 제목의 옛 검수조서들. 다시 올리거나 고칠 때 본다. */
-export async function oldReports(api, docs) {
-  return Promise.all(docs.map(async (d) => {
-    const r = (await api(`/gw/api/approval/document/${d.documentId}`)).data?.data ?? {};
-    return {
-      id: String(d.documentId),
-      docNum: r.document?.docNum ?? null,
-      status: d.docStatusName,
-      canCancel: Boolean(r.actionCheck?.isAllowCancelDraftUser),
-    };
-  }));
+export async function oldReports(api, ids) {
+  const out = [];
+  for (const id of [...new Set(ids.map(String))]) {
+    if (!/^\d{6,25}$/.test(id)) continue;
+    const r = await api(`/gw/api/approval/document/${id}`);
+    const d = r.data?.data ?? {};
+    if (!r.ok || !d.document) continue;
+    out.push({
+      id,
+      title: d.document.title ?? '',
+      formName: d.document.formName ?? '',
+      drafter: d.document.drafterName ?? '',
+      docNum: d.document.docNum ?? null,
+      status: d.document.docStatusName ?? '',
+      canCancel: Boolean(d.actionCheck?.isAllowCancelDraftUser),
+    });
+  }
+  return out;
 }
 
 /** 라벨 칸 옆 입력에 값을 넣는다. 세부내역은 줄 번호로, 칸은 머리글 위치로 찾는다. */
@@ -275,18 +283,23 @@ export function diffValues(want, values) {
 /**
  * 계획대로 검수조서를 올리고 서버에서 다시 읽어 대조한다. 승인된 실행에서만 돈다.
  *
- * `withdraw` 는 먼저 상신취소할 옛 문서, `links` 는 관련문서로 연결할 끝난 옛 문서(`{ id, docNum }`),
+ * `withdraw` 는 상신취소할 옛 문서, `links` 는 관련문서로 연결할 끝난 옛 문서(`{ id, docNum }`),
  * `oldIds` 는 새 문서를 찾을 때 건너뛸 옛 문서 ID 다.
  *
- * @returns {Promise<{ docId, status, attachCount, titleOk, diffs, line }>}
+ * 순서: 새 기안 창을 열어 칸을 채우고 첨부, 연결, 결재선까지 마친 뒤에 옛 문서를 상신취소하고
+ * 바로 상신한다. 채우다 실패하면 옛 문서는 그대로다. 상신취소는 같은 컨텍스트의 다른 탭에서 해
+ * 채운 기안 창을 잃지 않는다.
+ * UNVERIFIED: withdrawing from a second tab while a filled draft is open in the first has not been
+ * tried on the live site.
+ *
+ * `onStage(stage, info)` 는 되돌릴 수 없는 단계 직전에 불린다: `'withdrawing'`, `'withdrawn'`
+ * (`{ id }`), `'submitting'`. 부르는 쪽이 기록을 남긴다.
+ *
+ * @returns {Promise<{ docId, status, attachCount, titleOk, diffs, line, withdrawn }>}
  */
-export async function fileReport(page, api, baseUrl, plan, { formId, deptId, withdraw = [], links = [], oldIds = [] }) {
-  assertExecute('검수조서 상신');
+export async function fileReport(page, api, baseUrl, plan, { formId, deptId, withdraw = [], links = [], oldIds = [], onStage = () => {} }) {
+  requireExecute('검수조서 상신');   // filling the form changes nothing; the withdraw and submit mark the write
   if (!deptId) throw new PluginError('VALIDATION', '기안 부서 ID 를 모릅니다. 계정 정보를 다시 읽어야 합니다.');
-  for (const id of withdraw) {
-    const st = await withdrawDocument(page, api, baseUrl, id);
-    if (st !== '임시저장') throw new PluginError('UPSTREAM', `옛 검수조서 ${id} 를 상신취소하지 못했습니다 (${st || '상태 모름'}).`);
-  }
   await page.goto(`${baseUrl}/gw/app/approval/document/new/${encodeURIComponent(deptId)}/${encodeURIComponent(formId)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
   await page.waitForSelector('#subject', { timeout: 30_000 });
@@ -309,14 +322,36 @@ export async function fileReport(page, api, baseUrl, plan, { formId, deptId, wit
     if (missing.length) throw new PluginError('UPSTREAM', `옛 문서 연결이 빠졌습니다: ${missing.map((d) => d.docNum).join(', ')}`);
   }
   const line = await setApprovalLine(page, plan.approvers);
+
+  const withdrawn = [];
+  if (withdraw.length) {
+    await onStage('withdrawing', { ids: withdraw });
+    const tab = await page.context().newPage();
+    try {
+      for (const id of withdraw) {
+        const st = await withdrawDocument(tab, api, baseUrl, id);
+        if (st !== '임시저장') {
+          throw new PluginError('UPSTREAM', `옛 검수조서 ${id} 를 상신취소하지 못했습니다 (${st || '상태 모름'}).${withdrawn.length ? ` 이미 상신취소한 문서: ${withdrawn.join(', ')}` : ''}`);
+        }
+        withdrawn.push(id);
+        await onStage('withdrawn', { id });
+      }
+    } finally {
+      await tab.close().catch(() => {});
+    }
+    await page.bringToFront().catch(() => {});
+  }
+  // 같은 제목의 문서가 이미 있을 수 있다(다른 결제, 옛 문서). 상신 전에 있던 문서는 새 문서로 보지 않는다.
+  const recent = async () => (await api('/gw/api/approval/doclist/draft/all?page=0&offset=20&property=draftedAt&direction=desc&searchtype=&keyword=&duration=all')).data?.data ?? [];
+  const seen = new Set([...oldIds.map(String), ...(await recent()).filter((d) => d.title === plan.title).map((d) => String(d.documentId))]);
+  await onStage('submitting', { withdrawn });
   await submitDocument(page);
 
   // 검증: 제목으로 새 문서를 찾고 칸, 첨부, 제목을 읽는다. URL 변화만 믿지 않는다.
   let docId = null;
   for (let i = 0; i < 10 && !docId; i++) {
-    const l = (await api('/gw/api/approval/doclist/draft/all?page=0&offset=20&property=draftedAt&direction=desc&searchtype=&keyword=&duration=all')).data?.data ?? [];
-    docId = l.find((d) => d.formName === FORM_NAME && d.title === plan.title && d.docStatusName !== '임시저장'
-      && !oldIds.includes(String(d.documentId)))?.documentId ?? null;
+    docId = (await recent()).find((d) => d.formName === FORM_NAME && d.title === plan.title && d.docStatusName !== '임시저장'
+      && !seen.has(String(d.documentId)))?.documentId ?? null;
     if (!docId) await page.waitForTimeout(3000);
   }
   if (!docId) throw new PluginError('UPSTREAM', '상신했지만 내 기안함에서 새 검수조서를 찾지 못했습니다. 다우오피스에서 확인해 주세요.');
@@ -335,6 +370,7 @@ export async function fileReport(page, api, baseUrl, plan, { formId, deptId, wit
     titleOk: doc.title === plan.title,
     diffs,
     line,
+    withdrawn,
   };
 }
 
