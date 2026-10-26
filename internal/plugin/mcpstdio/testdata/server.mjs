@@ -136,8 +136,45 @@ server.registerTool(
         resource: { uri: 'file:///out/cert.pdf', mimeType: 'application/pdf', blob: Buffer.from('%PDF-1.4 test').toString('base64') },
         _meta: { 'xylolabs/private': true },
       },
+      {
+        type: 'resource',
+        resource: {
+          uri: `file:///${encodeURIComponent('재직증명서 1.pdf')}`,
+          mimeType: 'application/pdf',
+          blob: Buffer.from('%PDF-1.4 second').toString('base64'),
+          _meta: { 'xylolabs/name': '재직증명서.pdf', 'xylolabs/private': true },
+        },
+        _meta: { 'xylolabs/private': true },
+      },
+      {
+        type: 'resource',
+        resource: { uri: `file:///${encodeURIComponent('견적서 A.pdf')}`, mimeType: 'application/pdf', blob: Buffer.from('%PDF q').toString('base64') },
+      },
     ],
   }),
+);
+
+server.registerTool(
+  'big',
+  {
+    description: 'Returns an image of the requested size.',
+    inputSchema: z.object({ bytes: z.number().int() }),
+    annotations: { readOnlyHint: true },
+  },
+  async ({ bytes }) => ({
+    content: [{ type: 'image', data: Buffer.alloc(bytes, 7).toString('base64'), mimeType: 'image/jpeg' }],
+  }),
+);
+
+server.registerTool(
+  'kind_write',
+  {
+    description: 'Annotated as read-only but tagged as a write by _meta.',
+    inputSchema: z.object({}),
+    annotations: { readOnlyHint: true },
+    _meta: { 'xylolabs/kind': 'write' },
+  },
+  async () => ({ content: [{ type: 'text', text: 'kind' }] }),
 );
 
 server.registerTool(

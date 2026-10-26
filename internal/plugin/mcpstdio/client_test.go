@@ -116,6 +116,7 @@ func TestClientTools(t *testing.T) {
 	}{
 		"echo": {false, ""}, "submit": {true, ""}, "save_note": {false, ""}, "plain": {true, ""},
 		"connect": {false, plugin.RoleConnect}, "busy": {false, ""}, "files": {false, ""},
+		"kind_write": {true, ""},
 	} {
 		got, ok := tools[name]
 		if !ok {
@@ -218,8 +219,8 @@ func TestClientErrors(t *testing.T) {
 
 	// Missing required argument: the SDK reports it as a tool error.
 	_, err = call(t, c, plugin.CallRequest{Tool: "echo", Args: map[string]any{}, Mode: plugin.ModeExecute})
-	if !errors.As(err, &pe) || pe.Message == "" {
-		t.Errorf("Call(echo without text) = %v; want a *plugin.Error with a message", err)
+	if !errors.As(err, &pe) || pe.Message == "" || pe.Code != plugin.CodeValidation {
+		t.Errorf("Call(echo without text) = %v; want a VALIDATION *plugin.Error with a message", err)
 	}
 
 	if _, err := call(t, c, plugin.CallRequest{Tool: "nope"}); err == nil {
@@ -233,15 +234,33 @@ func TestClientFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call(files) error = %v", err)
 	}
-	if res.Text != "two files" || len(res.Files) != 2 {
+	if res.Text != "two files" || len(res.Files) != 4 {
 		t.Fatalf("result = %+v", res)
 	}
 	img, pdf := res.Files[0], res.Files[1]
+	if named := res.Files[2]; named.Name != "재직증명서.pdf" || !named.Private || string(named.Data) != "%PDF-1.4 second" {
+		t.Errorf("file named by resource _meta = %s private=%v %q", named.Name, named.Private, named.Data)
+	}
+	if byURI := res.Files[3]; byURI.Name != "견적서 A.pdf" || byURI.Private {
+		t.Errorf("file named by URI = %s private=%v", byURI.Name, byURI.Private)
+	}
 	if img.Name != "image-2.png" || img.MimeType != "image/png" || !bytes.HasPrefix(img.Data, []byte("\x89PNG")) || img.Private {
 		t.Errorf("image = %+v", img)
 	}
 	if pdf.Name != "cert.pdf" || pdf.MimeType != "application/pdf" || string(pdf.Data) != "%PDF-1.4 test" || !pdf.Private {
 		t.Errorf("pdf = %s %s %q private=%v", pdf.Name, pdf.MimeType, pdf.Data, pdf.Private)
+	}
+}
+
+func TestClientLargeResult(t *testing.T) {
+	c := newTestClient(t)
+	const size = 6 << 20 // 8 MB once base64-encoded on one line
+	res, err := call(t, c, plugin.CallRequest{Tool: "big", Args: map[string]any{"bytes": size}, Mode: plugin.ModeExecute})
+	if err != nil {
+		t.Fatalf("Call(big) error = %v", err)
+	}
+	if len(res.Files) != 1 || len(res.Files[0].Data) != size || res.Files[0].Data[size-1] != 7 {
+		t.Errorf("got %d files, first %d bytes; want one of %d", len(res.Files), len(res.Files[0].Data), size)
 	}
 }
 

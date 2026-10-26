@@ -3,6 +3,8 @@
 //
 // Tool annotations decide gating: readOnlyHint → read tool; otherwise
 // destructiveHint (which MCP defaults to true) → write tool behind approval.
+// A tool whose _meta "xylolabs/kind" is "write" is gated whatever its
+// annotations say.
 // A tool's _meta "xylolabs/role" ("connect", "login") hides it from the
 // model. Each tools/call carries the person and their credentials in request
 // _meta (see the meta* keys). The child process gets a minimal environment, so
@@ -38,6 +40,7 @@ const (
 	metaMode        = "xylolabs/mode"
 	metaAttachments = "xylolabs/attachments"
 	metaRole        = "xylolabs/role"
+	metaKind        = "xylolabs/kind"
 	metaPrivate     = "xylolabs/private"
 	metaName        = "xylolabs/name"
 )
@@ -299,11 +302,12 @@ func listTools(ctx context.Context, session *mcp.ClientSession) ([]plugin.Tool, 
 		}
 		schema, _ := t.InputSchema.(map[string]any)
 		role, _ := t.Meta[metaRole].(string)
+		kind, _ := t.Meta[metaKind].(string)
 		tools = append(tools, plugin.Tool{
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  plugin.SanitizeSchema(schema),
-			Write:       isWrite(t.Annotations),
+			Write:       isWrite(t.Annotations) || kind == "write",
 			Role:        role,
 		})
 		if role == plugin.RoleConnect {
@@ -374,7 +378,9 @@ func isDone(done chan struct{}) bool {
 	}
 }
 
-// toolError maps an isError result to a *plugin.Error.
+// toolError maps an isError result to a *plugin.Error. A result without a
+// code is the SDK rejecting the arguments against the input schema, so it
+// counts as VALIDATION.
 func toolError(res *mcp.CallToolResult) error {
 	code, message := "", ""
 	if m, ok := res.StructuredContent.(map[string]any); ok {
@@ -385,7 +391,7 @@ func toolError(res *mcp.CallToolResult) error {
 		message = joinText(res.Content)
 	}
 	if code == "" {
-		code = plugin.CodeInternal
+		code = plugin.CodeValidation
 	}
 	return &plugin.Error{Code: code, Message: message}
 }
@@ -431,12 +437,12 @@ func convertResult(res *mcp.CallToolResult) *plugin.Result {
 			if data == nil {
 				continue
 			}
-			meta := v.Meta
-			if meta == nil {
-				meta = r.Meta
+			name := fileName(v.Meta, "", "", i, "")
+			if name == "" {
+				name = fileName(r.Meta, r.URI, "file", i, r.MIMEType)
 			}
 			out.Files = append(out.Files, plugin.File{
-				Name:     fileName(meta, r.URI, "file", i, r.MIMEType),
+				Name:     name,
 				MimeType: r.MIMEType,
 				Data:     data,
 				Private:  isPrivate(v.Meta) || isPrivate(r.Meta),
@@ -457,7 +463,7 @@ var extByType = map[string]string{
 }
 
 // fileName picks a name from _meta "xylolabs/name", else the resource URI,
-// else "<kind>-<n><ext>".
+// else "<kind>-<n><ext>"; with kind "" it returns "" when meta has no name.
 func fileName(meta mcp.Meta, uri, kind string, i int, mimeType string) string {
 	if s, _ := meta[metaName].(string); strings.TrimSpace(s) != "" {
 		return path.Base(strings.ReplaceAll(strings.TrimSpace(s), "\\", "/"))
@@ -468,6 +474,9 @@ func fileName(meta mcp.Meta, uri, kind string, i int, mimeType string) string {
 				return base
 			}
 		}
+	}
+	if kind == "" {
+		return ""
 	}
 	ext := extByType[mimeType]
 	if ext == "" {
