@@ -30,6 +30,9 @@ All core types live in `internal/kb/types.go`. This is the single source of trut
 | `tools.MessagePoster` | `internal/tools/messenger.go` | `internal/bot/slack_platform.go`, `internal/bot/discord_messenger.go` |
 | `tools.ChannelResolver` | `internal/tools/messenger.go` | `internal/bot/slack_platform.go`, `internal/bot/discord_messenger.go` |
 | `bot.Platform` | `internal/bot/platform.go` | `internal/bot/slack_platform.go`, `internal/bot/discord_platform.go` |
+| `bot.BotHandler` | `internal/bot/platform.go` | `internal/bot/handler.go`, `internal/bot/plugins.go` (`*bot.Bot`) |
+| `plugin.Plugin` | `internal/plugin/plugin.go` | `internal/plugin/mcpstdio/` (any MCP stdio server) |
+| `plugin.Store` | `internal/plugin/registry.go` | `internal/storage/plugins.go` |
 
 Every connector must implement all four methods: `Name() Source`, `Start(done <-chan struct{}) error`, `Sync() error`, `Stop() error`.
 
@@ -49,6 +52,9 @@ Every connector must implement all four methods: `Name() Source`, `Start(done <-
 | `internal/bot/` | Platform-agnostic bot (Gemini-powered Q&A, Slack + Discord) | Storage calls, connector logic |
 | `internal/tools/` | MessagePoster/ChannelResolver interfaces for bot tools | Platform-specific logic |
 | `internal/kbrepo/` | Markdown KB repo reader for bot context | HTTP, SQL, connector logic |
+| `internal/plugin/` | Plugin registry (tool prefixing, write gating, pending actions), credential vault, schema sanitizer | Platform calls, MCP transport |
+| `internal/plugin/mcpstdio/` | Runs a plugin as an MCP server over stdio and adapts it to `plugin.Plugin` | Registry logic, storage |
+| `plugins/daouoffice/` | Node 24 MCP server for DaouOffice (Playwright); own `node:sqlite` DB | Go code, company data (config lives on the server) |
 | `internal/gemini/` | Gemini API client (text + vision) | Storage, bot logic |
 | `internal/extractor/` | Content extraction (PDF, images, Office, web) | HTTP routing, sync logic |
 | `cmd/xylolabs-kb/` | Wiring, startup, shutdown | Business logic |
@@ -60,11 +66,12 @@ The bot layer is platform-agnostic. Adding Discord required a thin abstraction s
 
 | File | Role |
 |------|------|
-| `internal/bot/platform.go` | `Platform` interface + `IncomingMessage` type (source of truth for bot input) |
+| `internal/bot/platform.go` | `Platform` interface + `IncomingMessage` type (source of truth for bot input); interactive types `Prompt`, `Button`, `Form`, `Action`, `FormSubmission` for `PostPrompt`, `UpdatePrompt`, `OpenForm`, `OpenDM` |
 | `internal/bot/slack_platform.go` | `Platform` implementation for Slack (wraps `*slack.Client`) |
 | `internal/bot/discord_platform.go` | `Platform` implementation for Discord (wraps `*discordgo.Session`) |
 | `internal/bot/discord_messenger.go` | `MessagePoster` + `ChannelResolver` implementation for Discord |
 | `internal/bot/formatting.go` | Platform-agnostic text formatting utilities shared by both platforms |
+| `internal/bot/plugins.go` | Plugin flows against `Platform` only: first-contact DM, connect form, approval buttons, "승인"/"취소" text fallback, login-kick resume, expiry janitor |
 | `internal/discord/connector.go` | Discord gateway connector — implements `kb.Connector`, indexes messages |
 | `internal/discord/converter.go` | Converts Discord messages to `kb.Document` |
 | `internal/tools/messenger.go` | `MessagePoster` and `ChannelResolver` interfaces consumed by bot tools |
@@ -254,9 +261,11 @@ Global settings use no prefix: `LOG_LEVEL`, `DB_PATH`, `ATTACHMENT_PATH`, `API_H
 8. **NEVER use CGO-dependent sqlite drivers** — keep the build pure Go with `modernc.org/sqlite`
 9. **ALWAYS wrap errors** with component context using `fmt.Errorf("component: action: %w", err)`
 10. **NEVER expose internal package types** beyond the `kb` domain package — use interfaces
-11. **NEVER call `Platform.PostReply` with an empty body** — Slack drops empty Block Kit messages silently and the user sees nothing. The bot handler guards this in `internal/bot/handler.go`; preserve that guard when refactoring the response path
+11. **NEVER call `Platform.PostReply` (or `PostPrompt`/`UpdatePrompt`) with an empty body** — Slack drops empty Block Kit messages silently and the user sees nothing. The bot handler guards this in `internal/bot/handler.go`; preserve that guard when refactoring the response path
 12. **NEVER act on Slack DM events without verifying participation** — `internal/slack/connector.go` filters `message.im` events through `imAccessible()` (the `accessibleIMs` / `deniedIMs` caches). Slack occasionally delivers events from DMs the bot is not a member of; replying to those returns `channel_not_found` and looks like silence to the user
 13. **ALWAYS escape the Gemini tool-call loop with a text answer** — when `maxToolIterations` is hit while the model is still emitting function calls, retry once with `genReq.Tools = nil`. Without this fallback the last response carries no text and the user sees nothing
+14. **NEVER run a plugin write tool in execute mode outside `plugin.Registry.Approve`** — `Dispatch` only previews; `Approve` runs after the owner presses the button (or replies "승인" in the thread). The model has no tool that approves
+15. **NEVER log or post plugin form values** — `bot.FormSubmission.Values` and `plugin.CallRequest.Credentials` carry passwords. Keep Slack Socket Mode debug logging off (`socketmode.OptionDebug`), because it prints raw payloads
 
 ---
 

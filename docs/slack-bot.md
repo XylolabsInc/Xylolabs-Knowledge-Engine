@@ -27,8 +27,9 @@ Add these scopes to your Slack app's **OAuth & Permissions > Bot Token Scopes**:
 | `chat:write` | Post replies to channels and threads |
 | `im:history` | Read user DM history |
 | `im:read` | Access DM channels |
-| `im:write` | Send DM replies |
+| `im:write` | Send DM replies and open DMs (plugin connect prompts, private files) |
 | `files:read` | Read file content and metadata |
+| `files:write` | Upload files the bot produces (screenshots, attachments, plugin previews) |
 
 #### Event Subscriptions
 
@@ -41,6 +42,10 @@ In **Event Subscriptions**, subscribe to:
 | `message.channels` | (already required) Triggered for channel messages |
 | `message.groups` | (already required) Triggered for private channel messages |
 | `channel_created` | Auto-join newly created public channels |
+
+#### Interactivity & Shortcuts
+
+Turn **Interactivity & Shortcuts** on. Plugin prompts (connect, approve, cancel) use buttons and a modal form, and Slack delivers clicks and form submissions only when interactivity is enabled. In Socket Mode no Request URL is needed: the events arrive over the same socket as messages.
 
 ### 3. Environment Configuration
 
@@ -62,6 +67,8 @@ SLACK_SIGNING_SECRET=...
 ```
 
 The `KB_REPO_DIR` must point to a local clone of the markdown knowledge repository. The bot will `git pull` automatically before each query.
+
+Plugins (for example DaouOffice) are configured separately; see [Connected Systems (Plugins)](#connected-systems-plugins).
 
 ---
 
@@ -279,6 +286,50 @@ The bot uses a two-stage hierarchical approach to read the markdown knowledge re
 6. **Build context** — combines indexes + relevant details into the Gemini prompt
 
 This keeps the context window small and focused even as the knowledge repo grows to thousands of files.
+
+---
+
+## Connected Systems (Plugins)
+
+Plugins connect the bot to systems such as groupware. Each person connects their own account, the model can look things up at once, and anything that changes the other system waits for that person to press a button. The DaouOffice plugin (`plugins/daouoffice`) is the first one.
+
+### Setup
+
+| Env var | Meaning |
+|---|---|
+| `PLUGIN_SECRET_KEY` | base64 of 32 random bytes (`openssl rand -base64 32`). Seals stored credentials. Without it, plugins that need accounts stay off. |
+| `DAOUOFFICE_ENABLED` | `true` to start the DaouOffice plugin |
+| `DAOUOFFICE_COMMAND` | Command line that starts the plugin, split like a shell would but never run through one |
+| `DAOUOFFICE_DATA_DIR` | Plugin database, files and the attachment inbox |
+| `DAOUOFFICE_CONFIG` | Company rules JSON (server only, never committed) |
+
+The plugin starts in the background, so a slow or broken plugin never delays the bot. The log says why it is off (not enabled, no key, bad command, failed start) or how many tools it registered.
+
+### Connecting an account
+
+1. The first time someone talks to the bot after the plugin is enabled, the bot answers as usual, then sends them a DM with a **연결하기** button. It asks once per person. Connect prompts only go by DM, never in a channel.
+2. The button opens a form with the plugin's fields (아이디, 비밀번호, and the "기존 접속을 끊어도 됩니다" checkbox). Slack text inputs cannot mask what is typed, so the password field is labelled "비밀번호 (앱 비밀번호 권장)" and the form says the values are stored encrypted and never appear in the chat.
+3. On submit the modal closes, the bot DMs "확인 중", signs in once to check, and DMs the outcome: "연결했습니다: <name>" or the reason. A wrong password is not retried, so the account does not get locked.
+
+Passwords are never typed into the chat, never shown to the model, and never logged. The bot keeps Socket Mode debug logging off, because in debug mode slack-go prints raw payloads; a filter withholds modal submissions even if someone turns it on.
+
+### Approving a submission
+
+Tools that submit something (구매 품의서, 검수조서, 지출결의, 출장, 증명서, 상신취소) only prepare a preview when the model calls them:
+
+1. The bot replies, uploads any preview images into the thread, and posts the preview with **상신** and **취소** buttons.
+2. Only the person who asked can press them. Anyone else gets a DM saying so, and nothing changes.
+3. **상신** shows "상신 중…" on the prompt, submits, posts the result in the thread, and updates the prompt with the outcome. Private files (certificates) go to the person by DM, and the thread says "개인정보가 있어 DM으로 보냈습니다".
+4. Pressing twice submits once.
+5. A pending preview expires after 30 minutes; its prompt then reads "시간이 지나 취소했습니다. 다시 요청해 주세요."
+
+Typing exactly `승인`, `상신`, `진행`, `ok` or `OK` in the thread approves the person's pending preview, and `취소` cancels it, without going through the model. This also works in workspaces where buttons are not available.
+
+### Another session is open
+
+A DaouOffice account can be signed in in one place only. If the person is signed in elsewhere and did not tick the checkbox when connecting, the bot asks first: **끊고 진행** signs in (ending the other session) and runs the original message again; **취소** drops it. When this happens at submission time, the bot offers **끊고 상신** instead.
+
+If the bot restarts while a submission is running, it marks the submission failed on the next start and DMs the person to check the document box, because the outcome is unknown.
 
 ---
 

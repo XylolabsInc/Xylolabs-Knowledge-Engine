@@ -225,6 +225,18 @@ Notion is auto-enabled when `NOTION_API_KEY` is set.
 
 With `LLM_ENDPOINT` set, use provider-prefixed model IDs in `GEMINI_MODEL`/`GEMINI_PRO_MODEL`/`KB_GEN_MODEL` (e.g. `google/gemini-3.8-flash` for OpenRouter). Google Search grounding has no OpenAI-compatible equivalent and is silently disabled in this mode.
 
+### Plugins
+
+Plugins connect the bot to other systems through a per-person account and a human approval step. See [docs/slack-bot.md](docs/slack-bot.md#connected-systems-plugins).
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PLUGIN_SECRET_KEY` | base64 of 32 random bytes that seals stored plugin credentials (`openssl rand -base64 32`); without it, plugins that need accounts stay off | — |
+| `DAOUOFFICE_ENABLED` | Start the DaouOffice plugin (`true`/`false`) | `false` |
+| `DAOUOFFICE_COMMAND` | Command line that starts the plugin; quoted like a shell command but run without one | `node --disable-warning=ExperimentalWarning plugins/daouoffice/src/server.mjs` |
+| `DAOUOFFICE_DATA_DIR` | Plugin database, files, and attachment inbox | `data/plugins/daouoffice` |
+| `DAOUOFFICE_CONFIG` | Company rules JSON for the plugin (server only, not committed) | `configs/daouoffice.json` |
+
 ### KB Generation (Go tool: `kb-gen`)
 
 The `kb-gen` CLI tool reads its configuration from flags and environment variables.
