@@ -201,6 +201,7 @@ describe('config', () => {
     assert.throws(() => loadConfig(path.join(dir, 'bad.json')), /JSON/);
     fs.rmSync(dir, { recursive: true, force: true });
     assert.throws(() => parseConfig({ baseUrl: 'ftp://x' }), /baseUrl/);
+    assert.throws(() => parseConfig({ baseUrl: 'http://example.daouoffice.com' }), /baseUrl/, 'https only');
     assert.throws(() => parseConfig({ cards: { 12345: {} } }), /cards/);
     assert.throws(() => parseConfig({ lines: { claim: [{ type: '결재' }] } }), /name 또는 role/);
     assert.throws(() => parseConfig({ cardMatch: { subscriptionMerchants: ['('] } }), /정규식/);

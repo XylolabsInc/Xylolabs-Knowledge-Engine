@@ -42,17 +42,21 @@ test('purchases: unique per owner and key, JSON round trip, status filter', () =
   assert.equal(db.purchases('hong', { status: 'draft' }).length, 0);
   assert.equal(db.purchase('kim', 'cam').usd, 12.5);
   assert.equal(db.purchase('kim', 'cam').paidKrw, 17_000);
-  assert.equal(db.purchaseById(p.id).key, 'cam');
+  assert.equal(db.purchaseById('hong', p.id).key, 'cam');
+  assert.equal(db.purchaseById('kim', p.id), null, 'another owner cannot read it by id');
+  assert.throws(() => db.purchaseById(p.id), TypeError);
 });
 
 test('quotes hang off a purchase and are removed with it', () => {
   const db = fresh();
   const p = db.upsertPurchase({ owner: 'hong', key: 'k', title: 't' });
-  db.addQuote({ purchaseId: p.id, file: 'shot.png', url: 'https://example.com/p', digest: 'abc' });
-  const q = db.addQuote({ purchaseId: p.id, file: 'shot.png', url: 'https://example.com/p', digest: 'def', seenAt: '2026-03-02' });
-  assert.equal(db.quotes(p.id).length, 1);
+  db.addQuote({ owner: 'hong', purchaseId: p.id, file: 'shot.png', url: 'https://example.com/p', digest: 'abc' });
+  const q = db.addQuote({ owner: 'hong', purchaseId: p.id, file: 'shot.png', url: 'https://example.com/p', digest: 'def', seenAt: '2026-03-02' });
+  assert.equal(db.quotes('hong', p.id).length, 1);
+  assert.equal(db.quotes('kim', p.id).length, 0, 'owner scoped');
   assert.equal(q.digest, 'def');
-  assert.throws(() => db.addQuote({ purchaseId: 999, file: 'x.png' }), /FOREIGN KEY/);
+  assert.throws(() => db.addQuote({ owner: 'hong', purchaseId: 999, file: 'x.png' }), (e) => e.code === 'NOT_FOUND');
+  assert.throws(() => db.addQuote({ owner: 'kim', purchaseId: p.id, file: 'x.png' }), (e) => e.code === 'NOT_FOUND');
 });
 
 test('receipts: date range, order id kept as text', () => {
@@ -76,10 +80,13 @@ test('photos: one row per image, alsoFor lookups, whitelisted updates', () => {
   db.addPhoto({ owner: 'hong', file: 'p2.jpg', sha256: 'bb', purchaseKey: 'lens' });
   assert.deepEqual(db.photos('hong', { purchaseKey: 'lens' }).map((p) => p.file), ['p1.jpg', 'p2.jpg']);
   assert.deepEqual(db.photos('hong', { purchaseKey: 'cam' }).map((p) => p.file), ['p1.jpg']);
-  const u = db.updatePhoto(a.id, { comments: [{ docId: '1', at: 'x' }], otherCard: '1234', bogus: 'ignored' });
+  const u = db.updatePhoto('hong', a.id, { comments: [{ docId: '1', at: 'x' }], otherCard: '1234', bogus: 'ignored' });
   assert.deepEqual(u.comments, [{ docId: '1', at: 'x' }]);
   assert.equal(u.otherCard, '1234');
-  assert.equal(db.photo(a.id).alsoFor[0], 'lens');
+  assert.equal(db.photo('hong', a.id).alsoFor[0], 'lens');
+  assert.equal(db.photo('kim', a.id), null);
+  assert.equal(db.updatePhoto('kim', a.id, { shows: 'x' }), null, 'another owner cannot change it');
+  assert.equal(db.photo('hong', a.id).shows, null);
 });
 
 test('overrides, trips, filings and fx rates round trip', () => {
@@ -90,6 +97,10 @@ test('overrides, trips, filings and fx rates round trip', () => {
   assert.equal(db.overrides('hong').length, 2);
   assert.equal(db.removeOverride('kim', o.id), false, 'owner scoped');
   assert.equal(db.removeOverride('hong', o.id), true);
+  for (const [kind, match] of [['refunded', {}], ['refunded', { why: 'x' }], ['inspectionDone', { merchant: 'X' }], ['tripExpense', {}], ['elsewhere', null]]) {
+    assert.throws(() => db.addOverride({ owner: 'hong', kind, match }), (e) => e.code === 'VALIDATION', `${kind} ${JSON.stringify(match)}`);
+  }
+  assert.ok(db.addOverride({ owner: 'hong', kind: 'tripExpense', match: { date: '2026-03-02' } }));
 
   db.upsertTrip({ owner: 'hong', key: '2026-03-02-busan', data: { place: '부산', purpose: '실증 협의' } });
   const t = db.upsertTrip({ owner: 'hong', key: '2026-03-02-busan', data: { place: '부산' }, docId: '1000000000000002', status: 'filed' });
@@ -101,7 +112,8 @@ test('overrides, trips, filings and fx rates round trip', () => {
   db.addFiling({ owner: 'hong', kind: 'claim', ref: '2026-03' });
   assert.equal(db.filings('hong', { kind: 'inspection' }).length, 1);
   assert.equal(db.filings('hong', { ref: '2026-03' })[0].kind, 'claim');
-  assert.equal(db.updateFiling(f.id, { status: '완료', docId: '1000000000000003' }).status, '완료');
+  assert.equal(db.updateFiling('hong', f.id, { status: '완료', docId: '1000000000000003' }).status, '완료');
+  assert.equal(db.updateFiling('kim', f.id, { status: 'x' }), null);
   assert.ok(f.filedAt.endsWith('+09:00'), 'timestamps are KST');
 
   db.addFxRate({ day: '2026-03-01', rate: 1400.5, at: '2026-03-01 10:00', source: '테스트' });

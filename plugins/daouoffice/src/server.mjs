@@ -8,6 +8,8 @@
  *   DAOUOFFICE_DATA_DIR   plugin DB and files (default: <plugin dir>/data)
  *   DAOUOFFICE_CONFIG     company rules JSON (see config.example.json); unset → empty rules
  *   DAOUOFFICE_LOG_LEVEL  debug | info | warn | error (default info)
+ *   DAOUOFFICE_MAX_CONTEXTS  DaouOffice pages open at once (default 2, roughly 150–300 MB each)
+ *   DAOUOFFICE_MAX_PARKED    idle logged-in contexts kept without a page (default 6)
  *
  * stdout carries MCP only. Logs are JSON lines on stderr.
  */
@@ -38,6 +40,12 @@ export const INSTRUCTIONS = [
   '- 규칙이 헷갈리면 guide 도구로 주제별 안내를 먼저 읽는다.',
 ].join('\n');
 
+/** A non-negative integer from the environment, or the default. */
+function intEnv(value, fallback) {
+  const n = Number(value);
+  return value !== undefined && value !== '' && Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
 export async function main({ env = process.env, stdin = process.stdin, stdout = process.stdout } = {}) {
   const logger = createLogger({ level: env.DAOUOFFICE_LOG_LEVEL ?? 'info' });
   const dataDir = path.resolve(env.DAOUOFFICE_DATA_DIR || path.join(ROOT, 'data'));
@@ -45,7 +53,12 @@ export async function main({ env = process.env, stdin = process.stdin, stdout = 
   if (!config.baseUrl) logger.warn('no baseUrl in company config; DaouOffice tools will refuse', { config: source });
 
   const db = openDb(path.join(dataDir, 'daouoffice.db'));
-  const sessions = new SessionManager({ baseUrl: config.baseUrl, logger });
+  const sessions = new SessionManager({
+    baseUrl: config.baseUrl,
+    logger,
+    maxContexts: intEnv(env.DAOUOFFICE_MAX_CONTEXTS, 2),
+    maxParked: intEnv(env.DAOUOFFICE_MAX_PARKED, 6),
+  });
   const rt = createRuntime({ config, db, sessions, dataDir, logger });
 
   const server = new McpServer(

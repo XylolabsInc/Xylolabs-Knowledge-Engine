@@ -28,7 +28,7 @@ export function register(server, rt) {
       }),
     }),
   }, async (args, call) => {
-    const v = await rt.sessions.verify(call.owner, call.creds);
+    const v = await rt.sessions.verify(call.owner, call.creds, { requester: call.user.key });
     let account = rt.db.account(call.owner);
     if (!v.duplicate) {
       account = await rt.sessions.withSession(call.owner, call.creds, { allowKick: false },

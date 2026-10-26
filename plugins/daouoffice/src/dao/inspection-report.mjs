@@ -121,7 +121,7 @@ export function planReport({ unit, card, photos, receiptPath, photoPath, marks, 
 
   return {
     key: unit.key,
-    payment: { date: day, merchant: r.merchant, amount, cardAmount: unit.cardAmount, perOrder: unit.perOrder, claimDocId: r.docId ?? null },
+    payment: { date: day, merchant: r.merchant, amount, cardAmount: unit.cardAmount, perOrder: unit.perOrder, claimDocId: r.docId ?? null, rowId: r.id ?? null },
     purchases: ps.map((p) => ({ key: p.key, title: p.title, docId: p.docId })),
     service,
     title: `${y}년 ${Number(m)}월 (${last4}/${profile.deptCode}/${holder}) ${FORM_NAME} - ${headOf(ps, lines)}`,

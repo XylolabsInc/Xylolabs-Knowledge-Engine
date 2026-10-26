@@ -146,11 +146,18 @@ test('helpers', () => {
   assert.ok(!sameVendor('ab', 'ABC'));
   assert.equal(markCancelled([row('2026-01-01', 'X', 100), row('2026-01-02', 'Y', -100)]).size, 0);
   assert.ok(overrideMatches({ merchant: 'shop', amount: 10 }, row('2026-01-01', 'TESTSHOP', 10)));
+  assert.ok(!overrideMatches({}, row('2026-01-01', 'TESTSHOP', 10)), 'an empty rule matches nothing');
+  assert.ok(!overrideMatches({ why: 'x' }, row('2026-01-01', 'TESTSHOP', 10)));
   assert.ok(!overrideMatches({ date: '2026-01-02', merchant: 'shop', amount: 10 }, row('2026-01-01', 'TESTSHOP', 10)));
   assert.ok(isSubscription({ row: row('2026-01-01', 'CLOUDCO', 1), receipt: null }, ['^CLOUD']));
   assert.ok(isSubscription({ row: row('2026-01-01', 'X', 1), receipt: { category: '클라우드구독료' } }));
   const pairs = assignByAmount([row('2026-01-05', 'A', 1000)], [purchase('nodate', { amountKrw: 1000 }), purchase('dated', { amountKrw: 1000, paidAt: '2026-01-06' })]);
   assert.equal([...pairs.values()][0].key, 'dated', 'a dated requisition wins over an undated one');
+  const bad = assignByAmount([row('2026-01-05', 'A', 1000), row('2026-01-20', 'B', 1000)],
+    [purchase('garbled', { amountKrw: 1000, paidAt: 'not a date' }), purchase('late', { amountKrw: 1000, paidAt: '2026-01-21' })]);
+  assert.equal(bad.size, 2);
+  assert.equal(bad.get([...bad.keys()].find((id) => id.includes('row-') && bad.get(id).key === 'late')).key, 'late');
+  assert.deepEqual([...bad.values()].map((p) => p.key).sort(), ['garbled', 'late'], 'a bad paidAt sorts last, it does not break the order');
 });
 
 test('matchCard reads the ledger through listUsage and the rest from the DB', async () => {

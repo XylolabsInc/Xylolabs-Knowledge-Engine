@@ -27,6 +27,7 @@ import { readProfile } from './dao/org.mjs';
  *
  * The handler gets `(args, call)` with
  *   call = { user, creds, allowKick, mode, attachments, owner }
+ * where `mode` is 'preview' | 'execute' for write tools and 'read' | 'local' for the others.
  * and returns `{ text, images?: [{ data: Buffer, mimeType }], files?: [{ name, data, mimeType, private }], data? }`.
  * A thrown `PluginError(code, message)` becomes
  *   { isError: true, structuredContent: { code, message }, content: [{ type: 'text', text: message }] }.
@@ -65,9 +66,12 @@ const SECRET_KEY = /pass|credential|secret|token|cookie/i;
 export function createLogger({ stream = process.stderr, level = process.env.DAOUOFFICE_LOG_LEVEL ?? 'info' } = {}) {
   const min = LEVELS[level] ?? LEVELS.info;
   const secrets = new Map();
+  /** The secret as written, JSON-escaped and URL-encoded: the forms it can take in a message. */
+  const forms = (secret) => [...new Set([secret, JSON.stringify(secret).slice(1, -1), encodeURIComponent(secret)])]
+    .filter(Boolean).sort((a, b) => b.length - a.length);
   const mask = (s) => {
     let out = String(s);
-    for (const secret of secrets.keys()) if (secret) out = out.split(secret).join('***');
+    for (const secret of secrets.keys()) for (const f of forms(secret)) out = out.split(f).join('***');
     return out;
   };
   const clean = (v, depth = 0) => {
@@ -144,7 +148,8 @@ export function buildCall(meta = {}, spec = {}, args = {}) {
     user: parseUser(meta[META.user]),
     creds,
     allowKick: connect ? args.allowKick === true : meta[META.allowKick] === true,
-    mode: spec.kind === 'write' ? (meta[META.mode] === 'execute' ? 'execute' : 'preview') : 'execute',
+    // Only a write tool has a preview and an execute; read and local tools run as what they are.
+    mode: spec.kind === 'write' ? (meta[META.mode] === 'execute' ? 'execute' : 'preview') : spec.kind,
     attachments: parseAttachments(meta[META.attachments]),
     owner: creds ? ownerKey(creds.username) : null,
   };

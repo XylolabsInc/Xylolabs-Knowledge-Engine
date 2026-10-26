@@ -29,6 +29,8 @@ MCP only; logs are JSON lines on stderr (the bot copies them into its own log).
 | `DAOUOFFICE_DATA_DIR` | `plugins/daouoffice/data` | `daouoffice.db` and `files/<owner>/{photos,receipts,quotes,out}` |
 | `DAOUOFFICE_CONFIG` | unset → empty rules | Company rules JSON. Unset starts the server, but DaouOffice tools refuse without `baseUrl`. A path that does not exist or does not parse stops the server |
 | `DAOUOFFICE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `DAOUOFFICE_MAX_CONTEXTS` | `2` | DaouOffice pages open at once (each roughly 150–300 MB) |
+| `DAOUOFFICE_MAX_PARKED` | `6` | Idle logged-in contexts kept without a page, so their sessions are not stranded |
 
 ## Company config
 
@@ -142,12 +144,23 @@ export function register(server, rt) {
 
 ## Sessions
 
-One headless Chromium, one context per account (at most two), per-account lock, FIFO queue beyond
-that. Each use checks `GET /api/portal/common/notification/badge` and logs in only on 401 (sessions
-end about 30 minutes after login no matter what). Idle contexts are parked on `about:blank` after 10
-minutes and closed when their session has expired, because closing a context leaves the server session
-alive and the next login would meet our own leftover as "another session". Logins are limited to one
-attempt per minute and ten per hour per account; a wrong password is not retried.
+One headless Chromium, one context per account, per-account lock. Each use checks
+`GET /api/portal/common/notification/badge` and logs in only on 401 (sessions end about 30 minutes
+after login no matter what).
+
+No DaouOffice logout is known, and closing a context leaves its server session alive: the next login
+would meet our own leftover as "another session". So contexts are not closed while their session may
+live. At most `DAOUOFFICE_MAX_CONTEXTS` have a page; an idle one is **parked** (page closed, context
+and cookies kept, almost no memory) after 10 minutes, or at once when someone else needs the page
+slot, and resumed with a new page without logging in. Parked contexts close when their session has
+expired; beyond `DAOUOFFICE_MAX_PARKED` the one closest to expiry is closed. When every page slot is
+busy, requests wait in a FIFO queue.
+
+The connect check runs in a throwaway context and never touches the account's live session until the
+new password is proven. Logins are limited to one attempt per minute and ten per hour per account,
+and the connect check also per chat user; disconnecting does not reset the limiter. A wrong password
+is not retried. `rt.sessions.withScratchContext(fn)` gives a cookie-less context of the same browser
+(product pages, exchange rates) under the same page limit.
 
 ## Tests
 

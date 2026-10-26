@@ -21,7 +21,8 @@ const lineEntry = z.object({
 const lineSpec = z.union([z.literal('project'), z.literal('ctoFinal'), z.array(lineEntry)]);
 
 export const ConfigSchema = z.looseObject({
-  baseUrl: z.url({ protocol: /^https?$/ }).optional(),
+  /** DaouOffice is reached over https only: credentials go through this origin. */
+  baseUrl: z.url({ protocol: /^https$/ }).optional(),
   people: z.looseObject({
     ceo: z.string().min(1).optional(),
     cfo: z.string().min(1).optional(),

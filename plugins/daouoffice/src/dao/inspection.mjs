@@ -8,8 +8,8 @@ import { OVERRIDE_KINDS } from './card-match.mjs';
  *
  *   사진 짝           photos 행 (purchaseKey, alsoFor, shows, otherCard, data.warn, data.serials)
  *   처리된 건          overrides `inspectionDone`        { match: { key }, data: { why } }
- *   사진 모자람         overrides `inspectionIncomplete`  { match: { key }, data: { missing } }
- *   품목 금액          overrides `itemOverride`          { match: { key }, data: { rows: [{ name, qty, unitWord, amount }] } }
+ *   사진 모자람         overrides `inspectionIncomplete`  { match: { key }, data: { missing } }   (`why` 도 읽는다)
+ *   품목 금액          overrides `itemOverride`          { match: { key }, data: { rows: [{ name, qty, unitWord, amount }] } }   (`items` 도 읽는다)
  *   시리얼             purchases.data.serials            { '<품목>': ['…'] } 또는 'none'
  *
  * 검수조서는 결제 한 건에 한 장이고 구매 건마다 제품 사진이 필수다. 구독, 사용량 청구, 갱신,
@@ -235,9 +235,13 @@ export function inspectionMarks(overrides = []) {
     /** 처리됐거나 사진이 필요 없다고 한 이유, 없으면 undefined. */
     doneOf: (ps) => ps.map((p) => done.get(p.key)?.why).find(Boolean),
     /** 빠진 품목 설명, 없으면 undefined. */
-    incompleteOf: (ps) => ps.map((p) => incomplete.get(p.key)?.missing).find(Boolean),
+    incompleteOf: (ps) => ps.map((p) => incomplete.get(p.key)?.missing ?? incomplete.get(p.key)?.why).find(Boolean),
     /** 사람이 적어 둔 품목 금액 줄, 없으면 null. */
-    itemRows: (key) => (Array.isArray(items.get(key)?.rows) ? items.get(key).rows : null),
+    itemRows: (key) => {
+      const d = items.get(key);
+      const list = d?.rows ?? d?.items;
+      return Array.isArray(list) && list.length ? list : null;
+    },
   };
 }
 

@@ -151,6 +151,7 @@ async function encode(input, { maxSide = MAX_SIDE, maxBytes = MAX_BYTES } = {}) 
   for (let round = 0; round < 12; round++) {
     const { data, info } = await sharp(input, { failOn: 'none' })
       .rotate()
+      .flatten({ background: '#ffffff' })   // JPEG has no alpha; transparent screenshots would turn black
       .resize(side, side, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality, chromaSubsampling: '4:2:0' })
       .toBuffer({ resolveWithObject: true });
@@ -213,6 +214,6 @@ export async function ingestPhoto(inputPath, destDir, options = {}) {
 
 /** A small JPEG preview (long side `side` px) for showing photos in a chat preview. */
 export async function thumbnail(file, side = 480) {
-  return sharp(file, { failOn: 'none' }).rotate().resize(side, side, { fit: 'inside', withoutEnlargement: true })
+  return sharp(file, { failOn: 'none' }).rotate().flatten({ background: '#ffffff' }).resize(side, side, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 70 }).toBuffer();
 }

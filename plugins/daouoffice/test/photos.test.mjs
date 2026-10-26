@@ -76,6 +76,16 @@ test('large photos are capped at 3000 px on the long side and 4 MB', async () =>
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('transparent images are flattened onto white, not black', async () => {
+  const dir = tmp();
+  const src = path.join(dir, 'clear.png');
+  await sharp({ create: { width: 40, height: 40, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(src);
+  const out = await ingestPhoto(src, path.join(dir, 'out'));
+  const { data } = await sharp(out.path).raw().toBuffer({ resolveWithObject: true });
+  assert.ok(data[0] > 240 && data[1] > 240 && data[2] > 240, `pixel ${data[0]},${data[1]},${data[2]}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('non-images are refused as VALIDATION and missing files as NOT_FOUND', async () => {
   const dir = tmp();
   const src = path.join(dir, 'note.txt');

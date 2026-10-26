@@ -58,6 +58,7 @@ describe('runtime over an in-memory MCP transport', () => {
     rt.tool(server, 'fails', { kind: 'read', description: 'throws', input: z.object({ how: z.string() }) }, async ({ how }) => {
       if (how === 'plugin') throw new PluginError('CONFLICT', '이미 올라간 문서입니다.');
       if (how === 'timeout') { const e = new Error('Timeout 30000ms exceeded'); e.name = 'TimeoutError'; throw e; }
+      if (how === 'escaped') throw new Error(`json ${JSON.stringify({ p: 'pw"se\\cret' })} url ${encodeURIComponent('pw"se\\cret')}`);
       throw new Error('boom with pw-secret-1234 inside');
     });
     rt.tool(server, 'files', { kind: 'read', description: 'returns blobs', input: z.object({}) }, async () => ({
@@ -96,7 +97,7 @@ describe('runtime over an in-memory MCP transport', () => {
     assert.deepEqual(r.structuredContent, { owner: 'hong' });
     const { call } = calls.findLast((c) => c.tool === 'echo');
     assert.equal(call.user.key, 'slack:U123');
-    assert.equal(call.mode, 'execute');
+    assert.equal(call.mode, 'read', 'read tools carry their own kind as mode');
     assert.equal(call.allowKick, false);
     assert.deepEqual(call.attachments, []);
   });
@@ -163,6 +164,16 @@ describe('runtime over an in-memory MCP transport', () => {
     const boom = await client.callTool({ name: 'fails', arguments: { how: 'boom' }, _meta: CREDS });
     assert.equal(boom.structuredContent.code, 'INTERNAL');
     assert.doesNotMatch(boom.content[0].text, /boom|pw-secret/);
+  });
+
+  test('a password is masked in its JSON-escaped and URL-encoded forms too', async () => {
+    const before = log.lines.length;
+    const odd = { 'xylolabs/credentials': { username: 'hong', password: 'pw"se\\cret' } };
+    await client.callTool({ name: 'fails', arguments: { how: 'escaped' }, _meta: odd });
+    const text = log.lines.slice(before).join('');
+    assert.match(text, /json/);
+    assert.doesNotMatch(text, /se\\\\cret|pw%22se/);
+    assert.doesNotMatch(text, /cret/);
   });
 
   test('logs never contain the password or arguments', async () => {

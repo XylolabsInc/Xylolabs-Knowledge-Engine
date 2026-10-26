@@ -81,9 +81,12 @@ export function markCancelled(rows) {
 export const sameReceipt = (a, b) => a.date === b.date && a.vendor === b.vendor
   && a.amount === b.amount && a.currency === b.currency;
 
-/** 사람이 알려 준 결제 하나(`overrides.match`)가 카드 행에 맞는가. 날짜는 있으면 맞춘다. */
+/**
+ * 사람이 알려 준 결제 하나(`overrides.match`)가 카드 행에 맞는가. 적힌 것(날짜, 가맹점, 금액)만
+ * 맞춘다. 아무것도 적히지 않은 규칙은 어느 행에도 맞지 않는다(모든 결제를 빼 버리지 않게).
+ */
 export function overrideMatches(match, row) {
-  if (!match) return false;
+  if (!match || (match.date == null && match.merchant == null && match.amount == null)) return false;
   if (match.date && !day(row.useDate).startsWith(match.date)) return false;
   if (match.merchant && !String(row.merchant).toUpperCase().includes(String(match.merchant).toUpperCase())) return false;
   return match.amount === undefined || Number(match.amount) === row.amount;
@@ -347,8 +350,8 @@ export function assignByAmount(rows, purchases) {
   const pairs = [];
   for (const r of rows) {
     for (const p of byAmount.get(r.amount) ?? []) {
-      const gap = p.paidAt ? Math.abs(Date.parse(p.paidAt) - Date.parse(day(r.useDate))) / DAY_MS : Number.MAX_SAFE_INTEGER;
-      pairs.push({ r, p, gap });
+      const gap = Math.abs(Date.parse(p.paidAt ?? '') - Date.parse(day(r.useDate))) / DAY_MS;
+      pairs.push({ r, p, gap: Number.isFinite(gap) ? gap : Number.MAX_SAFE_INTEGER });   // no or bad paidAt goes last
     }
   }
   pairs.sort((a, b) => a.gap - b.gap || String(a.r.useDate).localeCompare(String(b.r.useDate)));

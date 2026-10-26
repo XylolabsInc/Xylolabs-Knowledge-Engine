@@ -18,18 +18,27 @@ function fakeWorld() {
       on(ev, fn) { this.handlers[ev] = fn; },
       isConnected() { return !this.closed; },
       async newContext(opts) {
-        const page = {
-          href: 'about:blank', closed: false, status: 200,
-          url() { return this.href; },
-          isClosed() { return this.closed; },
-          async goto(u) { this.href = u; },
-          async evaluate() { return { status: 200, text: '{}' }; },
-        };
         const context = {
-          opts, page, closed: false,
+          opts, page: null, pages: [], closed: false,
+          // The session lives in the context: a new page of the same context answers like the old one.
+          status: 200,
           browser: () => browser,
-          async newPage() { return page; },
-          async close() { this.closed = true; page.closed = true; events.push('context.close'); },
+          async newPage() {
+            const page = {
+              href: 'about:blank', closed: false,
+              get status() { return context.status; },
+              set status(v) { context.status = v; },
+              url() { return this.href; },
+              isClosed() { return this.closed; },
+              async goto(u) { this.href = u; },
+              async close() { this.closed = true; },
+              async evaluate() { return { status: 200, text: '{}' }; },
+            };
+            context.page = page;
+            context.pages.push(page);
+            return page;
+          },
+          async close() { this.closed = true; this.pages.forEach((p) => { p.closed = true; }); events.push('context.close'); },
         };
         world.contexts.push(context);
         events.push('newContext');
@@ -157,21 +166,44 @@ describe('SessionManager', () => {
     gateB.resolve();
     await Promise.all([b, d]);
     assert.deepEqual(order, ['a', 'b', 'c', 'd']);
-    assert.ok(m.stats().contexts <= 2);
-    assert.equal(w.contexts.filter((x) => !x.closed).length <= 2, true);
+    assert.ok(m.stats().active <= 2);
+    const openPages = w.contexts.flatMap((x) => x.pages).filter((p) => !p.closed);
+    assert.ok(openPages.length <= 2, 'never more than two DaouOffice pages at once');
+    assert.equal(m.stats().parked.length, 2, 'finished accounts were parked, not closed');
     await m.close();
   });
 
-  test('an idle context is evicted (least recently used first) when a new account needs a slot', async () => {
+  test('a new account parks the least recently used idle context instead of closing it', async () => {
     const w = fakeWorld();
     const m = w.manager({ maxContexts: 2 });
     await m.withSession('a', { username: 'a', password: 'p' }, {}, async () => {});
     await sleep(2);
     await m.withSession('b', { username: 'b', password: 'p' }, {}, async () => {});
     await m.withSession('c', { username: 'c', password: 'p' }, {}, async () => {});
-    assert.deepEqual(m.stats().owners.sort(), ['b', 'c']);
-    assert.equal(w.contexts[0].closed, true, 'a was the least recently used');
+    assert.deepEqual(m.stats().owners.sort(), ['a', 'b', 'c']);
+    assert.deepEqual(m.stats().parked, ['a'], 'a was the least recently used');
+    assert.equal(m.stats().active, 2);
+    assert.equal(w.contexts[0].closed, false, 'the context and its server session are kept');
+    assert.equal(w.contexts[0].pages[0].closed, true, 'only its page is closed');
+    // a comes back without logging in again; b is parked to make room.
+    assert.equal(await m.withSession('a', { username: 'a', password: 'p' }, {}, async (s) => s.fresh), false);
+    assert.equal(w.logins.length, 3);
+    assert.deepEqual(m.stats().parked, ['b']);
     assert.equal(w.browsers.length, 1, 'the browser is shared');
+    await m.close();
+  });
+
+  test('at most maxParked contexts are kept; the oldest session goes first', async () => {
+    let t = 1_000_000;
+    const w = fakeWorld();
+    const m = w.manager({ maxContexts: 1, maxParked: 1, now: () => t });
+    for (const o of ['a', 'b', 'c']) {
+      await m.withSession(o, { username: o, password: 'p' }, {}, async () => {});
+      t += 1000;
+    }
+    assert.deepEqual(m.stats().owners.sort(), ['b', 'c']);
+    assert.deepEqual(m.stats().parked, ['b']);
+    assert.equal(w.contexts[0].closed, true, 'a, the oldest session, was closed');
     await m.close();
   });
 
@@ -181,7 +213,8 @@ describe('SessionManager', () => {
     await m.withSession('hong', CREDS, {}, async () => {});
     await sleep(40);
     assert.deepEqual(m.stats().parked, ['hong']);
-    assert.equal(w.contexts[0].page.href, 'about:blank');
+    assert.equal(w.contexts[0].pages[0].closed, true, 'the parked page is closed');
+    assert.equal(w.contexts[0].closed, false);
     const fresh = await m.withSession('hong', CREDS, {}, async (s) => {
       assert.equal(s.page.url(), `${BASE}/home`, 'resumed on the DaouOffice origin');
       return s.fresh;
@@ -248,6 +281,53 @@ describe('SessionManager', () => {
     assert.equal(w.logins[0].onDuplicate, 'report');
     assert.equal(m.stats().contexts, 0);
     assert.equal(w.browsers[0].closed, true);
+    await m.close();
+  });
+
+  test('a wrong password from someone else never touches the account\'s live session', async () => {
+    let t = 3_000_000;
+    const w = fakeWorld();
+    const m = w.manager({ now: () => t, loginGapMs: 60_000 });
+    await m.withSession('hong', CREDS, {}, async () => {});
+    t += 61_000;
+    w.loginBehavior = (creds) => (creds.password === 'pw' ? 'ok' : 'auth');
+    await assert.rejects(m.verify('hong', { username: 'hong', password: 'guess' }, { requester: 'slack:U9' }), (e) => e.code === 'AUTH_FAILED');
+    assert.equal(w.contexts[0].closed, false, 'the live context is untouched');
+    assert.equal(w.contexts[1].closed, true, 'the check ran in a throwaway context');
+    assert.equal(await m.withSession('hong', CREDS, {}, async (s) => s.fresh), false, 'no new login for the owner');
+    // The same requester cannot try another account right away.
+    await assert.rejects(m.verify('kim', { username: 'kim', password: 'x' }, { requester: 'slack:U9' }), (e) => e.code === 'RATE_LIMITED');
+    await m.close();
+  });
+
+  test('disconnecting does not reset the login limiter', async () => {
+    let t = 4_000_000;
+    const w = fakeWorld();
+    const m = w.manager({ now: () => t, loginGapMs: 60_000 });
+    w.loginBehavior = () => 'auth';
+    await assert.rejects(m.verify('hong', CREDS), (e) => e.code === 'AUTH_FAILED');
+    await m.forget('hong');
+    await assert.rejects(m.verify('hong', CREDS), (e) => e.code === 'RATE_LIMITED');
+    await m.close();
+  });
+
+  test('a scratch context takes a slot, gets options from the browser, and is closed afterwards', async () => {
+    const w = fakeWorld();
+    const m = w.manager({ maxContexts: 1 });
+    let seen;
+    const out = await m.withScratchContext(async ({ context, page, browser }) => {
+      seen = { opts: context.opts, browser, active: m.stats().active };
+      return page.url();
+    }, { contextOptions: (browser) => ({ userAgent: browser ? 'Chrome/1.0' : 'none' }) });
+    assert.equal(out, 'about:blank');
+    assert.equal(seen.opts.userAgent, 'Chrome/1.0');
+    assert.deepEqual(seen.opts.viewport, { width: 1280, height: 1100 });
+    assert.equal(seen.active, 1);
+    assert.equal(w.contexts[0].closed, true);
+    assert.equal(m.stats().active, 0);
+    assert.equal(w.browsers[0].closed, true);
+    await assert.rejects(m.withScratchContext(async () => { throw new Error('boom'); }), /boom/);
+    assert.equal(m.stats().active, 0, 'the slot comes back after a failure');
     await m.close();
   });
 

@@ -178,15 +178,15 @@ export function register(server, rt) {
         row = added;
         if (!added.created) {
           notes.push(`${label}: 이미 저장한 사진(사진 ${added.id})이라 짝과 설명을 새로 적었습니다.`);
-          row = rt.db.updatePhoto(added.id, { ...fields, data: { ...added.data, warn: e.warn ?? added.data.warn ?? null, serials } });
+          row = rt.db.updatePhoto(call.owner, added.id, { ...fields, data: { ...added.data, warn: e.warn ?? added.data.warn ?? null, serials } });
         }
       } else {
-        const ph = rt.db.photo(e.photoId);
-        if (!ph || ph.owner !== call.owner) throw new PluginError('NOT_FOUND', `사진 ${e.photoId} 이 없습니다.`);
+        const ph = rt.db.photo(call.owner, e.photoId);
+        if (!ph) throw new PluginError('NOT_FOUND', `사진 ${e.photoId} 이 없습니다.`);
         const patch = {};
         for (const k of ['purchaseKey', 'alsoFor', 'shows', 'otherCard', 'takenDate']) if (e[k] !== undefined) patch[k] = e[k];
         patch.data = { ...ph.data, ...(e.warn !== undefined ? { warn: e.warn } : {}), ...(serials.length ? { serials } : {}) };
-        row = rt.db.updatePhoto(ph.id, patch);
+        row = rt.db.updatePhoto(call.owner, ph.id, patch);
       }
 
       // 라벨에서 읽은 시리얼 번호는 품의에도 적는다. 검수조서 품명 끝에 붙는다.
@@ -232,6 +232,7 @@ export function register(server, rt) {
         currency: z.enum(['원', 'USD', 'EUR', 'JPY', 'GBP', 'SGD', 'CNY']).describe('통화'),
         kind: z.enum(['영수증', '인보이스', '주문내역', '거래명세서']).describe('문서 종류'),
         orderId: z.string().regex(/^[0-9A-Za-z-]{4,40}$/).optional().describe('주문번호'),
+        cardLast4: z.string().regex(/^\d{4}$/).optional().describe('이 결제를 한 카드 뒤 네 자리. 알 때만'),
       })).min(1),
     }),
   }, async ({ receipts }, call) => {
@@ -268,7 +269,7 @@ export function register(server, rt) {
       const row = rt.db.addReceipt({
         owner: call.owner, file, date: r.date, category: r.category, item: r.item, vendor: r.vendor,
         amount: r.amount, currency: r.currency, kind: r.kind, orderId: r.orderId ?? null, sha256,
-        data: { sourceName: att.name },
+        data: { sourceName: att.name, ...(r.cardLast4 ? { cardLast4: r.cardLast4 } : {}) },
       });
       known.push(row);
       saved.push({ id: row.id, file, created: true });
@@ -594,7 +595,10 @@ export function register(server, rt) {
         rt.db.addFiling({
           owner: call.owner, kind: 'inspection', ref: plan.key, docId: res.docId, title: plan.title,
           status: problems.length ? 'mismatch' : res.status,
-          detail: { action: args.action ?? 'new', oldIds: opts.oldIds, files: plan.files.map((f) => f.name), photoIds: plan.photoIds, problems },
+          detail: {
+            action: args.action ?? 'new', oldIds: opts.oldIds, files: plan.files.map((f) => f.name), photoIds: plan.photoIds, problems,
+            purchaseKeys: plan.purchases.map((p) => p.key), purchaseId: plan.payment.rowId,
+          },
         });
         if (problems.length) {
           throw new PluginError('UPSTREAM',
@@ -720,7 +724,7 @@ export function register(server, rt) {
           const at = kstIso();
           // 하나 올릴 때마다 적는다. 중간에 멈춰도 올린 사진은 다시 올리지 않는다.
           for (const ph of c.photos) {
-            rt.db.updatePhoto(ph.id, { comments: [...(ph.comments ?? []), { target: 'claim', docId: c.docId, commentId: made?.id ?? null, at }] });
+            rt.db.updatePhoto(call.owner, ph.id, { comments: [...(ph.comments ?? []), { target: 'claim', docId: c.docId, commentId: made?.id ?? null, at }] });
           }
           done.push({ docId: c.docId, commentId: made?.id ?? null, photos: c.photos.length });
         }

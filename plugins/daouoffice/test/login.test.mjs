@@ -157,4 +157,26 @@ describe('login against a fake DaouOffice in real Chromium', () => {
       await m.close();
     }
   });
+
+  test('a parked context keeps its cookies in real Chromium and comes back without a login', async (t) => {
+    if (!browser) return t.skip('chromium is not installed');
+    site.state.otherSession = false;
+    const { chromium } = await import('playwright');
+    const m = new SessionManager({ baseUrl: base, loginGapMs: 0, idleMs: 30, launch: () => chromium.launch({ headless: true }) });
+    try {
+      const creds = { username: 'hong', password: 'right-pw' };
+      const logins = site.state.logins;
+      await m.withSession('hong', creds, {}, async () => {});
+      await new Promise((r) => setTimeout(r, 200));
+      assert.deepEqual(m.stats().parked, ['hong'], 'the page was closed, the context kept');
+      const count = await m.withSession('hong', creds, {}, async ({ api, fresh }) => {
+        assert.equal(fresh, false);
+        return (await api('/gw/api/approval/todo/count')).data.data.docCount;
+      });
+      assert.equal(count, 2);
+      assert.equal(site.state.logins - logins, 1, 'one login for both calls');
+    } finally {
+      await m.close();
+    }
+  });
 });

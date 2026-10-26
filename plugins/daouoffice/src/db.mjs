@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { kstIso } from './dao/kst.mjs';
+import { PluginError } from './errors.mjs';
 
 /**
  * Plugin-owned state (`$DAOUOFFICE_DATA_DIR/daouoffice.db`). It replaces the data that lived in
@@ -10,7 +11,20 @@ import { kstIso } from './dao/kst.mjs';
  *
  * Every row carries `owner` (the DaouOffice login id). JSON columns are parsed on read; rows come
  * back camelCased. All statements are prepared; nothing is interpolated into SQL.
+ *
+ * Every lookup or change by row id also takes the owner, so an id that came from model input can
+ * never reach another person's row.
  */
+
+/** Throws when an id-based method is called without the owner first (the old signature). */
+function needOwner(owner, method) {
+  if (typeof owner !== 'string' || !owner) throw new TypeError(`db.${method}(owner, …): owner must come first`);
+}
+
+/** Override kinds keyed by a card payment, and by a purchase key. Others only need a non-empty match. */
+const PAYMENT_KINDS = new Set(['refunded', 'elsewhere', 'pinned', 'claimAsIs']);
+const PURCHASE_KINDS = new Set(['inspectionDone', 'inspectionIncomplete', 'itemOverride']);
+const present = (v) => v !== undefined && v !== null && v !== '';
 
 const SCHEMA_VERSION = 1;
 
@@ -262,8 +276,9 @@ export class Db {
     return toPurchase(this.#q('SELECT * FROM purchases WHERE owner = ? AND key = ?').get(owner, key));
   }
 
-  purchaseById(id) {
-    return toPurchase(this.#q('SELECT * FROM purchases WHERE id = ?').get(id));
+  purchaseById(owner, id) {
+    needOwner(owner, 'purchaseById');
+    return toPurchase(this.#q('SELECT * FROM purchases WHERE owner = ? AND id = ?').get(owner, id));
   }
 
   /** Inserts or replaces the purchase `(owner, key)`. Every column is written as given. */
@@ -295,11 +310,19 @@ export class Db {
 
   // ------------------------------------------------------------------ quotes
 
-  quotes(purchaseId) {
-    return this.#q('SELECT * FROM quotes WHERE purchase_id = ? ORDER BY id').all(purchaseId).map(toQuote);
+  quotes(owner, purchaseId) {
+    needOwner(owner, 'quotes');
+    return this.#q(`
+      SELECT q.* FROM quotes q JOIN purchases p ON p.id = q.purchase_id
+      WHERE p.owner = ? AND q.purchase_id = ? ORDER BY q.id`).all(owner, purchaseId).map(toQuote);
   }
 
-  addQuote({ purchaseId, file, url, capturedAt, digest, seenAt, data }) {
+  /** Inserts or updates the quote `(purchaseId, file)`. The purchase must be the owner's. */
+  addQuote({ owner, purchaseId, file, url, capturedAt, digest, seenAt, data }) {
+    needOwner(owner, 'addQuote');
+    if (!this.#q('SELECT 1 FROM purchases WHERE owner = ? AND id = ?').get(owner, purchaseId)) {
+      throw new PluginError('NOT_FOUND', `품의 ${purchaseId} 가 없습니다.`);
+    }
     return toQuote(this.#q(`
       INSERT INTO quotes (purchase_id, file, url, captured_at, digest, seen_at, data)
       VALUES (:purchaseId, :file, :url, :capturedAt, :digest, :seenAt, :data)
@@ -349,8 +372,9 @@ export class Db {
     return rows.map(toPhoto);
   }
 
-  photo(id) {
-    return toPhoto(this.#q('SELECT * FROM photos WHERE id = ?').get(id));
+  photo(owner, id) {
+    needOwner(owner, 'photo');
+    return toPhoto(this.#q('SELECT * FROM photos WHERE owner = ? AND id = ?').get(owner, id));
   }
 
   /**
@@ -370,8 +394,10 @@ export class Db {
     return { ...row, created: r.changes > 0 };
   }
 
-  updatePhoto(id, patch) {
-    return toPhoto(this.#update('photos', PHOTO_FIELDS, id, patch));
+  /** Changes whitelisted fields of the owner's photo. Null when it is not the owner's. */
+  updatePhoto(owner, id, patch) {
+    needOwner(owner, 'updatePhoto');
+    return toPhoto(this.#update('photos', PHOTO_FIELDS, owner, id, patch));
   }
 
   // ------------------------------------------------------------------ overrides
@@ -383,7 +409,16 @@ export class Db {
     return rows.map(toOverride);
   }
 
+  /**
+   * Adds a rule. A rule with an empty match would apply to every row, so payment rules need a date,
+   * merchant or amount, purchase rules a key, and every rule at least one field.
+   */
   addOverride({ owner, kind, match, data }) {
+    const fields = match && typeof match === 'object' ? match : {};
+    const empty = PAYMENT_KINDS.has(kind) ? ![fields.date, fields.merchant, fields.amount].some(present)
+      : PURCHASE_KINDS.has(kind) ? !present(fields.key)
+        : !Object.values(fields).some(present);
+    if (empty) throw new PluginError('VALIDATION', `예외 규칙(${kind})에 무엇에 적용할지가 없습니다.`);
     return toOverride(this.#q(`
       INSERT INTO overrides (owner, kind, match, data, created_at) VALUES (:owner, :kind, :match, :data, :at)
       RETURNING *`).get({ owner, kind, match: json(match, {}), data: json(data, {}), at: kstIso() }));
@@ -435,8 +470,10 @@ export class Db {
     }));
   }
 
-  updateFiling(id, patch) {
-    return toFiling(this.#update('filings', FILING_FIELDS, id, patch));
+  /** Changes whitelisted fields of the owner's filing. Null when it is not the owner's. */
+  updateFiling(owner, id, patch) {
+    needOwner(owner, 'updateFiling');
+    return toFiling(this.#update('filings', FILING_FIELDS, owner, id, patch));
   }
 
   // ------------------------------------------------------------------ fx
@@ -458,13 +495,13 @@ export class Db {
 
   // ------------------------------------------------------------------ helpers
 
-  /** Updates whitelisted fields only; the column names never come from the caller. */
-  #update(table, fields, id, patch = {}) {
+  /** Updates whitelisted fields of the owner's row only; the column names never come from the caller. */
+  #update(table, fields, owner, id, patch = {}) {
     const keys = Object.keys(patch).filter((k) => fields[k]);
-    if (!keys.length) return this.#q(`SELECT * FROM ${table} WHERE id = ?`).get(id);
+    if (!keys.length) return this.#q(`SELECT * FROM ${table} WHERE owner = ? AND id = ?`).get(owner, id);
     const sets = keys.map((k) => `${fields[k][0]} = :${k}`).join(', ');
     const params = Object.fromEntries(keys.map((k) => [k, fields[k][1](patch[k])]));
-    return plain(this.#q(`UPDATE ${table} SET ${sets} WHERE id = :id RETURNING *`).get({ ...params, id }));
+    return plain(this.#q(`UPDATE ${table} SET ${sets} WHERE owner = :owner AND id = :id RETURNING *`).get({ ...params, owner, id }));
   }
 }
 

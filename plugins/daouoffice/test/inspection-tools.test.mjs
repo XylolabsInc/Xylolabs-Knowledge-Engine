@@ -203,8 +203,9 @@ describe('inspection tools', () => {
       data: { ...legacy, vendor: '테스트판매자 (알리익스프레스)', item: 'B / 1개' } });
 
     const server = new McpServer({ name: 'daouoffice', version: '0.0.0' }, { capabilities: { tools: {} } });
+    // baseUrl is https-only in config; the fake sessions hand the tools the local address.
     const config = parseConfig({
-      baseUrl: base, people: { cto: '홍길동' }, cards: { 1234: { project: '스마트농장', issuer: '테스트카드' } },
+      people: { cto: '홍길동' }, cards: { 1234: { project: '스마트농장', issuer: '테스트카드' } },
       lines: { inspection: 'ctoFinal' }, inspection: { perOrderMerchants: ['ALIEXPRESS'] },
     });
     const sink = new Writable({ write(_c, _e, cb) { cb(); } });
@@ -237,7 +238,7 @@ describe('inspection tools', () => {
     ]);
     const receipts = [
       { index: 1, date: '2026-03-02', category: '재료비', item: '테스트 카메라 외 1건', vendor: '테스트상점', amount: 120000, currency: '원', kind: '영수증' },
-      { index: 2, date: '2026-03-10', category: '재료비', item: 'A', vendor: '알리익스프레스', amount: 20, currency: 'USD', kind: '주문내역', orderId: '1000000000000000' },
+      { index: 2, date: '2026-03-10', category: '재료비', item: 'A', vendor: '알리익스프레스', amount: 20, currency: 'USD', kind: '주문내역', orderId: '1000000000000000', cardLast4: '1234' },
     ];
     const r = await call('save_receipt', { receipts }, meta);
     assert.ok(!r.isError, r.content[0].text);
@@ -247,6 +248,8 @@ describe('inspection tools', () => {
       '2026-03-10_재료비_A_알리익스프레스_20USD_주문내역.jpg',
     ]);
     assert.ok(fs.existsSync(path.join(dataDir, 'files', 'hong', 'receipts', rows[0].file)));
+    assert.equal(rows[1].data.cardLast4, '1234');
+    assert.equal(rows[0].data.cardLast4, undefined);
     const again = await call('save_receipt', { receipts: [receipts[0]] }, meta);
     assert.match(again.content[0].text, /이미 저장한 영수증/);
     assert.equal(db.receipts('hong').length, 2);
@@ -274,7 +277,7 @@ describe('inspection tools', () => {
     assert.deepEqual(db.purchase('hong', 'cam').data.serials, { '테스트 카메라': ['TC-0001'] });
     const fix = await call('save_photos', { photos: [{ photoId: photos[1].id, shows: '렌즈 필터 두 개와 포장' }] });
     assert.ok(!fix.isError, fix.content[0].text);
-    assert.equal(db.photo(photos[1].id).shows, '렌즈 필터 두 개와 포장');
+    assert.equal(db.photo('hong', photos[1].id).shows, '렌즈 필터 두 개와 포장');
   });
 
   test('mark_inspection and mark_payment record what a person said', async () => {
@@ -347,6 +350,8 @@ describe('inspection tools', () => {
     const filing = db.filings('hong', { kind: 'inspection' })[0];
     assert.equal(filing.docId, r.structuredContent.docId);
     assert.equal(filing.ref, '2026-03-02/120000');
+    assert.deepEqual(filing.detail.purchaseKeys, ['cam']);
+    assert.equal(filing.detail.purchaseId, 'u1');
 
     const again = await call('file_inspection_report', { payment: '2026-03-02/120000' }, execute(CREDS));
     assert.equal(again.structuredContent.code, 'CONFLICT');
