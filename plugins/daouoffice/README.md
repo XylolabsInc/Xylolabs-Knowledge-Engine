@@ -31,6 +31,7 @@ MCP only; logs are JSON lines on stderr (the bot copies them into its own log).
 | `DAOUOFFICE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `DAOUOFFICE_MAX_CONTEXTS` | `2` | DaouOffice pages open at once (each roughly 150–300 MB) |
 | `DAOUOFFICE_MAX_PARKED` | `6` | Idle logged-in contexts kept without a page, so their sessions are not stranded |
+| `DAOUOFFICE_QUOTE_ALLOW_PRIVATE` | unset | Tests only. `1` lets `capture_quote` open loopback and private addresses. Otherwise captures refuse non-public hosts, checked by DNS for every request of the capture context, redirects included: cloud metadata, RFC 1918, CGNAT and Tailscale, link-local, `*.local`, `*.internal` |
 
 ## Company config
 
@@ -47,6 +48,7 @@ Copy `config.example.json` to the server and fill it in. Never commit the filled
 | `lines.purchase`, `.claim`, `.inspection` | `"project"`, `"ctoFinal"`, or a list of `{ "role" \| "name", "type", "dept"? }` |
 | `trip.approvers`, `trip.referers` | Trip line and references, same entry shape |
 | `purposeMap`, `minPurchaseKrw` | Expense purpose mapping; the requisition warning threshold |
+| `purchase.formName`, `.projectBudget`, `.payWhen`, `.payMethods`, `.cardMethod`, `.cardIssuers`, `.rateRange` | 구매 품의서 양식 선택지. Empty means the current form's values (budget `프로젝트 사업비`, 지급요청일 `당월`/`익월`, …). A non-empty `projects.<name>.subProjects` makes the sub-project mandatory for new requisitions |
 | `departments.<name>.code` | Fallback department code when the org tree does not give one |
 | `cardMatch.vendorAliases`, `.subscriptionMerchants`, `.requisitionFrom` | Receipt vendor ↔ card merchant aliases, subscription merchant regexes, date from which purchases need a requisition |
 | `inspection.perOrderMerchants`, `.perOrderFrom`, `.serialFromKrw` | Merchants (regexes, default `ALIEXPRESS`) whose charges get one 검수조서 per requisition, and from which payment date; amount from which an item needs a serial photo besides the device keywords |
@@ -106,8 +108,12 @@ success. It returns `{ accountId, accountName, duplicate }`; `login` returns the
 | `payment_status` | read | Receipt, requisition, photos, serials, report and claim per payment |
 | `file_inspection_report` | write | One 검수조서 per payment (per order for per-order merchants); `action` new, fix (withdraw and refile), refile (new report linking the completed one) |
 | `attach_photos_to_claim` | write | Post inspection photos as comments on the expense claim that holds the payment |
+| `draft_purchase` | local | 구매 품의 초안 저장, 검증 결과와 칸별 값 |
+| `list_purchases` | read | 저장된 품의 초안과 올린 품의, 키와 판 |
+| `capture_quote` | local | 상품 페이지 캡처(견적서 대용) 또는 사람이 찍은 화면을 초안에 붙인다 |
+| `submit_purchase` | write | 구매 품의서 상신. `fix`(상신취소 후 같은 문서로), `refile`(새 결재선으로 다시) |
 
-`src/tools/{purchase,claim,trip,cert}.mjs` are filled by the next modules.
+`src/tools/{claim,trip,cert}.mjs` are filled by the next modules.
 
 ## Writing a tool module
 
