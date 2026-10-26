@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -129,6 +131,91 @@ func TestValidateLLMEndpoint(t *testing.T) {
 			err := c.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSplitCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    []string
+		wantErr bool
+	}{
+		{"default", DefaultDaouOfficeCommand, []string{"node", "--disable-warning=ExperimentalWarning", "plugins/daouoffice/src/server.mjs"}, false},
+		{"host command with extra spaces", "  /opt/node/bin/node   --disable-warning=ExperimentalWarning /opt/xylolabs-kb/plugins/daouoffice/src/server.mjs ",
+			[]string{"/opt/node/bin/node", "--disable-warning=ExperimentalWarning", "/opt/xylolabs-kb/plugins/daouoffice/src/server.mjs"}, false},
+		{"double quotes keep spaces", `node "/opt/my plugins/server.mjs"`, []string{"node", "/opt/my plugins/server.mjs"}, false},
+		{"single quotes are literal", `node '/a b/$HOME\x.mjs'`, []string{"node", `/a b/$HOME\x.mjs`}, false},
+		{"escapes in double quotes", `a "say \"hi\" \\ \n"`, []string{"a", `say "hi" \ \n`}, false},
+		{"backslash outside quotes", `a b\ c`, []string{"a", "b c"}, false},
+		{"adjacent quotes join", `a"b"'c'`, []string{"abc"}, false},
+		{"empty quotes are an argument", `a ""`, []string{"a", ""}, false},
+		{"shell operators stay literal", `node x.mjs; rm -rf / && $(id)`, []string{"node", "x.mjs;", "rm", "-rf", "/", "&&", "$(id)"}, false},
+		{"empty", "   ", nil, false},
+		{"unterminated single", `node 'x`, nil, true},
+		{"unterminated double", `node "x`, nil, true},
+		{"trailing backslash", `node x\`, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SplitCommand(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("SplitCommand(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
+			}
+			if !tt.wantErr && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("SplitCommand(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPluginConfig(t *testing.T) {
+	for _, k := range []string{"PLUGIN_SECRET_KEY", "DAOUOFFICE_ENABLED", "DAOUOFFICE_COMMAND", "DAOUOFFICE_DATA_DIR", "DAOUOFFICE_CONFIG"} {
+		t.Setenv(k, "")
+	}
+	cfg := Load()
+	if cfg.DaouOfficeEnabled || cfg.PluginSecretKey != "" || cfg.DaouOfficeCommand != DefaultDaouOfficeCommand ||
+		cfg.DaouOfficeDataDir != "data/plugins/daouoffice" || cfg.DaouOfficeConfig != "configs/daouoffice.json" {
+		t.Errorf("defaults = %+v", cfg)
+	}
+
+	t.Setenv("DAOUOFFICE_ENABLED", "true")
+	t.Setenv("DAOUOFFICE_COMMAND", "/opt/node/bin/node /opt/x/server.mjs")
+	cfg = Load()
+	argv, err := cfg.DaouOfficeArgv()
+	if !cfg.DaouOfficeEnabled || err != nil || !reflect.DeepEqual(argv, []string{"/opt/node/bin/node", "/opt/x/server.mjs"}) {
+		t.Errorf("enabled = %v, argv = %q, err = %v", cfg.DaouOfficeEnabled, argv, err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"disabled needs nothing", func(c *Config) {}, ""},
+		{"enabled without a key", func(c *Config) {
+			c.DaouOfficeEnabled, c.DaouOfficeCommand, c.DaouOfficeConfig = true, "node x.mjs", "config_test.go"
+		}, "PLUGIN_SECRET_KEY"},
+		{"enabled with a broken command", func(c *Config) {
+			c.DaouOfficeEnabled, c.PluginSecretKey, c.DaouOfficeCommand, c.DaouOfficeConfig = true, "k", `node "x`, "config_test.go"
+		}, "DAOUOFFICE_COMMAND"},
+		{"enabled without the config file", func(c *Config) {
+			c.DaouOfficeEnabled, c.PluginSecretKey, c.DaouOfficeCommand, c.DaouOfficeConfig = true, "k", "node x.mjs", "missing.json"
+		}, "DAOUOFFICE_CONFIG"},
+		{"enabled and complete", func(c *Config) {
+			c.DaouOfficeEnabled, c.PluginSecretKey, c.DaouOfficeCommand, c.DaouOfficeConfig = true, "k", "node x.mjs", "config_test.go"
+		}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := minimalValidConfig()
+			tt.mutate(c)
+			errs := c.Validate()
+			joined := strings.Join(errs, "; ")
+			if tt.wantErr == "" && len(errs) != 0 || tt.wantErr != "" && !strings.Contains(joined, tt.wantErr) {
+				t.Errorf("Validate() = %q, want mention of %q", joined, tt.wantErr)
 			}
 		})
 	}

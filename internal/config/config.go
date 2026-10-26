@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -70,7 +71,21 @@ type Config struct {
 
 	// Logging
 	LogLevel string
+
+	// Plugins
+	// PluginSecretKey is the base64 of 32 random bytes that seals plugin
+	// account credentials. Empty disables plugins that need accounts.
+	PluginSecretKey   string
+	DaouOfficeEnabled bool
+	// DaouOfficeCommand is the plugin's command line, split on spaces with
+	// shell-style quoting but never run through a shell.
+	DaouOfficeCommand string
+	DaouOfficeDataDir string
+	DaouOfficeConfig  string
 }
+
+// DefaultDaouOfficeCommand starts the plugin from a checkout of this repository.
+const DefaultDaouOfficeCommand = "node --disable-warning=ExperimentalWarning plugins/daouoffice/src/server.mjs"
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
@@ -127,8 +142,83 @@ func Load() *Config {
 		DiscordSyncInterval: envOrDefaultDuration("DISCORD_SYNC_INTERVAL", 5*time.Minute),
 
 		LogLevel: envOrDefault("LOG_LEVEL", "info"),
+
+		PluginSecretKey:   os.Getenv("PLUGIN_SECRET_KEY"),
+		DaouOfficeEnabled: envBool("DAOUOFFICE_ENABLED"),
+		DaouOfficeCommand: envOrDefault("DAOUOFFICE_COMMAND", DefaultDaouOfficeCommand),
+		DaouOfficeDataDir: envOrDefault("DAOUOFFICE_DATA_DIR", "data/plugins/daouoffice"),
+		DaouOfficeConfig:  envOrDefault("DAOUOFFICE_CONFIG", "configs/daouoffice.json"),
 	}
 	return cfg
+}
+
+// DaouOfficeArgv splits DaouOfficeCommand into arguments.
+func (c *Config) DaouOfficeArgv() ([]string, error) {
+	argv, err := SplitCommand(c.DaouOfficeCommand)
+	if err != nil {
+		return nil, fmt.Errorf("DAOUOFFICE_COMMAND: %w", err)
+	}
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("DAOUOFFICE_COMMAND is empty")
+	}
+	return argv, nil
+}
+
+// SplitCommand splits a command line into arguments the way a POSIX shell
+// would for plain words: whitespace separates arguments, single quotes keep
+// everything literally, double quotes keep spaces and honor \" and \\, and a
+// backslash outside quotes escapes the next character. Nothing is expanded
+// ($VAR, globs, ~) and there are no operators, because the result is
+// executed directly, never by a shell.
+func SplitCommand(s string) ([]string, error) {
+	var args []string
+	var cur strings.Builder
+	inWord := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case ch == '\'':
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated single quote")
+			}
+			cur.WriteString(s[i+1 : i+1+end])
+			i += end + 1
+			inWord = true
+		case ch == '"':
+			i++
+			for ; i < len(s) && s[i] != '"'; i++ {
+				if s[i] == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\') {
+					i++
+				}
+				cur.WriteByte(s[i])
+			}
+			if i >= len(s) {
+				return nil, fmt.Errorf("unterminated double quote")
+			}
+			inWord = true
+		case ch == '\\':
+			if i+1 >= len(s) {
+				return nil, fmt.Errorf("trailing backslash")
+			}
+			i++
+			cur.WriteByte(s[i])
+			inWord = true
+		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r':
+			if inWord {
+				args = append(args, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteByte(ch)
+			inWord = true
+		}
+	}
+	if inWord {
+		args = append(args, cur.String())
+	}
+	return args, nil
 }
 
 // SlackEnabled returns true if Slack credentials are configured.
@@ -223,6 +313,19 @@ func (c *Config) Validate() []string {
 		}
 	}
 
+	// Check the plugin settings when the DaouOffice plugin is turned on
+	if c.DaouOfficeEnabled {
+		if c.PluginSecretKey == "" {
+			errs = append(errs, "DAOUOFFICE_ENABLED is set but PLUGIN_SECRET_KEY is not, so the plugin stays off")
+		}
+		if _, err := c.DaouOfficeArgv(); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if !fileExists(c.DaouOfficeConfig) {
+			errs = append(errs, fmt.Sprintf("DAOUOFFICE_CONFIG %q not found; the plugin starts with empty company rules", c.DaouOfficeConfig))
+		}
+	}
+
 	// Check Google creds file exists if impersonate email is set
 	if c.GoogleImpersonateEmail != "" && !fileExists(c.GoogleCredsFile) {
 		errs = append(errs, fmt.Sprintf("GOOGLE_IMPERSONATE_EMAIL is set but credentials file %q not found", c.GoogleCredsFile))
@@ -246,6 +349,14 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func envOrDefaultInt(key string, fallback int) int {

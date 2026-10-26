@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 	"github.com/xylolabsinc/xylolabs-kb/internal/kb"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kbrepo"
 	notionconn "github.com/xylolabsinc/xylolabs-kb/internal/notion"
+	"github.com/xylolabsinc/xylolabs-kb/internal/plugin"
+	"github.com/xylolabsinc/xylolabs-kb/internal/plugin/mcpstdio"
 	slackconn "github.com/xylolabsinc/xylolabs-kb/internal/slack"
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
 	"github.com/xylolabsinc/xylolabs-kb/internal/tools"
@@ -241,6 +244,9 @@ func main() {
 		logger.Info("discord connector disabled (missing credentials)")
 	}
 
+	// One plugin registry is shared by the Slack and Discord bots.
+	pluginRegistry := newPluginRegistry(cfg, store, botHandler != nil || discordBotHandler != nil, logger)
+
 	// Wire tool executor to bot after all connectors are initialized
 	if botHandler != nil {
 		var gw *tools.GoogleWriter
@@ -255,6 +261,10 @@ func main() {
 		slackPoster := tools.NewSlackMessagePoster(slack.New(cfg.SlackBotToken), logger)
 		sm := tools.NewSchedulerManager(store, slackPoster, slackPoster, cfg.Location(), logger)
 		toolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, sm, store, logger)
+		if pluginRegistry != nil {
+			toolExecutor.SetPlugins(pluginRegistry)
+			botHandler.SetPlugins(pluginRegistry)
+		}
 		botHandler.SetToolExecutor(toolExecutor)
 		logger.Info("tool executor enabled",
 			"google_drive", gw != nil,
@@ -280,11 +290,26 @@ func main() {
 		discordPoster := bot.NewDiscordMessagePoster(discordPlatform.Session(), cfg.DiscordGuildID, logger)
 		discordSM := tools.NewSchedulerManager(store, discordPoster, discordPoster, cfg.Location(), logger)
 		discordToolExecutor := tools.NewToolExecutor(gw, nw, cfg.GoogleDefaultCalendarID, ss, discordSM, store, logger)
+		if pluginRegistry != nil {
+			discordToolExecutor.SetPlugins(pluginRegistry)
+			discordBotHandler.SetPlugins(pluginRegistry)
+		}
 		discordBotHandler.SetToolExecutor(discordToolExecutor)
 		logger.Info("discord tool executor enabled")
 
 		discordJobScheduler = worker.NewJobScheduler(store, discordPoster, cfg.Location(), logger)
 		discordJobScheduler.Start()
+	}
+
+	// Start plugins in the background: a slow or broken plugin must not delay
+	// the bot. The janitor then expires pending actions and recovers ones a
+	// previous run left running; it starts after the plugin so it can name it
+	// and clean its inbox.
+	if pluginRegistry != nil {
+		go func() {
+			startDaouOffice(done, cfg, pluginRegistry, logger)
+			bot.RunPluginJanitor(done, pluginRegistry, time.Minute, logger, botHandler, discordBotHandler)
+		}()
 	}
 
 	// Start scheduler
@@ -329,6 +354,12 @@ func main() {
 		discordPlatform.StopCleanup()
 	}
 
+	if pluginRegistry != nil {
+		if err := pluginRegistry.Close(); err != nil {
+			logger.Warn("plugin shutdown error", "error", err)
+		}
+	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -337,4 +368,88 @@ func main() {
 	}
 
 	logger.Info("xylolabs-kb stopped")
+}
+
+// newPluginRegistry returns the plugin registry, or nil with the reason
+// logged when no plugin can run.
+func newPluginRegistry(cfg *config.Config, store *storage.SQLiteStore, botRunning bool, logger *slog.Logger) *plugin.Registry {
+	switch {
+	case !cfg.DaouOfficeEnabled:
+		logger.Info("daouoffice plugin disabled (DAOUOFFICE_ENABLED is not true)")
+		return nil
+	case !botRunning:
+		logger.Warn("daouoffice plugin disabled: no bot is running (needs Slack or Discord plus an LLM key)")
+		return nil
+	case cfg.PluginSecretKey == "":
+		logger.Warn("daouoffice plugin disabled: PLUGIN_SECRET_KEY is not set, so accounts cannot be stored")
+		return nil
+	}
+	vault, err := plugin.NewVault(cfg.PluginSecretKey)
+	if err != nil {
+		logger.Error("daouoffice plugin disabled: PLUGIN_SECRET_KEY is invalid", "error", err)
+		return nil
+	}
+	return plugin.NewRegistry(store, vault, logger)
+}
+
+// startDaouOffice spawns the DaouOffice plugin and registers it once its MCP
+// handshake succeeds. Its tools appear to the model from then on.
+func startDaouOffice(done <-chan struct{}, cfg *config.Config, reg *plugin.Registry, logger *slog.Logger) {
+	argv, err := cfg.DaouOfficeArgv()
+	if err != nil {
+		logger.Error("daouoffice plugin disabled: bad command", "error", err)
+		return
+	}
+	dataDir, err := filepath.Abs(cfg.DaouOfficeDataDir)
+	if err == nil {
+		err = os.MkdirAll(dataDir, 0o700)
+	}
+	if err != nil {
+		logger.Error("daouoffice plugin disabled: data directory", "path", cfg.DaouOfficeDataDir, "error", err)
+		return
+	}
+	env := []string{"DAOUOFFICE_DATA_DIR=" + dataDir}
+	// The plugin refuses a config path that does not exist, so pass it only
+	// when it does; without it the plugin starts with empty company rules.
+	if configPath, err := filepath.Abs(cfg.DaouOfficeConfig); err == nil {
+		if _, statErr := os.Stat(configPath); statErr == nil {
+			env = append(env, "DAOUOFFICE_CONFIG="+configPath)
+		} else {
+			logger.Warn("daouoffice company config not found; the plugin starts with empty rules", "path", configPath)
+		}
+	}
+	for _, key := range []string{"PLAYWRIGHT_BROWSERS_PATH", "DAOUOFFICE_LOG_LEVEL"} {
+		if v := os.Getenv(key); v != "" {
+			env = append(env, key+"="+v)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	go func() {
+		select {
+		case <-done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	p, err := mcpstdio.New(ctx, mcpstdio.Config{
+		Name: "daouoffice", Title: "다우오피스", Command: argv, Env: env, DataDir: dataDir,
+	}, logger)
+	if err != nil {
+		logger.Error("daouoffice plugin disabled: start failed", "command", argv[0], "error", err)
+		return
+	}
+	select {
+	case <-done:
+		_ = p.Close()
+		return
+	default:
+	}
+	if err := reg.Register(p); err != nil {
+		logger.Error("daouoffice plugin disabled: register failed", "error", err)
+		_ = p.Close()
+		return
+	}
+	logger.Info("daouoffice plugin ready", "tools", len(p.Tools()), "accounts", len(p.AccountFields()) > 0)
 }
