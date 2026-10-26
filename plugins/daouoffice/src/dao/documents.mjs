@@ -62,6 +62,21 @@ export async function listTodo(api, { offset = 20 } = {}) {
   return { docs: [], partial: false };
 }
 
+/**
+ * 내 기안 문서 전체. 100건씩 `maxPages` 쪽까지 읽는다. 같은 제목이 이미 올라갔는지 볼 때 쓴다.
+ * 행은 목록 원본 그대로다(`documentId`, `formName`, `title`, `docStatusName`, `draftedAt`).
+ */
+export async function listAllDrafts(api, { maxPages = 20 } = {}) {
+  const out = [];
+  for (let page = 0; page < maxPages; page++) {
+    const r = ensureOk(await api(`/gw/api/approval/doclist/draft/all?${listQuery({ page, offset: 100 })}`), '내 기안 문서');
+    const rows = listOf(r);
+    out.push(...rows);
+    if (rows.length < 100) break;
+  }
+  return out;
+}
+
 /** 내 기안 문서. 최신순. */
 export async function listDrafts(api, { page = 0, offset = 20 } = {}) {
   const r = ensureOk(await api(`/gw/api/approval/doclist/draft/all?${listQuery({ page, offset })}`), '내 기안 문서');
@@ -124,7 +139,8 @@ export async function readDocument(page, api, docId) {
     title: doc.title ?? '',
     formName: doc.formName ?? '',
     status: doc.docStatusName ?? '',
-    // UNVERIFIED: shape not observed — docNum, drafter and draftedAt field names on the detail response.
+    // docNum and drafterName are read this way by the source's inspection report and photo comments.
+    // UNVERIFIED: shape not observed — draftedAt on the detail response.
     docNum: doc.docNum ?? doc.documentNumber ?? '',
     drafter: doc.drafterName ?? doc.drafter?.name ?? '',
     draftedAt: doc.draftedAt ?? '',

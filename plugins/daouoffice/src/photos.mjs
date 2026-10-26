@@ -162,6 +162,23 @@ async function encode(input, { maxSide = MAX_SIDE, maxBytes = MAX_BYTES } = {}) 
 }
 
 /**
+ * Strips and normalises an image held in memory. Returns the metadata-free JPEG and the capture
+ * date read before stripping. Used for photos and for receipt images.
+ */
+export async function stripImage(input, options = {}) {
+  const takenDate = await captureDate(input);
+  let out;
+  try {
+    out = await encode(await decodable(input), options);
+  } catch (e) {
+    if (e instanceof PluginError) throw e;
+    throw new PluginError('VALIDATION', '사진으로 읽을 수 없는 파일입니다.', { cause: e });
+  }
+  assertNoMetadata(out.data);
+  return { ...out, takenDate };
+}
+
+/**
  * Strips, normalises and stores one photo.
  *
  *   const p = await ingestPhoto('/inbox/abc/IMG_1.HEIC', '/data/files/hong/photos');
@@ -177,15 +194,8 @@ export async function ingestPhoto(inputPath, destDir, options = {}) {
   } catch (cause) {
     throw new PluginError('NOT_FOUND', '받은 사진 파일을 찾지 못했습니다.', { cause });
   }
-  const takenDate = await captureDate(input);
-  let out;
-  try {
-    out = await encode(await decodable(input), options);
-  } catch (e) {
-    if (e instanceof PluginError) throw e;
-    throw new PluginError('VALIDATION', '사진으로 읽을 수 없는 파일입니다.', { cause: e });
-  }
-  assertNoMetadata(out.data);
+  const out = await stripImage(input, options);
+  const { takenDate } = out;
 
   const sha256 = createHash('sha256').update(out.data).digest('hex');
   const file = `${sha256.slice(0, 24)}.jpg`;
@@ -199,4 +209,10 @@ export async function ingestPhoto(inputPath, destDir, options = {}) {
     created = false;
   }
   return { file, path: full, sha256, takenDate, width: out.width, height: out.height, bytes: out.data.length, created };
+}
+
+/** A small JPEG preview (long side `side` px) for showing photos in a chat preview. */
+export async function thumbnail(file, side = 480) {
+  return sharp(file, { failOn: 'none' }).rotate().resize(side, side, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 70 }).toBuffer();
 }

@@ -228,3 +228,27 @@ export function statusCodeOf(name) {
   }
   return code;
 }
+
+/**
+ * 카드 명의자. 카드 별칭 괄호 안의 이름(`연구카드(홍길동)`)이 먼저고, 없으면 콤보의 담당자다.
+ * 지출결의와 검수조서 제목에 들어간다.
+ */
+export function cardHolder(card) {
+  const name = /\(([^)]+)\)/.exec(card?.name ?? '')?.[1]?.trim() || String(card?.holder ?? '').trim();
+  if (!name) throw new PluginError('VALIDATION', `카드 명의자를 읽지 못했습니다: ${card?.name ?? '(이름 없음)'}`);
+  return name;
+}
+
+/**
+ * 카드를 고른다. `needle` 이 있으면 `pickCard()`, 없으면 명의자가 `holderName` 인 카드가 한 장일 때
+ * 그 카드다. 여러 장이거나 없으면 고르지 않고 VALIDATION 으로 묻는다.
+ */
+export function chooseCard(cards, { needle, holderName } = {}) {
+  if (needle) return pickCard(cards, needle);
+  const mine = holderName ? cards.filter((c) => {
+    try { return cardHolder(c) === holderName; } catch { return false; }
+  }) : [];
+  if (mine.length === 1) return mine[0];
+  const list = (mine.length ? mine : cards).map((c) => `${c.name} (${last4Of(c) || c.cardNo})`).join(', ');
+  throw new PluginError('VALIDATION', `어느 카드인지 알려 주세요. 카드 뒤 네 자리나 이름 일부로 고릅니다: ${list || '(볼 수 있는 카드 없음)'}`);
+}

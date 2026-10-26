@@ -282,6 +282,17 @@ export class Db {
     }));
   }
 
+  /**
+   * Merges `patch` into the purchase's `data` (JSON merge patch: keys set to null are removed) and
+   * leaves every column alone. For additions made outside the requisition flow, such as serial
+   * numbers read off inspection photos. Returns the row, or null when the purchase does not exist.
+   */
+  patchPurchaseData(owner, key, patch) {
+    return toPurchase(this.#q(`
+      UPDATE purchases SET data = json_patch(data, :patch), updated_at = :at
+      WHERE owner = :owner AND key = :key RETURNING *`).get({ owner, key, patch: json(patch, {}), at: kstIso() }));
+  }
+
   // ------------------------------------------------------------------ quotes
 
   quotes(purchaseId) {

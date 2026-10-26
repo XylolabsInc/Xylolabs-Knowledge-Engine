@@ -47,6 +47,7 @@ Copy `config.example.json` to the server and fill it in. Never commit the filled
 | `purposeMap`, `minPurchaseKrw` | Expense purpose mapping; the requisition warning threshold |
 | `departments.<name>.code` | Fallback department code when the org tree does not give one |
 | `cardMatch.vendorAliases`, `.subscriptionMerchants`, `.requisitionFrom` | Receipt vendor ↔ card merchant aliases, subscription merchant regexes, date from which purchases need a requisition |
+| `inspection.perOrderMerchants`, `.perOrderFrom`, `.serialFromKrw` | Merchants (regexes, default `ALIEXPRESS`) whose charges get one 검수조서 per requisition, and from which payment date; amount from which an item needs a serial photo besides the device keywords |
 
 Unknown keys are kept, so a module can add its own section.
 
@@ -95,8 +96,16 @@ success. It returns `{ accountId, accountName, duplicate }`; `login` returns the
 | `list_cards`, `card_usage` | read | 법인카드, 사용내역과 상태별 합계 |
 | `withdraw_document` | write | 상신취소 |
 | `guide` | read | Rules by topic from `guide/*.md` (no account needed) |
+| `save_photos` | local | Strip, date and store inspection photos from the attachments; link them to requisitions (`alsoFor`, `otherCard`, serials) |
+| `save_receipt` | local | Store receipts, invoices and order pages (image or PDF) under the receipt naming convention |
+| `mark_inspection` | local | Per requisition: handled elsewhere, photos missing an item, item amounts |
+| `mark_payment` | local | Per card payment: handled elsewhere, refunded, claim as is, pinned receipts (card-match overrides) |
+| `inspection_candidates` | read | Payments that need a 검수조서, with photos, checklist, serials and whether it can be filed |
+| `payment_status` | read | Receipt, requisition, photos, serials, report and claim per payment |
+| `file_inspection_report` | write | One 검수조서 per payment (per order for per-order merchants); `action` new, fix (withdraw and refile), refile (new report linking the completed one) |
+| `attach_photos_to_claim` | write | Post inspection photos as comments on the expense claim that holds the payment |
 
-`src/tools/{purchase,inspection,claim,trip,cert}.mjs` are filled by the next modules.
+`src/tools/{purchase,claim,trip,cert}.mjs` are filled by the next modules.
 
 ## Writing a tool module
 

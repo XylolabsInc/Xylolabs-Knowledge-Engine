@@ -54,6 +54,14 @@ export const ConfigSchema = z.looseObject({
     code: z.string().optional(),
     id: z.string().optional(),
   })).default({}),
+  inspection: z.looseObject({
+    /** Card merchants whose charges get one 검수조서 per requisition (one per order receipt). */
+    perOrderMerchants: z.array(z.string()).default(['ALIEXPRESS']),
+    /** Payments from this date on follow the per-order rule; unset = always. */
+    perOrderFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    /** Items at or above this amount (KRW) need a readable serial photo, besides the device keywords. */
+    serialFromKrw: z.number().int().positive().optional(),
+  }).default({ perOrderMerchants: ['ALIEXPRESS'] }),
   cardMatch: z.looseObject({
     vendorAliases: z.record(z.string(), z.string()).default({}),
     subscriptionMerchants: z.array(z.string()).default([]),
@@ -68,9 +76,9 @@ export function parseConfig(raw, source = 'config') {
     const issues = r.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
     throw new PluginError('INTERNAL', `회사 설정이 잘못됐습니다 (${source}): ${issues}`);
   }
-  for (const re of r.data.cardMatch.subscriptionMerchants) {
+  for (const re of [...r.data.cardMatch.subscriptionMerchants, ...r.data.inspection.perOrderMerchants]) {
     try { new RegExp(re, 'i'); } catch {
-      throw new PluginError('INTERNAL', `회사 설정이 잘못됐습니다 (${source}): cardMatch.subscriptionMerchants 정규식 "${re}"`);
+      throw new PluginError('INTERNAL', `회사 설정이 잘못됐습니다 (${source}): 정규식 "${re}" (cardMatch.subscriptionMerchants, inspection.perOrderMerchants)`);
     }
   }
   return deepFreeze(r.data);

@@ -27,6 +27,9 @@
   "departments": {
     "<department name>": { "code": "<org tree code>" }
   },
+  "inspection": {
+    "perOrderMerchants": ["ALIEXPRESS"]
+  },
   "cardMatch": {
     "vendorAliases": { "<receipt vendor>": "<card merchant>" },
     "subscriptionMerchants": ["<SUBSCRIPTION MERCHANT REGEX>"]
