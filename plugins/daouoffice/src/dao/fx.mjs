@@ -1,5 +1,6 @@
 import { PluginError } from '../errors.mjs';
 import { kstDate, kstIso } from './kst.mjs';
+import { withGuardedContext } from './egress.mjs';
 
 /**
  * 원/달러 환율. 하나은행 고시 **매매기준율**을 네이버 금융에서 읽는다. 원본 저장소 `fx.mjs` 를
@@ -57,16 +58,17 @@ export async function fetchUsdKrw(page, { url = FX_URL, timeoutMs = 30_000 } = {
 }
 
 /**
- * 오늘(KST) 환율. `fx_rates` 에 오늘 값이 있으면 그것을, 없으면 네이버 금융에서 받아 남긴다.
+ * 오늘(KST) 환율. `fx_rates` 에 오늘 값이 있으면 그것을, 없거나 `refresh` 면 네이버 금융에서 받아 남긴다.
  * `fetch` 는 시험용이다. 기본은 공유 브라우저의 빈 컨텍스트에서 `fetchUsdKrw` 를 부른다.
  *
  * 돌려주는 값 `{ rate, at, source, day }`
  */
-export async function todayRate({ db, sessions, fetch, now = new Date() }) {
+export async function todayRate({ db, sessions, fetch, now = new Date(), refresh = false }) {
   const day = kstDate(now);
-  const cached = db.fxRate(day);
+  const cached = refresh ? null : db.fxRate(day);
   if (cached) return { rate: cached.rate, at: cached.at, source: cached.source, day };
-  const get = fetch ?? (() => sessions.withScratchContext(({ page }) => fetchUsdKrw(page)));
+  // 고정 주소지만 페이지 스크립트가 어디로 요청할지 모르므로 상품 캡처와 같은 검사 프록시를 거친다.
+  const get = fetch ?? (() => withGuardedContext(sessions, ({ page }) => fetchUsdKrw(page)));
   const fx = await get();
   db.addFxRate({ day, rate: fx.rate, at: fx.at ?? kstIso(now).slice(0, 16).replace('T', ' '), source: fx.source });
   return { ...fx, day };

@@ -27,23 +27,52 @@ const cfg = parseConfig({
   minPurchaseKrw: 100_000,
 });
 
-/** Sessions stand-in: the scratch context serves the FX page; DaouOffice sessions are recorded and refused. */
+/**
+ * Sessions stand-in. The scratch context serves the FX page. A DaouOffice session is refused
+ * (`refuse`), or runs the handler on a fake page whose documents come from `docs`; the fake page
+ * stops the submit at its first DOM step (`page.on`), so a test sees how far execute got.
+ */
+const STOP = '시험용: 여기서 멈춘다';
 function fakeSessions() {
-  return {
+  const s = {
     scratch: 0,
     sessionCalls: [],
+    mode: 'refuse',
+    docs: {},
+    onScratch: null,
     async withScratchContext(fn) {
-      this.scratch++;
+      s.scratch++;
+      await s.onScratch?.();
       const page = {
         async goto() {}, async waitForFunction() {}, async evaluate() { return FX_TEXT; },
       };
       return fn({ page, context: {} });
     },
     async withSession(owner, creds, opts, fn) {
-      this.sessionCalls.push({ owner, mode: currentMode() });
-      throw new PluginError('UPSTREAM', '시험용: 다우오피스에 닿지 않는다');
+      s.sessionCalls.push({ owner, mode: currentMode() });
+      if (s.mode === 'refuse') throw new PluginError('UPSTREAM', '시험용: 다우오피스에 닿지 않는다');
+      const api = async (p) => {
+        const id = p.match(/document\/(\d+)$/)?.[1];
+        const d = s.docs[id];
+        if (!d) return { status: 404, ok: false, data: null };
+        return {
+          status: 200, ok: true,
+          data: { data: {
+            document: { title: '테스트 카메라 구매의 건', formName: '구매 품의서', docStatusName: d.status, docNum: d.docNum ?? '', docBodyContent: id, attaches: [] },
+            apprFlow: { activityGroups: [{ name: '승인', activities: (d.line ?? ['홍길동', '최담당']).map((userName) => ({ userName })) }] },
+            actionCheck: { isAllowCancelDraftUser: Boolean(d.canCancel) },
+          } },
+        };
+      };
+      const page = {
+        async evaluate() { return { 구입일자: [] }; },
+        on() { throw new PluginError('UPSTREAM', STOP); },
+        off() {},
+      };
+      return fn({ page, api, context: {}, owner, baseUrl: 'https://example.daouoffice.com', fresh: false });
     },
   };
+  return s;
 }
 
 describe('purchase tools over MCP', () => {
@@ -135,6 +164,30 @@ describe('purchase tools over MCP', () => {
     assert.match(paid.structuredContent.fields.note, /카드 승인 적용환율/);
   });
 
+  test('draft_purchase saves on top of what changed while the rate was fetched', async () => {
+    const first = await call('draft_purchase', { ...DRAFT, key: 'race' });
+    assert.ok(!first.isError, text(first));
+    // save_photos writes a serial and the row is filed while draft_purchase waits for the rate.
+    sessions.onScratch = () => {
+      db.patchPurchaseData('hong', 'race', { serials: { '테스트 카메라': ['SN-9'] } });
+      const row = db.purchase('hong', 'race');
+      db.upsertPurchase({ ...row, status: 'submitted', docId: '1000000000000031' });
+    };
+    try {
+      const r = await call('draft_purchase', { key: 'race', amount: null, usd: 100, refreshFx: true });
+      assert.ok(!r.isError, text(r));
+    } finally {
+      sessions.onScratch = null;
+    }
+    const row = db.purchase('hong', 'race');
+    assert.deepEqual(row.data.serials, { '테스트 카메라': ['SN-9'] });
+    assert.equal(row.status, 'submitted');
+    assert.equal(row.docId, '1000000000000031');
+    assert.equal(row.usd, 100);
+    assert.equal(row.data.revision, 2);
+    db.upsertPurchase({ ...row, status: 'draft', docId: null });   // later tests expect no filed rows
+  });
+
   test('capture_quote refuses an order page before opening anything', async () => {
     const before = sessions.scratch;
     const r = await call('capture_quote', { key: 'p-20260115-1', url: 'https://shop.example.com/my/orders/1', expect: ['테스트 카메라'] });
@@ -186,13 +239,12 @@ describe('purchase tools over MCP', () => {
     const r = await call('submit_purchase', { key: 'p-20260115-1', revision: 4 });
     assert.ok(!r.isError, text(r));
     assert.equal(r.structuredContent.preview, true);
+    assert.equal(r.structuredContent.digest, undefined);
     assert.match(text(r), /다음 구매 품의서를 상신합니다/);
     assert.match(text(r), /결재선: 기안 홍길동 \(연구개발팀\) → 합의 최담당 → 결재 김대표/);
     assert.equal(r.content.filter((c) => c.type === 'image').length, 1);
     assert.equal(sessions.sessionCalls.length, 0);
-    const row = db.purchase('hong', 'p-20260115-1');
-    assert.equal(row.data.previewedRevision, 4);
-    assert.equal(row.status, 'draft');
+    assert.equal(db.purchase('hong', 'p-20260115-1').status, 'draft');
   });
 
   test('submit_purchase preview refuses a stale revision, validation errors, and fix with refile', async () => {
@@ -208,31 +260,89 @@ describe('purchase tools over MCP', () => {
     assert.equal(missing.structuredContent.code, 'NOT_FOUND');
   });
 
-  test('submit_purchase execute only runs the previewed revision with the previewed quotes', async () => {
-    // Previewed revision 4 → execute reaches the DaouOffice session (refused by the fake) in execute mode.
-    const ok = await call('submit_purchase', { key: 'p-20260115-1', revision: 4 }, EXECUTE);
-    assert.equal(ok.structuredContent.code, 'UPSTREAM');
-    assert.deepEqual(sessions.sessionCalls.at(-1), { owner: 'hong', mode: 'execute' });
+  test('execute runs once per approved preview: a second approval of the same preview is refused', async () => {
+    await call('submit_purchase', { key: 'p-20260115-1', revision: 4 });
+    sessions.mode = 'run';
+    try {
+      const [a, b] = await Promise.all([
+        call('submit_purchase', { key: 'p-20260115-1', revision: 4 }, EXECUTE),
+        call('submit_purchase', { key: 'p-20260115-1', revision: 4 }, EXECUTE),
+      ]);
+      const texts = [text(a), text(b)].sort();
+      assert.equal(texts.filter((t) => t.includes(STOP)).length, 1, texts.join(' | '));
+      const other = [a, b].find((r) => !text(r).includes(STOP));
+      assert.equal(other.structuredContent.code, 'CONFLICT');
+      assert.deepEqual(sessions.sessionCalls.at(-1).mode, 'execute');
+      // Without a new preview nothing runs again.
+      const again = await call('submit_purchase', { key: 'p-20260115-1', revision: 4 }, EXECUTE);
+      assert.equal(again.structuredContent.code, 'CONFLICT');
+      assert.equal(again.structuredContent.data.previewChanged, true);
+    } finally {
+      sessions.mode = 'refuse';
+    }
     assert.equal(db.purchase('hong', 'p-20260115-1').status, 'draft');
+  });
 
-    // A changed draft needs a new preview.
+  test('a changed draft or a changed quote needs a new preview', async () => {
     const calls = sessions.sessionCalls.length;
+    await call('submit_purchase', { key: 'p-20260115-1', revision: 4 });
     const changed = await call('draft_purchase', { key: 'p-20260115-1', purpose: '온실 작물 생육 원격 관찰 기록' });
     const r1 = await call('submit_purchase', { key: 'p-20260115-1', revision: 4 }, EXECUTE);
     assert.equal(r1.structuredContent.code, 'CONFLICT');
-    const r2 = await call('submit_purchase', { key: 'p-20260115-1', revision: changed.structuredContent.revision }, EXECUTE);
-    assert.equal(r2.structuredContent.code, 'CONFLICT');
-    assert.match(text(r2), /미리보기를 보여 준 기록이 없습니다/);
+    assert.match(text(r1), /초안 판이 다릅니다/);
 
-    // A quote that changed on disk after the preview is refused too.
     const rev = changed.structuredContent.revision;
     await call('submit_purchase', { key: 'p-20260115-1', revision: rev });
     const q = db.quotes('hong', db.purchase('hong', 'p-20260115-1').id)[0];
-    fs.writeFileSync(path.join(dataDir, 'files', 'hong', 'quotes', q.file), 'tampered');
+    const file = path.join(dataDir, 'files', 'hong', 'quotes', q.file);
+    const original = fs.readFileSync(file);
+    fs.writeFileSync(file, 'tampered');
     const r3 = await call('submit_purchase', { key: 'p-20260115-1', revision: rev }, EXECUTE);
     assert.equal(r3.structuredContent.code, 'VALIDATION');
     assert.match(text(r3), /기록과 다릅니다/);
-    assert.equal(sessions.sessionCalls.length, calls);
+    fs.writeFileSync(file, original);
+    assert.equal(sessions.sessionCalls.length, calls, 'nothing logged in to DaouOffice');
+  });
+
+  test('refile: when the old document changes after the preview, execute refuses instead of re-planning', async () => {
+    const OLD = '1000000000000007';
+    const row = db.purchase('hong', 'p-20260115-1');
+    db.upsertPurchase({ ...row, status: 'submitted', docId: OLD });
+    const rev = row.data.revision;
+    sessions.docs[OLD] = { status: '진행중', canCancel: true };
+    sessions.mode = 'run';
+    try {
+      const preview = await call('submit_purchase', { key: 'p-20260115-1', revision: rev, refile: true });
+      assert.ok(!preview.isError, text(preview));
+      assert.equal(preview.structuredContent.plan.withdraw, OLD);
+      assert.match(text(preview), /상신취소하고 같은 문서를 새 결재선으로/);
+      // An approver completes the old document before the person approves.
+      sessions.docs[OLD] = { status: '완료', docNum: '테스트-2026-0001' };
+      const r = await call('submit_purchase', { key: 'p-20260115-1', revision: rev, refile: true }, EXECUTE);
+      assert.equal(r.structuredContent.code, 'CONFLICT', text(r));
+      assert.equal(r.structuredContent.data.previewChanged, true);
+      assert.doesNotMatch(text(r), new RegExp(STOP));
+
+      // A fresh preview of the new plan (new document linked to the old one) runs.
+      const again = await call('submit_purchase', { key: 'p-20260115-1', revision: rev, refile: true });
+      assert.deepEqual(again.structuredContent.plan.links, [{ id: OLD, docNum: '테스트-2026-0001' }]);
+      const go = await call('submit_purchase', { key: 'p-20260115-1', revision: rev, refile: true }, EXECUTE);
+      assert.match(text(go), new RegExp(STOP));
+    } finally {
+      sessions.mode = 'refuse';
+      db.upsertPurchase({ ...db.purchase('hong', 'p-20260115-1'), status: 'draft', docId: null });
+    }
+  });
+
+  test('fix or refile of a revision that was already filed is refused', async () => {
+    const row = db.purchase('hong', 'p-20260115-1');
+    db.upsertPurchase({ ...row, status: 'submitted', docId: '1000000000000008', data: { ...row.data, filedRevision: row.data.revision } });
+    for (const opt of [{ fix: true }, { refile: true }]) {
+      const r = await call('submit_purchase', { key: 'p-20260115-1', revision: row.data.revision, ...opt });
+      assert.equal(r.structuredContent.code, 'CONFLICT');
+      assert.match(text(r), /이미 올렸습니다/);
+    }
+    db.upsertPurchase({ ...row });
   });
 
   test('a submitted requisition is not filed twice without fix or refile', async () => {

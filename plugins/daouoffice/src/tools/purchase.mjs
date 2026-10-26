@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as z from 'zod';
 import { PluginError } from '../errors.mjs';
+import { digestOf } from '../runtime.mjs';
 import { kstDate, kstIso } from '../dao/kst.mjs';
 import { describeLine } from '../dao/approvers.mjs';
 import { ingestPhoto } from '../photos.mjs';
@@ -11,6 +12,7 @@ import {
 } from '../dao/purchases.mjs';
 import { todayRate } from '../dao/fx.mjs';
 import { captureQuote, captureContextOptions, storeQuote, checkQuoteFiles, detectBlock } from '../dao/quotes.mjs';
+import { withGuardedContext } from '../dao/egress.mjs';
 import { planSubmission, submitPurchase } from '../dao/purchase-submit.mjs';
 import { describeDiff } from '../dao/purchase-doc.mjs';
 
@@ -117,7 +119,7 @@ const draftInput = z.object({
   serials: z.array(z.object({ item: z.string(), numbers: z.array(z.string()) })).optional()
     .describe('사람이 알려 준 시리얼 번호. 지어내지 않는다'),
   noSerials: z.boolean().optional().describe('사람이 시리얼 관리 대상이 아니라고 했을 때 true'),
-  refreshFx: z.boolean().optional().describe('결제 전 외화 건의 고정 환율을 오늘 값으로 다시 받을 때 true'),
+  refreshFx: z.boolean().optional().describe('결제 전 외화 건의 고정 환율을 지금 고시 값으로 다시 받을 때 true'),
 });
 
 const NULLABLE = ['subProject', 'qty', 'paidAt', 'purchaseDate', 'deliveryDate', 'amount', 'usd', 'paidKrw', 'vat', 'account', 'accountHolder'];
@@ -140,9 +142,16 @@ export function mergeDraft(existing, args) {
 }
 
 /** 카드 뒷자리로 회사 설정의 카드(과제, 예산, 카드사)를 채운다. 사람이 준 값이 앞선다. */
-export function applyCardDefaults(entry, config) {
+export function applyCardDefaults(entry, config, { previous = {} } = {}) {
   const r = purchaseRules(config);
   const out = { ...entry };
+  // 카드를 바꿨으면 옛 카드 설정에서 온 값(사람이 따로 정하지 않은 값)은 새 카드 값으로 바꾼다.
+  const old = previous.cardLast4 && previous.cardLast4 !== out.cardLast4 ? config.cards?.[previous.cardLast4] : null;
+  if (old) {
+    for (const [field, from] of [['budget', 'budget'], ['project', 'project'], ['cardIssuer', 'issuer']]) {
+      if (out[field] !== undefined && out[field] === previous[field] && out[field] === old[from]) delete out[field];
+    }
+  }
   const card = out.cardLast4 ? config.cards?.[out.cardLast4] : null;
   if (out.cardLast4) out.payMethod ??= r.cardMethod;
   if (card) {
@@ -161,7 +170,7 @@ export function register(server, rt) {
     kind: 'local',
     description: [
       '구매 품의서(구매 품의) 초안을 만들거나 고친다. 다우오피스에는 아무것도 올리지 않고 플러그인 DB 에만 저장한 뒤, 검증 결과와 양식에 들어갈 칸별 값을 돌려준다.',
-      '구입목적과 세부 과제는 절대 지어내지 말고 사람에게 묻는다. 구입목적은 품명을 되풀이하지 않고 대상과 용도를 쓴다(예: "로봇 원격제어 시 실시간 화면 표시용").',
+      '구입목적과 세부 과제는 절대 지어내지 말고 사람에게 묻는다. 구입목적은 품명을 되풀이하지 않고 대상과 용도를 쓴다(예: "온실 작물 생육 원격 관찰").',
       '카드로 결제한 건은 카드 승인액을 쓴다(외화면 usd 와 paidKrw). 결제 전 외화만 오늘 하나은행 매매기준율로 환산한다.',
       '회사 기준 최소 금액보다 작은 결제는 경고가 나온다. 사람에게 알린다.',
       '고칠 때는 key 와 바꿀 칸만 보낸다. 돌려준 오류는 전부 사람에게 보여 주고 고친다. 다음 단계는 capture_quote(상품 페이지 캡처) 와 submit_purchase(key, revision) 다.',
@@ -169,35 +178,36 @@ export function register(server, rt) {
     input: draftInput,
   }, async (args, call) => {
     const owner = call.owner;
-    const existingRow = args.key ? rt.db.purchase(owner, args.key) : null;
-    const base = existingRow ? purchaseEntry(existingRow) : {};
-    delete base.quotes;
-    let next = applyCardDefaults(mergeDraft(base, args), rt.config);
-    next.key = existingRow?.key ?? args.key ?? nextKey(rt.db, owner, next.paidAt ?? next.purchaseDate ?? kstDate());
-    next.status = existingRow?.status ?? 'draft';
+    /** 지금 DB 의 행에 받은 칸을 얹는다. 환율을 받는 동안 바뀐 것(상태, 문서, 시리얼)을 잃지 않게 저장 직전에 다시 부른다. */
+    const build = (row) => {
+      const base = row ? purchaseEntry(row) : {};
+      delete base.quotes;
+      const next = applyCardDefaults(mergeDraft(base, args), rt.config, { previous: base });
+      next.status = row?.status ?? 'draft';
+      next.revision = (Number(base.revision) || 0) + 1;
+      return next;
+    };
+    const key = args.key ?? null;
+    let next = build(key ? rt.db.purchase(owner, key) : null);
 
     // 결제 전 외화만 환율을 쓴다. 한 번 받은 값은 초안에 고정한다(미리보기와 상신이 같은 값을 쓴다).
     const notes = [];
-    if (next.usd != null && next.paidKrw == null) {
-      if (!next.fx || args.refreshFx) {
-        try {
-          const fx = await todayRate({ db: rt.db, sessions: rt.sessions });
-          next.fx = { rate: fx.rate, at: fx.at, source: fx.source };
-        } catch (e) {
-          notes.push(`환율을 받지 못했습니다: ${e instanceof PluginError ? e.message : '알 수 없는 오류'}`);
-        }
+    let fetched = null;
+    if (next.usd != null && next.paidKrw == null && (!next.fx || args.refreshFx)) {
+      try {
+        const fx = await todayRate({ db: rt.db, sessions: rt.sessions, refresh: Boolean(args.refreshFx) });
+        fetched = { rate: fx.rate, at: fx.at, source: fx.source };
+      } catch (e) {
+        notes.push(`환율을 받지 못했습니다: ${e instanceof PluginError ? e.message : '알 수 없는 오류'}`);
       }
+    }
+    if (key) next = build(rt.db.purchase(owner, key));
+    next.key = key ?? nextKey(rt.db, owner, next.paidAt ?? next.purchaseDate ?? kstDate());
+    if (next.usd != null && next.paidKrw == null) {
+      if (fetched && (!next.fx || args.refreshFx)) next.fx = fetched;
     } else {
       delete next.fx;
     }
-    // 환율을 받는 사이에 검수조서 쪽(save_photos)이 시리얼을 적었을 수 있다. 사람이 시리얼을 주지
-    // 않았으면 지금 DB 의 값을 쓰고, 판도 지금 DB 의 판에서 올린다.
-    const current = rt.db.purchase(owner, next.key);
-    if (current && args.serials === undefined && !args.noSerials) {
-      if (current.data?.serials !== undefined) next.serials = current.data.serials;
-      else delete next.serials;
-    }
-    next.revision = (Number(current?.data?.revision) || 0) + 1;
 
     const row = saveEntry(rt, owner, next);
     const quotes = activeQuotes(rt.db, owner, row.id);
@@ -206,7 +216,7 @@ export function register(server, rt) {
     const result = validatePurchase(entry, { config: rt.config });
     const line = lineText(rt, entry, v);
 
-    const head = `구매 품의 초안 ${entry.key} (판 ${entry.revision})${entry.status === 'submitted' ? ` · 이미 올린 문서 ${entry.docId ?? '(ID 모름)'}, 고친 내용은 submit_purchase 의 fix 로 다시 올린다` : ''}`;
+    const head = `구매 품의 초안 ${entry.key} (판 ${entry.revision})${entry.status === 'submitted' ? ` · 이미 올린 문서 ${entry.docId ?? '(ID 모름)'}${entry.withdrawn ? ', 지금 상신취소된 상태' : ''}, 고친 내용은 submit_purchase 의 fix 로 다시 올린다` : ''}`;
     const lines = [head, ...fieldTable(v)];
     lines.push(`- 결재선: ${line.approvers ? describeLine(line.approvers) : line.text}`);
     if (entry.fx) lines.push(`- 환율: ${Number(entry.fx.rate).toLocaleString('ko-KR')}원 (${entry.fx.source}, ${entry.fx.at})`);
@@ -246,6 +256,7 @@ export function register(server, rt) {
         ...fieldTable(v),
         ...(entry.refiledFrom ? [`- 다시 올리기 전 옛 문서: ${entry.refiledFrom}`] : []),
         ...(entry.hold ? [`- 보류: ${entry.hold}`] : []),
+        ...(entry.withdrawn ? [`- 상신취소된 상태(임시저장): 문서 ${entry.withdrawn.docId}. fix 로 다시 올린다`] : []),
         ...issuesText(result),
       ];
       return { text: lines.join('\n'), data: { entry: { ...entry, quotes: quotes.map((q) => q.file) }, fields: v, ...result } };
@@ -265,7 +276,7 @@ export function register(server, rt) {
       const n = activeQuotes(rt.db, call.owner, row.id).length;
       const amount = formValues(e, { config: rt.config }).amountNumber;
       lines.push(`- ${e.key} · ${e.status === 'submitted' ? '올림' : '초안'} · ${dayOf(e) || '날짜 없음'} · ${e.title || '(제목 없음)'} · ${won(amount)}`
-        + `${e.docId ? ` · 문서 ${e.docId}` : ''} · 견적 ${n}장 · 판 ${e.revision ?? 0}${e.hold ? ` · 보류: ${e.hold}` : ''}`);
+        + `${e.docId ? ` · 문서 ${e.docId}` : ''}${e.withdrawn ? ' (상신취소된 상태)' : ''} · 견적 ${n}장 · 판 ${e.revision ?? 0}${e.hold ? ` · 보류: ${e.hold}` : ''}`);
       out.push({ key: e.key, status: e.status, date: dayOf(e) || null, title: e.title, amount: Number.isFinite(amount) ? amount : null, docId: e.docId ?? null, quotes: n, revision: e.revision ?? 0 });
     }
     return { text: lines.join('\n'), data: { purchases: out } };
@@ -320,8 +331,8 @@ export function register(server, rt) {
         url: args.url, expect: args.expect, options: args.options ?? [], waitMs: args.waitMs,
         noClose: args.noClose, hideText: args.hideText, decline: args.decline, aliRegion: args.aliRegion === 'KR' ? 'KR' : undefined,
       };
-      // 공유 브라우저의 빈 컨텍스트에서 찍는다. 다우오피스 쿠키도 로그인도 없다.
-      const res = await rt.sessions.withScratchContext(({ page }) => captureQuote(page, quote), { contextOptions: captureContextOptions });
+      // 공유 브라우저의 빈 컨텍스트에서, 모든 연결을 검사 프록시로 보내 찍는다. 다우오피스 쿠키도 로그인도 없다.
+      const res = await withGuardedContext(rt.sessions, ({ page, guard }) => captureQuote(page, quote, { guard }), { contextOptions: captureContextOptions });
       if (!res.ok) {
         throw new PluginError('VALIDATION', `캡처하지 못했습니다: ${res.reason}`, { data: { kind: res.kind, landedUrl: res.landedUrl ?? null } });
       }
@@ -374,7 +385,7 @@ export function register(server, rt) {
     };
   });
 
-  /** 미리보기와 실행이 똑같이 하는 검사. 다우오피스는 부르지 않는다. */
+  /** 미리보기와 실행이 똑같이 하는 검사. 다우오피스는 부르지 않는다. 실행은 세션 잠금 안에서 한 번 더 부른다. */
   function prepare(args, call) {
     if (args.fix && args.refile) throw new PluginError('VALIDATION', 'fix 와 refile 은 함께 쓰지 않습니다.');
     const option = args.fix ? 'fix' : args.refile ? 'refile' : null;
@@ -385,6 +396,10 @@ export function register(server, rt) {
     }
     if (!option && entry.status === 'submitted') {
       throw new PluginError('CONFLICT', `이미 올린 품의입니다 (문서 ${entry.docId ?? 'ID 모름'}). 고치려면 fix, 최종 결재자가 빠진 옛 문서를 새 결재선으로 다시 올리려면 refile 을 씁니다.`);
+    }
+    // 같은 판을 fix 나 refile 로 두 번 올리지 않는다. 고친 것이 있으면 판이 올라가 있다.
+    if (option && entry.filedRevision === revision) {
+      throw new PluginError('CONFLICT', `이 판(${revision})은 이미 올렸습니다 (문서 ${entry.docId ?? 'ID 모름'}). 고칠 것이 있으면 draft_purchase 로 고친 뒤 새 판으로 요청해 주세요.`);
     }
     const rules = purchaseRules(rt.config);
     const checked = option === 'refile' ? { ...entry, docId: undefined } : entry;
@@ -402,6 +417,40 @@ export function register(server, rt) {
     return { row, entry, quotes, option, rules, want, approvers, revision, dir, warnings: result.warnings };
   }
 
+  /** 정한 계획이 이 양식에 채울 수 있는지. 미리보기와 실행이 같은 검사를 한다. */
+  function checkPlan(p, plan, account) {
+    if (!plan.editId && !account?.deptId) {
+      throw new PluginError('VALIDATION', '기안 부서를 모릅니다. 조직도에서 부서를 읽지 못했으면 관리자가 회사 설정 departments 에 넣어야 합니다.');
+    }
+    if (!plan.newForm && !p.want.deliveryDate) {
+      throw new PluginError('VALIDATION', '옛 양식 문서라 배송일자가 필요합니다. draft_purchase 로 deliveryDate 를 넣어 주세요.');
+    }
+    if (plan.newForm && !p.want.quantity) {
+      throw new PluginError('VALIDATION', `구입수량을 품명에서 셀 수 없습니다: "${p.want.item}". 사람에게 물어 draft_purchase 의 qty 로 정해 주세요.`);
+    }
+  }
+
+  /** 새 문서이고 올린 적 없는 초안은 다우오피스를 읽지 않고 계획을 안다. planSubmission 이 내는 값과 같다. */
+  const NEW_PLAN = Object.freeze({ editId: null, withdraw: null, refileFrom: null, links: [], newForm: true, steps: ['새 문서로 기안합니다.'] });
+
+  /**
+   * 미리보기에서 보여 준 것. 실행은 세션 잠금 안에서 같은 값을 다시 만들어 맞춰 본다(`call.assertPreviewed`).
+   * 계획(같은 문서인지, 상신취소하는지, 새 문서와 연결인지), 칸 값, 결재선, 기안 부서, 견적 파일이 들어간다.
+   */
+  const previewShown = (p, plan, account) => ({
+    key: p.entry.key,
+    revision: p.revision,
+    option: p.option,
+    plan: {
+      editId: plan.editId ?? null, withdraw: plan.withdraw ?? null, refileFrom: plan.refileFrom ?? null,
+      links: plan.links ?? [], newForm: plan.newForm ?? true,
+    },
+    deptId: plan.editId ? null : (account?.deptId ?? null),
+    fields: p.want,
+    approvers: p.approvers,
+    quotes: p.quotes.map((q) => [q.file, q.digest]),
+  });
+
   const submitInput = z.object({
     key: keyArg.describe('품의 초안 키'),
     revision: z.number().int().min(0).describe('초안 판. draft_purchase, capture_quote, list_purchases 가 알려 준다'),
@@ -411,6 +460,7 @@ export function register(server, rt) {
 
   rt.tool(server, 'submit_purchase', {
     kind: 'write',
+    previewDigest: true,
     description: [
       '저장된 구매 품의 초안을 다우오피스 구매 품의서로 상신한다. 이 도구는 미리보기(칸별 값, 결재선, 견적 캡처)만 만들고, 사람이 승인 버튼을 누르거나 "승인" 이라고 답해야 실제로 올라간다. 사람이 승인했다고 대신 말하지 않는다.',
       '견적 캡처가 없거나 검증 오류가 있으면 올리지 않는다. revision 은 draft_purchase 나 list_purchases 가 알려 준 판이다.',
@@ -422,26 +472,14 @@ export function register(server, rt) {
       const p = prepare(args, call);
       const needDoc = Boolean(p.option || p.entry.docId);
       let account = rt.db.account(call.owner);
-      let plan = null;
+      let plan = NEW_PLAN;
       if (needDoc || !account?.deptId) {
         plan = await rt.session(call, async ({ page, api }) => (needDoc
           ? planSubmission({ page, api, entry: p.entry, option: p.option, formName: p.rules.formName, approvers: p.approvers })
-          : null));
+          : NEW_PLAN));
         account = rt.db.account(call.owner);
       }
-      if (!plan?.editId && !account?.deptId) {
-        throw new PluginError('VALIDATION', '기안 부서를 모릅니다. 조직도에서 부서를 읽지 못했으면 관리자가 회사 설정 departments 에 넣어야 합니다.');
-      }
-      if (plan && !plan.newForm && !p.want.deliveryDate) {
-        throw new PluginError('VALIDATION', '옛 양식 문서라 배송일자가 필요합니다. draft_purchase 로 deliveryDate 를 넣어 주세요.');
-      }
-
-      // 미리보기에서 보여 준 판과 견적을 남긴다. 실행은 이것과 같을 때만 올린다.
-      patchEntry(rt, call.owner, p.entry.key, {
-        previewedRevision: p.revision,
-        previewDigests: Object.fromEntries(p.quotes.map((q) => [q.file, q.digest])),
-        previewedAt: kstIso(),
-      }, { revision: p.revision });
+      checkPlan(p, plan, account);
 
       const head = p.option === 'fix' ? '올린 구매 품의서를 고쳐 다시 올립니다.'
         : p.option === 'refile' ? '구매 품의서를 새 결재선으로 다시 올립니다.'
@@ -451,58 +489,62 @@ export function register(server, rt) {
         `${head} (초안 ${p.entry.key}, 판 ${p.revision})`,
         ...fieldTable(p.want),
         `- 결재선: 기안 ${drafter} → ${describeLine(p.approvers)}`,
-        ...(plan?.steps ?? ['새 문서로 기안합니다.']).map((s) => `- ${s}`),
+        ...plan.steps.map((s) => `- ${s}`),
         ...issuesText({ errors: [], warnings: p.warnings }),
         '',
         `견적 캡처 ${p.quotes.length}장을 붙였습니다. 상품, 판매자, 옵션, 가격이 주문과 맞는지 보고 승인해 주세요. 승인하면 결재선 전원에게 알림이 갑니다.`,
+        '승인하기 전에 다우오피스에서 문서 상태가 바뀌면(결재가 진행되는 등) 이 미리보기로는 올리지 않습니다.',
       ];
+      const shown = previewShown(p, plan, account);
       return {
         text: lines.join('\n'),
         images: p.quotes.map((q) => readImage(p.dir, q.file)),
-        data: {
-          key: p.entry.key, revision: p.revision, option: p.option,
-          fields: p.want, approvers: p.approvers,
-          plan: plan ? { editId: plan.editId, withdraw: plan.withdraw, links: plan.links, refileFrom: plan.refileFrom, newForm: plan.newForm } : { editId: null },
-          warnings: p.warnings,
-        },
+        digest: digestOf(shown),
+        data: { key: p.entry.key, revision: p.revision, option: p.option, fields: p.want, approvers: p.approvers, plan: shown.plan, warnings: p.warnings },
       };
     },
 
     async execute(args, call) {
-      const p = prepare(args, call);
-      if (p.entry.previewedRevision !== p.revision) {
-        throw new PluginError('CONFLICT', '이 판의 미리보기를 보여 준 기록이 없습니다. 미리보기를 다시 만들어 확인받아 주세요.');
-      }
-      const changed = checkQuoteFiles(p.dir, p.quotes, { previewed: p.entry.previewDigests ?? {} });
-      if (changed.length || Object.keys(p.entry.previewDigests ?? {}).length !== p.quotes.length) {
-        throw new PluginError('CONFLICT', `미리보기 뒤에 견적이 바뀌었습니다. 미리보기를 다시 만들어 확인받아 주세요.${changed.length ? `\n${changed.join('\n')}` : ''}`);
-      }
+      prepare(args, call);   // 로그인 전에 빨리 거른다. 실제 판단은 아래 세션 잠금 안에서 한다.
       const owner = call.owner;
+      const mark = (patch) => patchEntry(rt, owner, args.key, patch);
       let submittedAt = null;
-      const mark = (patch) => patchEntry(rt, owner, p.entry.key, patch);
 
       const out = await rt.session(call, async ({ page, api, baseUrl }) => {
+        // 사람마다 세션 잠금이 하나라 같은 품의의 두 실행은 차례로 여기 온다. 다시 읽으면 두 번째는
+        // "이미 올린 품의" 나 "이미 올린 판" 으로 멈춘다.
+        const p = prepare(args, call);
         const account = rt.db.account(owner);
         const plan = await planSubmission({ page, api, entry: p.entry, option: p.option, formName: p.rules.formName, approvers: p.approvers });
+        checkPlan(p, plan, account);
+        // 미리보기 뒤에 계획(상신취소 대신 새 문서 등), 칸 값, 결재선, 견적이 바뀌었으면 CONFLICT 로 멈춘다.
+        call.assertPreviewed(digestOf(previewShown(p, plan, account)));
         const r = await submitPurchase({
           page, api, baseUrl, deptId: account?.deptId, want: p.want, approvers: p.approvers, plan,
           quoteDir: p.dir, formName: p.rules.formName, projectBudget: p.rules.projectBudget, cardMethod: p.rules.cardMethod,
           logger: rt.logger,
+          // 상신취소한 순간 기록한다. 뒤에서 실패하면 문서는 임시저장으로 남는다.
+          onWithdrawn: ({ docId }) => mark({ withdrawn: { docId, at: kstIso() } }),
           // 결재요청을 누른 순간부터는 올린 것으로 적는다. 뒤에서 실패해도 같은 품의를 다시 올리지 않게 한다.
           onSubmitted: ({ docId }) => {
             submittedAt ??= kstIso();
             mark({
-              status: 'submitted', ...(docId ? { docId } : {}), submittedAt,
+              status: 'submitted', ...(docId ? { docId } : {}), submittedAt, filedRevision: p.revision, withdrawn: undefined,
               ...(p.option === 'refile' ? { refiledFrom: plan.refileFrom } : {}),
             });
           },
         });
-        return { ...r, plan };
+        return { ...r, plan, p };
       });
 
+      const { p } = out;
       const now = kstIso();
-      mark({ status: 'submitted', docId: out.docId, filedAt: now, filedRevision: p.revision, hold: undefined });
-      for (const q of p.quotes) rt.db.addQuote({ ...q, owner, seenAt: q.seenAt ?? now });
+      mark({ status: 'submitted', docId: out.docId, filedAt: now, filedRevision: p.revision, hold: undefined, withdrawn: undefined });
+      // 올린 견적에 "사람이 본 시각" 을 남긴다. 지금 DB 의 행을 읽어 그사이 뺀 견적을 되살리지 않는다.
+      const sentFiles = new Set(p.want.attachments);
+      for (const q of activeQuotes(rt.db, owner, p.row.id)) {
+        if (sentFiles.has(q.file) && !q.seenAt) rt.db.addQuote({ ...q, owner, seenAt: now });
+      }
       const mismatches = out.diffs.map(describeDiff);
       rt.db.addFiling({
         owner, kind: 'purchase', ref: p.entry.key, docId: out.docId, title: p.want.title, status: out.status,
@@ -515,7 +557,7 @@ export function register(server, rt) {
       if (mismatches.length) {
         throw new PluginError('UPSTREAM',
           [`상신은 됐지만 서버 문서가 기대와 다릅니다 (문서 ID ${out.docId}, ${out.status || '상태 모름'}). 다우오피스에서 확인해 주세요.`, ...mismatches.map((m) => `- ${m}`)].join('\n'),
-          { data: { docId: out.docId, status: out.status, verified: false, mismatches } });
+          { data: { afterWrite: true, docId: out.docId, status: out.status, verified: false, mismatches } });
       }
       const lines = [
         `상신했습니다: ${p.want.title} (문서 ID ${out.docId}, ${out.status}).`,

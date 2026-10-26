@@ -23,8 +23,8 @@ import { purchaseLine } from './approvers.mjs';
  *
  * ## 구입목적: 대상 + 용도
  *
- * **품명을 되풀이하면 반려된다.** 통과하는 꼴은 `시험 로봇 원격조종`(조종기),
- * `로봇 원격제어 시 실시간 화면 표시용`(액션캠)이다. 용도를 모르면 지어내지 말고 묻는다.
+ * **품명을 되풀이하면 반려된다.** 통과하는 꼴은 `온실 작물 생육 원격 관찰`(카메라),
+ * `실험실 시료 무게 측정`(전자저울)이다. 용도를 모르면 지어내지 말고 묻는다.
  *
  * ## 금액
  *
@@ -83,19 +83,27 @@ export function withWeekday(date) {
   return `${date}(${WEEKDAY[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()]})`;
 }
 
+/** 품명의 `/ N단위`. 긴 단위를 먼저 본다(`개월` 을 `개` 로 읽지 않게). */
+const UNIT = '(개월|개입|계정|세트|개|대|건|쌍)';
+/** 서로 더해도 되는 물건 단위. 섞이면 `개` 로 센다. */
+const GOODS = new Set(['개', '대', '세트', '쌍', '개입']);
+
 /**
  * 구입수량 칸. 품명의 `/ N개` 를 더한다. `총 N개` 가 있으면 그것을 쓴다. `qty` 로 덮어쓸 수 있다.
- * 단위가 섞이면 `개` 로 센다.
+ * 물건 단위가 섞이면 `개` 로 센다. 기간(`개월`), 계정, 건이 다른 단위와 섞이거나 외화 금액(`USD`)
+ * 처럼 셀 수 없으면 빈 값이다. 그때는 사람에게 묻고 `qty` 로 정한다.
  */
 export function totalQuantity(p) {
   if (p.qty != null) return String(p.qty);
-  const total = String(p.item ?? '').match(/총\s*(\d+)\s*(개|대|세트|건|쌍)/);
+  const item = String(p.item ?? '');
+  const total = item.match(new RegExp(`총\\s*(\\d+)\\s*${UNIT}`));
   if (total) return `${total[1]}${total[2]}`;
-  const parts = [...String(p.item ?? '').matchAll(/\/\s*(\d+)\s*(개|대|세트|건|쌍)/g)];
+  const parts = [...item.matchAll(new RegExp(`\\/\\s*(\\d+)\\s*${UNIT}`, 'g'))];
   if (!parts.length) return '';
   const units = new Set(parts.map((x) => x[2]));
   const n = parts.reduce((s, x) => s + Number(x[1]), 0);
-  return `${n}${units.size === 1 ? [...units][0] : '개'}`;
+  if (units.size === 1) return `${n}${[...units][0]}`;
+  return [...units].every((u) => GOODS.has(u)) ? `${n}개` : '';
 }
 
 /**
@@ -163,7 +171,8 @@ export function formValues(p, { config = {}, fx } = {}) {
 const FILLER = ['구매', '구입', '주문', '신청', '필요', '건', '및', '외', '용'];
 
 /** 영수증, 주문내역으로 보이는 파일명. 구매 품의서에는 붙이지 않는다. */
-export const RECEIPT_LIKE = /영수증|인보이스|주문내역|거래명세|receipt|invoice|order/i;
+// 영어 낱말은 앞뒤가 글자가 아닐 때만 본다. recorder, border, reorder 는 영수증이 아니다.
+export const RECEIPT_LIKE = /영수증|인보이스|주문내역|주문상세|거래명세|(?<![a-z])(receipts?|invoices?|orders?|order-?details?|order-?history)(?![a-z])/i;
 
 /** 칸 이름. 오류 메시지에 쓴다. */
 export const FIELD_LABELS = {
@@ -242,8 +251,18 @@ export function validatePurchase(p, { config = {}, fx, filed = Boolean(p.docId) 
     }
   }
 
-  // 최소 집행 금액(회계 안내). 이미 결제한 건은 막지 않고 경고만 한다.
   const krw = amountKrw(p, rate);
+  // 아주 작은 외화는 원 단위 반올림으로 0원이 된다. 부가세가 총액보다 크면 공급가액이 음수다.
+  if (Number.isFinite(krw) && krw <= 0) errors.push(`원화 총금액이 ${won(krw)}원이다. 금액을 확인한다`);
+  if (p.vat != null && Number.isFinite(krw) && (!(Number(p.vat) >= 0) || Number(p.vat) > krw)) {
+    errors.push(`부가세(vat ${p.vat})가 총금액(${won(krw)}원)보다 크거나 음수다`);
+  }
+  // 새 양식에는 구입수량 칸이 있다. 품명에서 셀 수 없으면 지어내지 않고 묻는다.
+  if (!filed && !totalQuantity(p)) {
+    errors.push(`구입수량을 품명에서 셀 수 없다: "${p.item}". 사람에게 물어 qty 로 정한다 (예: 1개, 1건, 1개월)`);
+  }
+
+  // 최소 집행 금액(회계 안내). 이미 결제한 건은 막지 않고 경고만 한다.
   if (Number.isFinite(krw) && krw > 0 && krw < r.minPurchaseKrw) {
     warnings.push(`${won(krw)}원: ${won(r.minPurchaseKrw)}원 미만 결제는 집행하지 않는 것이 회계 안내다. 장바구니에 모아 한 번에 결제한다`);
   }
@@ -274,7 +293,7 @@ export function validatePurchase(p, { config = {}, fx, filed = Boolean(p.docId) 
   }
   for (const word of FILLER) residue = residue.split(word).join(' ');
   if (residue.replace(/[^0-9a-z가-힣]/g, '').length < 4) {
-    errors.push(`구입목적이 품명을 되풀이한다: "${purpose}". 대상과 용도를 쓴다 (예: "시험 로봇 원격조종"). 모르면 사람에게 묻는다`);
+    errors.push(`구입목적이 품명을 되풀이한다: "${purpose}". 대상과 용도를 쓴다 (예: "온실 작물 생육 원격 관찰"). 모르면 사람에게 묻는다`);
   }
 
   // 판매 페이지 캡처는 **필수다**. 견적서 자리에 들어가는 근거라 없으면 올릴 수 없다.

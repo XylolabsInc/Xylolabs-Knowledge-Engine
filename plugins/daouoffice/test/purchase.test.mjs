@@ -8,12 +8,11 @@ import { openDb } from '../src/db.mjs';
 import { describeLine } from '../src/dao/approvers.mjs';
 import {
   formValues, validatePurchase, purchaseApprovers, purchaseRules, totalQuantity, splitVat, withWeekday,
-  fieldTable, purchaseEntry, purchaseRow, amountKrw,
+  fieldTable, purchaseEntry, purchaseRow, amountKrw, RECEIPT_LIKE,
 } from '../src/dao/purchases.mjs';
 import { parseFxText, toKrw, paidNote, fxNote, todayRate } from '../src/dao/fx.mjs';
 import {
   detectBlock, missingExpect, quoteFileName, checkQuoteFiles, storeQuote, alternativeHint, sha256,
-  isPrivateAddress, privateReason, guardContext,
 } from '../src/dao/quotes.mjs';
 import { diffPurchaseDoc, diffLine, amountOf } from '../src/dao/purchase-doc.mjs';
 import { compareForm, planSubmission } from '../src/dao/purchase-submit.mjs';
@@ -28,7 +27,10 @@ const cfg = parseConfig({
     해양로봇: { reviewer: '정담당' },
   },
   budgets: ['운영자금', '프로젝트 사업비'],
-  cards: { 1234: { project: '스마트농장', budget: '프로젝트 사업비', issuer: '신한' } },
+  cards: {
+    1234: { project: '스마트농장', budget: '프로젝트 사업비', issuer: '신한' },
+    5678: { project: '해양로봇', budget: '프로젝트 사업비', issuer: 'KB' },
+  },
   lines: { purchase: 'project' },
   minPurchaseKrw: 100_000,
 });
@@ -102,13 +104,16 @@ describe('formValues', () => {
     assert.equal(formValues(base({ project: '해양로봇', subProject: '온실' }), { config: cfg }).subProject, '');
   });
 
-  test('quantity: sums parts, "총 N개" wins, qty overrides, mixed units count 개', () => {
+  test('quantity: sums parts, "총 N개" wins, qty overrides, goods units mix into 개, others do not', () => {
     const cases = [
       ['카메라 / 1개, 렌즈 / 2개', '3개'],
       ['케이블 외 2종 / 총 5개', '5개'],
       ['카메라 / 1대, 렌즈 / 2개', '3개'],
-      // 원본과 같다: `/ 1개월` 의 `1개` 를 센다. 구독은 구입수량이 1개로 들어간다.
-      ['테스트 구독 / 1개월', '1개'],
+      ['테스트 구독 / 1개월', '1개월'],
+      ['테스트 서비스 / 3계정', '3계정'],
+      ['테스트 장갑 / 2개입', '2개입'],
+      ['테스트 충전기 6개입 / 1세트', '1세트'],
+      ['테스트 구독 / 1개월, 테스트 카메라 / 1개', ''],
       ['테스트 크레딧 / USD 50.00', ''],
     ];
     for (const [item, want] of cases) assert.equal(totalQuantity({ item }), want, item);
@@ -137,13 +142,23 @@ describe('validatePurchase', () => {
   test('item needs a count with a known unit', () => {
     assert.ok(errorsOf(base({ item: '테스트 카메라' })).some((e) => /수량이 없다/.test(e)));
     assert.ok(errorsOf(base({ item: '테스트 장갑 100개입 / 1봉' })).some((e) => /수량이 없다/.test(e)));
-    assert.deepEqual(errorsOf(base({ item: '테스트 크레딧 / USD 50.00' })).filter((e) => /수량/.test(e)), []);
+    // A credit counts in its foreign amount; the 구입수량 cell then needs qty from a person.
+    assert.ok(errorsOf(base({ item: '테스트 크레딧 / USD 50.00' })).some((e) => /구입수량을 품명에서 셀 수 없다/.test(e)));
+    assert.deepEqual(errorsOf(base({ item: '테스트 크레딧 / USD 50.00', qty: '1건' })).filter((e) => /수량/.test(e)), []);
+    assert.ok(!errorsOf(base({ item: '테스트 크레딧 / USD 50.00', docId: '1000000000000001' })).some((e) => /구입수량/.test(e)), 'old-form documents have no 구입수량 cell');
+  });
+
+  test('money: VAT over the total, and an amount that rounds to 0원, are refused', () => {
+    assert.ok(errorsOf(base({ vat: 140_000 })).some((e) => /부가세/.test(e)));
+    assert.deepEqual(errorsOf(base({ vat: 12_000 })), []);
+    const tiny = base({ amount: undefined, usd: 0.0001, fx: FX, paidAt: undefined, purchaseDate: '2026-01-20' });
+    assert.ok(errorsOf(tiny).some((e) => /0원이다/.test(e)));
   });
 
   test('purpose that repeats the item is refused; target and use passes', () => {
-    const p = base({ item: '테스트 배터리 보관 가방 / 1개', purpose: '배터리 안전 보관' });
+    const p = base({ item: '테스트 전자저울 / 1개', purpose: '전자저울 구매' });
     assert.ok(errorsOf(p).some((e) => /품명을 되풀이/.test(e)));
-    assert.ok(!errorsOf({ ...p, purpose: '로봇 구동 전원 화재 예방' }).some((e) => /품명을 되풀이/.test(e)));
+    assert.ok(!errorsOf({ ...p, purpose: '실험실 시료 무게 측정' }).some((e) => /품명을 되풀이/.test(e)));
   });
 
   test('empty required fields are listed by Korean label and stop the rest', () => {
@@ -216,6 +231,8 @@ describe('validatePurchase', () => {
     assert.ok(errorsOf(base({ quotes: [] })).some((e) => /캡처가 없다/.test(e)));
     assert.ok(errorsOf(base({ quotes: [{ file: '영수증_카메라.png', url: 'https://x.example' }] })).some((e) => /영수증과 주문내역/.test(e)));
     assert.ok(errorsOf(base({ quotes: [{ file: 'order_detail.png', url: 'https://x.example' }] })).some((e) => /영수증과 주문내역/.test(e)));
+    for (const file of ['receipt.png', 'Invoice-12.pdf', 'my-orders.png', 'orderdetail.png']) assert.match(file, RECEIPT_LIKE, file);
+    for (const file of ['recorder.png', 'border-box.png', 'reorder-shelf.png', 'shop.png']) assert.doesNotMatch(file, RECEIPT_LIKE, file);
     assert.ok(errorsOf(base({ quotes: [{ file: 'shop.png' }] })).some((e) => /주소가 없다/.test(e)));
     assert.deepEqual(errorsOf(base({ quotes: [{ file: 'shop.jpg', manual: true }] })), []);
     assert.ok(warningsOf(base({ note: ['본체 132,000원'] })).some((w) => /상품 링크/.test(w)));
@@ -291,6 +308,16 @@ describe('draft merging', () => {
     assert.equal(applyCardDefaults({ cardLast4: '1234', payWhen: '익월' }, cfg).payWhen, '익월');
     assert.deepEqual(applyCardDefaults({ amount: 1 }, cfg), { amount: 1 });
   });
+
+  test('changing the card replaces what the old card filled in, but not what a person set', () => {
+    const previous = applyCardDefaults({ cardLast4: '1234' }, cfg);
+    const switched = applyCardDefaults({ ...previous, cardLast4: '5678' }, cfg, { previous });
+    assert.deepEqual([switched.project, switched.cardIssuer, switched.budget], ['해양로봇', 'KB', '프로젝트 사업비']);
+    const chosen = { ...previous, project: '스마트농장 시험' };
+    const kept = applyCardDefaults({ ...chosen, cardLast4: '5678' }, cfg, { previous: chosen });
+    assert.equal(kept.project, '스마트농장 시험');
+    assert.equal(kept.cardIssuer, 'KB');
+  });
 });
 
 describe('fx', () => {
@@ -354,37 +381,6 @@ describe('quote checks', () => {
     assert.match(alternativeHint('https://www.coupang.com/vp/products/1'), /다나와/);
     assert.match(alternativeHint('https://smartstore.naver.com/x/products/1'), /제조사/);
     assert.match(detectBlock({ url: 'https://www.coupang.com/vp/products/1', status: 403 }).reason, /다나와/);
-  });
-
-  test('only public addresses are opened: metadata, loopback, private, CGNAT and local names are refused', async () => {
-    for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.0.10', '169.254.169.254', '100.100.1.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '::ffff:7f00:1']) {
-      assert.equal(isPrivateAddress(ip), true, ip);
-    }
-    for (const ip of ['93.184.216.34', '8.8.8.8', '2606:4700::1111']) assert.equal(isPrivateAddress(ip), false, ip);
-    const lookup = async (host) => ({ 'shop.example.com': [{ address: '93.184.216.34' }], 'rebind.example.com': [{ address: '93.184.216.34' }, { address: '10.0.0.5' }] })[host] ?? [];
-    assert.equal(await privateReason('https://shop.example.com/p/1', { lookup }), null);
-    assert.match(await privateReason('https://rebind.example.com/', { lookup }), /내부망/);
-    assert.match(await privateReason('http://169.254.169.254/latest/meta-data/', { lookup }), /내부망/);
-    assert.match(await privateReason('http://[::ffff:127.0.0.1]:8080/', { lookup }), /내부망/);
-    assert.match(await privateReason('http://intranet.local/', { lookup }), /내부 이름/);
-    assert.match(await privateReason('file:///etc/passwd', { lookup }), /http, https/);
-    assert.match(await privateReason('https://nowhere.example.com/', { lookup }), /찾지 못했습니다/);
-  });
-
-  test('every request of the capture context goes through the guard, redirects included', async () => {
-    let handler;
-    await guardContext({ route: async (_p, h) => { handler = h; } }, {
-      lookup: async (host) => (host === 'shop.example.com' ? [{ address: '93.184.216.34' }] : [{ address: '10.0.0.1' }]),
-    });
-    const send = async (url) => {
-      const seen = [];
-      await handler({ request: () => ({ url: () => url }), continue: async () => seen.push('continue'), abort: async (why) => seen.push(`abort:${why}`) });
-      return seen[0];
-    };
-    assert.equal(await send('https://shop.example.com/img.png'), 'continue');
-    assert.equal(await send('http://169.254.169.254/latest/'), 'abort:blockedbyclient');
-    assert.equal(await send('https://internal.example.com/'), 'abort:blockedbyclient');
-    assert.equal(await send('data:image/png;base64,AAAA'), 'continue');
   });
 
   test('expect texts are case-insensitive and all required', () => {

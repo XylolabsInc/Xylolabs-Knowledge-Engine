@@ -1,7 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
-import dns from 'node:dns/promises';
 import { createHash } from 'node:crypto';
 import { PluginError } from '../errors.mjs';
 import { kstIso } from './kst.mjs';
@@ -108,6 +106,8 @@ export function quoteFileName({ label, url, digest, ext = 'png' }) {
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
+const safeHost = (url) => { try { return new URL(url).hostname.replace(/^\[|\]$/g, ''); } catch { return ''; } };
+
 /**
  * 견적 파일을 저장하고 `quotes` 에 남긴다. 같은 내용이면 같은 이름이라 한 번만 저장된다.
  * 돌려주는 값은 DB 행이다.
@@ -140,79 +140,6 @@ export function checkQuoteFiles(dir, quotes, { previewed } = {}) {
   return problems;
 }
 
-// ------------------------------------------------------------------ network guard
-
-/**
- * 캡처 브라우저는 서버 안에서 돈다. 사람이 준 주소로 내부망(클라우드 메타데이터, localhost 의
- * 서비스, 사설망, Tailscale)을 열어 그 화면을 돌려주면 안 된다. 공개 주소만 연다. 리다이렉트와
- * 페이지 안의 요청도 같은 규칙으로 막는다(`guardContext`).
- */
-// 한 BlockList 에 IPv6 규칙을 넣으면 IPv4 주소도 그 규칙(::ffff:a.b.c.d)으로 걸린다. 둘을 나눈다.
-const PRIVATE4 = new net.BlockList();
-for (const [ip, bits] of [
-  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
-  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3],
-]) PRIVATE4.addSubnet(ip, bits, 'ipv4');
-const PRIVATE6 = new net.BlockList();
-for (const [ip, bits] of [['::', 96], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['64:ff9b::', 96], ['2001:db8::', 32]]) {
-  PRIVATE6.addSubnet(ip, bits, 'ipv6');
-}
-const LOCAL_NAME = /^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.lan|.*\.home\.arpa)$/i;
-
-/** IPv4 를 품은 IPv6(`::ffff:10.0.0.1`, URL 이 바꿔 놓는 `::ffff:a00:1`)의 IPv4. 아니면 null. */
-function mappedV4(ip) {
-  const dotted = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
-  if (dotted) return dotted;
-  const hex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-  if (!hex) return null;
-  const [a, b] = [parseInt(hex[1], 16), parseInt(hex[2], 16)];
-  return `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`;
-}
-
-/** 사설, 루프백, 링크 로컬, 예약 주소인가. IP 가 아니면 true(열지 않는다). */
-export function isPrivateAddress(ip) {
-  const v = net.isIP(ip);
-  if (v === 4) return PRIVATE4.check(ip, 'ipv4');
-  if (v === 6) {
-    const v4 = mappedV4(ip);
-    return v4 ? PRIVATE4.check(v4, 'ipv4') : PRIVATE6.check(ip, 'ipv6');
-  }
-  return true;
-}
-
-/**
- * 공개 주소가 아니면 이유를, 맞으면 null. 이름은 DNS 로 풀어 모든 주소를 본다.
- * `lookup` 은 시험용이다.
- */
-export async function privateReason(url, { lookup = dns.lookup } = {}) {
-  let u;
-  try { u = new URL(url); } catch { return '주소가 아닙니다'; }
-  if (!/^https?:$/.test(u.protocol)) return 'http, https 주소만 엽니다';
-  const host = u.hostname.replace(/^\[|\]$/g, '');
-  if (LOCAL_NAME.test(host)) return '내부 이름입니다';
-  if (net.isIP(host)) return isPrivateAddress(host) ? '내부망 주소입니다' : null;
-  let addrs;
-  try { addrs = await lookup(host, { all: true }); } catch { return '주소를 찾지 못했습니다'; }
-  if (!addrs?.length) return '주소를 찾지 못했습니다';
-  return addrs.every((a) => !isPrivateAddress(a.address)) ? null : '내부망 주소로 풀립니다';
-}
-
-/** 이 컨텍스트의 모든 요청(리다이렉트, 이미지, 스크립트)을 공개 주소로만 보낸다. */
-export async function guardContext(context, { lookup = dns.lookup } = {}) {
-  const verdicts = new Map();   // host → Promise<reason | null>
-  await context.route('**/*', async (route) => {
-    const url = route.request().url();
-    if (/^(data|blob|about):/i.test(url)) return route.continue();
-    let host;
-    try { host = new URL(url).host; } catch { return route.abort('blockedbyclient'); }
-    if (!verdicts.has(host)) verdicts.set(host, privateReason(url, { lookup }));
-    return (await verdicts.get(host)) ? route.abort('blockedbyclient') : route.continue();
-  });
-}
-
-/** 시험에서만 켠다. 로컬 시험 서버(127.0.0.1)를 열 수 있게 한다. */
-const allowPrivateForTests = () => process.env.DAOUOFFICE_QUOTE_ALLOW_PRIVATE === '1';
-
 // ------------------------------------------------------------------ capture
 
 /** 알리는 한국어, 원화가 기본이라 주문서(영어, 달러)와 표기가 어긋난다. 탭을 열기 전에 쿠키로 맞춘다. */
@@ -223,7 +150,7 @@ export const ALI_COOKIES = {
 
 /**
  * 캡처용 컨텍스트 설정. 헤드리스 표시(`HeadlessChrome`)가 든 UA 를 막는 상점이 많아 실제 버전의
- * 일반 크롬 UA 로 바꾼다. `withScratchContext` 의 `contextOptions` 로 넘긴다.
+ * 일반 크롬 UA 로 바꾼다. `withGuardedContext` 의 `contextOptions` 로 넘긴다(프록시는 그쪽이 붙인다).
  */
 export function captureContextOptions(browser) {
   const version = browser?.version?.() ?? '';
@@ -235,6 +162,7 @@ export function captureContextOptions(browser) {
     viewport: { width: 1280, height: 1100 },
     locale: 'ko-KR',
     timezoneId: 'Asia/Seoul',
+    serviceWorkers: 'block',
     ...(ua ? { userAgent: ua } : {}),
   };
 }
@@ -243,20 +171,23 @@ export function captureContextOptions(browser) {
  * 한 페이지를 찍는다. `{ ok, reason, kind?, landedUrl, title, shot? }`.
  *
  * quote = { url, expect: [문자열...], options: [버튼 글자...], waitMs, noClose, hideText, decline, aliRegion }
+ * guard = `withGuardedContext` 가 넘겨 주는 검사 프록시. 없으면 찍지 않는다.
  *
  * `expect` 없이 찍으면 엉뚱한 페이지를 저장하고도 성공으로 보고한다. 그래서 필수다.
  */
-export async function captureQuote(page, quote) {
+export async function captureQuote(page, quote, { guard } = {}) {
+  if (!guard?.proxy) throw new PluginError('INTERNAL', '검사 프록시 없이 공개 페이지를 열지 않습니다.');
   if (!(quote.expect ?? []).length) {
     return { ok: false, kind: 'input', reason: 'expect 가 없습니다. 주문한 판매자나 상품명처럼 페이지에 반드시 있어야 할 글자를 넣어 주세요.' };
   }
   const pre = detectBlock({ url: quote.url });
   if (pre) return { ok: false, ...pre, landedUrl: quote.url, title: '' };
-  if (!allowPrivateForTests()) {
-    const why = await privateReason(quote.url);
-    if (why) return { ok: false, kind: 'private', reason: `공개된 상품 페이지만 찍습니다: ${why}.`, landedUrl: quote.url, title: '' };
-    await guardContext(page.context());
-  }
+  // 막는 것은 프록시다. 여기서는 사람에게 이유를 먼저 알린다.
+  const why = await guard.reason(quote.url);
+  if (why) return { ok: false, kind: 'private', reason: `공개된 상품 페이지만 찍습니다: ${why}.`, landedUrl: quote.url, title: '' };
+  const privateFail = () => (guard.blocked.length
+    ? { ok: false, kind: 'private', reason: `공개된 상품 페이지만 찍습니다: 내부망으로 가는 요청을 막았습니다 (${guard.blocked[0].reason}).`, landedUrl: page.url(), title: '' }
+    : null);
 
   if (/aliexpress\./i.test(quote.url)) {
     await page.context().addCookies(quote.aliRegion === 'KR' ? ALI_COOKIES.KRW : ALI_COOKIES.USD).catch(() => {});
@@ -268,8 +199,11 @@ export async function captureQuote(page, quote) {
     const res = await page.goto(quote.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     status = res?.status();
   } catch (e) {
-    return { ok: false, kind: 'blocked', reason: `페이지를 열지 못했습니다: ${String(e?.message ?? e).split('\n')[0].slice(0, 120)}`, landedUrl: quote.url, title: '' };
+    return privateFail()
+      ?? { ok: false, kind: 'blocked', reason: `페이지를 열지 못했습니다: ${String(e?.message ?? e).split('\n')[0].slice(0, 120)}`, landedUrl: quote.url, title: '' };
   }
+  // 첫 문서가 리다이렉트로 내부망을 가리켰으면 프록시가 막았다.
+  if (status === 403 && guard.blocked.some((b) => b.host === safeHost(page.url()))) return privateFail();
   await page.waitForTimeout(quote.waitMs ?? 5000);
 
   const look = async () => ({

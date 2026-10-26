@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { PluginError } from '../errors.mjs';
-import { assertExecute, currentMode } from '../guard.mjs';
+import { requireExecute, currentMode, markSent } from '../guard.mjs';
 import { dismissDialogs } from './dialogs.mjs';
 import { findForm } from './forms.mjs';
 import { setApprovalLine, linkDocuments, withdrawDocument } from './approval.mjs';
@@ -104,29 +104,84 @@ export async function planSubmission({ page, api, entry, option = null, formName
 }
 
 /**
+ * 결재요청을 누른 뒤나 상신취소한 뒤의 실패를 사람이 판단할 수 있는 오류로 바꾼다.
+ *
+ *   sent      확인 창의 버튼을 눌렀다. 올라갔는지 모른다. `afterWrite` 로 알려 다시 올리지 않게 한다
+ *   withdrew  상신취소는 됐고 다시 올리지는 못했다. 문서는 임시저장이다
+ */
+export function failureAfter(e, { sent = false, withdrew = false, docId = null, withdrawnId = null } = {}) {
+  const cause = e instanceof PluginError ? e.message : String(e?.message ?? e).split('\n')[0].slice(0, 160);
+  if (sent) {
+    return new PluginError('UPSTREAM',
+      `결재요청을 누른 뒤 결과를 확인하지 못했습니다${docId ? ` (문서 ${docId})` : ''}. 올라갔을 수 있으니 다시 올리기 전에 다우오피스 내 기안 문서에서 확인해 주세요. 원인: ${cause}`,
+      { cause: e, data: { afterWrite: true, docId: docId ?? null, withdrew } });
+  }
+  if (withdrew) {
+    return new PluginError('UPSTREAM',
+      `${cause}${cause.includes('\n') ? '\n' : ' '}문서는 상신취소된 상태입니다 (문서 ${withdrawnId}). 고쳐 다시 올리려면 fix 로 다시 요청해 주세요.`,
+      { cause: e, data: { afterWrite: true, withdrew: true, docId: withdrawnId } });
+  }
+  return e;
+}
+
+/**
+ * 문서함의 `draftedAt` 을 ms 로. 시간대가 없으면 KST 로 읽는다(다우오피스 화면의 시각은 KST 다).
+ * UNVERIFIED: 문서함 행의 draftedAt 형식은 관측하지 못했다. ISO(시간대 포함)와 `YYYY-MM-DD HH:mm(:ss)` 를 받는다.
+ */
+export function draftedAtMs(s) {
+  const t = String(s ?? '').trim();
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(t)) return Date.parse(t);
+  const m = t.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(:\d{2}(\.\d+)?)?$/);
+  return m ? Date.parse(`${m[1]}T${m[2]}${m[3] ?? ':00'}+09:00`) : NaN;
+}
+
+/**
+ * 방금 올린 문서를 내 기안 문서 목록에서 고른다. 양식과 제목이 같고, 임시저장이 아니고, 옛 문서가
+ * 아니고, 10분 안에 올라간 것. 다우오피스 시계가 조금 빠를 수 있어 미래 쪽으로 1분까지 받는다.
+ */
+export function pickSubmittedDocId(list, { formName, title, exclude, now = Date.now(), maxAgeMs = 10 * 60_000, skewMs = 60_000 }) {
+  const hit = (list ?? []).find((d) => {
+    if (d.formName !== formName || d.title !== title || d.docStatusName === '임시저장') return false;
+    if (exclude != null && String(d.documentId) === String(exclude)) return false;
+    const age = now - draftedAtMs(d.draftedAt);
+    return age >= -skewMs && age < maxAgeMs;
+  });
+  return hit ? String(hit.documentId) : null;
+}
+
+/**
  * 채우고, 첨부하고, 화면 대조, 결재선, 상신, 문서 ID 찾기, 서버 대조까지 한다. 승인된 실행에서만 돈다.
  *
- * `onSubmitted({ docId })` 는 결재요청을 누른 직후에 불린다. 문서 ID 를 아직 모를 수 있다.
- * 부르는 쪽은 여기서 "올렸다" 고 기록해, 뒤에서 실패해도 같은 품의가 두 번 올라가지 않게 한다.
+ * `onWithdrawn({ docId })` 는 상신취소가 끝난 직후, `onSubmitted({ docId })` 는 결재요청 확인을 누른
+ * 직후에 불린다(문서 ID 를 아직 모를 수 있다). 부르는 쪽은 여기서 기록해, 뒤에서 실패해도 같은 품의가
+ * 두 번 올라가지 않게 하고 문서가 상신취소된 채라는 것을 남긴다.
+ *
+ * 확인 버튼을 누른 뒤의 실패는 `afterWrite` 가 붙은 UPSTREAM 이다(`failureAfter`).
  *
  * 돌려주는 값 `{ docId, status, docNum, diffs, line, withdrew, review }`. 서버 대조가 어긋나도
  * 문서는 이미 올라갔으므로 던지지 않고 `diffs` 로 돌려준다.
  */
 export async function submitPurchase({
   page, api, baseUrl, deptId, want, approvers, plan, quoteDir, formName,
-  projectBudget, cardMethod, onSubmitted = () => {}, logger,
+  projectBudget, cardMethod, onWithdrawn = () => {}, onSubmitted = () => {}, logger, now = Date.now,
+  deps = {},
 }) {
+  // 시험이 결재선 편집기 같은 큰 DOM 흐름을 바꿔 끼운다. 기본은 실제 함수다.
+  const { withdraw = withdrawDocument, findFormBy = findForm, link = linkDocuments, setLine = setApprovalLine } = deps;
   if (currentMode() !== 'execute') throw new PluginError('INTERNAL', '승인 전에는 실행할 수 없는 동작입니다: 구매 품의서 상신');
   const log = (msg, fields) => logger?.info?.(`purchase: ${msg}`, fields);
   const accept = (d) => { d.accept().catch(() => {}); };
   page.on('dialog', accept);
+  let withdrew = false;
+  let sent = false;
+  let docId = plan.editId ?? null;
   try {
-    let withdrew = false;
     if (plan.withdraw) {
-      const status = await withdrawDocument(page, api, baseUrl, plan.withdraw);
+      const status = await withdraw(page, api, baseUrl, plan.withdraw);
       if (status !== '임시저장') throw upstream(`상신취소 뒤 문서 ${plan.withdraw} 가 임시저장으로 돌아가지 않았습니다 (${status || '상태 모름'}).`);
       withdrew = true;
       log('withdrawn', { docId: plan.withdraw });
+      await onWithdrawn({ docId: plan.withdraw });
     }
 
     let existing = [];
@@ -139,7 +194,7 @@ export async function submitPurchase({
       await page.goto(`${baseUrl}/gw/app/approval/document/${editId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     } else {
       if (!deptId) throw new PluginError('VALIDATION', '기안 부서를 모릅니다. 조직도에서 부서를 읽지 못했으면 관리자가 회사 설정 departments 에 넣어야 합니다.');
-      const form = await findForm(api, formName);
+      const form = await findFormBy(api, formName);
       await page.goto(`${baseUrl}/gw/app/approval/document/new/${encodeURIComponent(deptId)}/${encodeURIComponent(form.id)}`,
         { waitUntil: 'domcontentloaded', timeout: 60_000 });
     }
@@ -177,20 +232,22 @@ export async function submitPurchase({
     }
     const screenDiffs = compareForm(onScreen, want);
     if (screenDiffs.length) {
-      throw upstream(`화면에 채운 값이 기대와 달라 상신하지 않았습니다${withdrew ? ' (문서는 상신취소되어 임시저장 상태입니다)' : ''}:\n${screenDiffs.map((d) => `- ${describeDiff(d)}`).join('\n')}`);
+      throw upstream(`화면에 채운 값이 기대와 달라 상신하지 않았습니다:\n${screenDiffs.map((d) => `- ${describeDiff(d)}`).join('\n')}`);
     }
     log('screen check passed');
     const review = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 70 }).catch(() => null);
 
     if (plan.links.length) {
-      const linked = await linkDocuments(page, plan.links);
+      requireExecute('관련문서 연결');
+      const linked = await link(page, plan.links);
       const missing = plan.links.filter((d) => !linked.includes(d.id));
       if (missing.length) throw upstream(`관련문서 연결이 빠졌습니다: ${missing.map((d) => d.docNum).join(', ')}`);
     }
 
-    const line = await setApprovalLine(page, approvers);
+    const line = await setLine(page, approvers);
 
-    assertExecute('구매 품의서 결재요청');
+    // 결재요청은 확인 창만 연다. 서버가 바뀌는 것은 확인을 누를 때라 그 직전에 markSent 를 부른다.
+    requireExecute('구매 품의서 결재요청');
     await page.evaluate(() => {
       const b = [...document.querySelectorAll('a')].find((e) => e.id === 'act_draft' && e.getBoundingClientRect().width > 0);
       if (!b) throw new Error('결재요청 버튼이 없다');
@@ -204,20 +261,22 @@ export async function submitPurchase({
       return false;
     }, null, { timeout: 60_000, polling: 500 }).then((h) => h.jsonValue());
     if (kind === 'warn') throw upstream('결재자가 없다는 경고가 떴습니다. 상신하지 않았습니다.');
+    // 여기서부터 되돌릴 수 없다. 이 뒤의 실패는 "올라갔는지 모른다" 로 알린다.
+    markSent('구매 품의서 결재요청 확인');
+    sent = true;
     await page.click('.go_popup.layer_approval a.btn_major_s');
-    await onSubmitted({ docId: editId ?? null });
+    await onSubmitted({ docId });
     await page.waitForTimeout(10_000);
 
     // 새 문서는 상신 뒤 주소에 ID 가 실리는데, 늦게 바뀌면 주소에 없다. 그때는 내 기안함에서 같은
     // 제목으로 방금 올라간 문서를 찾는다.
-    let docId = editId ?? page.url().match(/document\/(\d{15,})/)?.[1] ?? null;
+    docId ??= page.url().match(/document\/(\d{15,})/)?.[1] ?? null;
     for (let i = 0; !docId && i < 10; i++) {
       const l = (await api('/gw/api/approval/doclist/draft/all?page=0&offset=10&property=draftedAt&direction=desc&searchtype=&keyword=&duration=all')).data?.data ?? [];
-      docId = l.find((d) => d.formName === formName && d.title === want.title && d.docStatusName !== '임시저장'
-        && String(d.documentId) !== String(plan.refileFrom ?? '') && Date.now() - Date.parse(d.draftedAt) < 10 * 60_000)?.documentId ?? null;
+      docId = pickSubmittedDocId(l, { formName, title: want.title, exclude: plan.refileFrom, now: now() });
       if (!docId) await page.waitForTimeout(3000);
     }
-    if (!docId) throw upstream('상신은 눌렀지만 문서 ID 를 읽지 못했습니다. 내 기안 문서(my_drafts)에서 확인해 주세요.');
+    if (!docId) throw upstream('문서 ID 를 읽지 못했습니다');
     docId = String(docId);
     await onSubmitted({ docId });
 
@@ -229,6 +288,8 @@ export async function submitPurchase({
     if (lineDiff) diffs.push(lineDiff);
     log('server check', { docId, mismatches: diffs.length });
     return { docId, status: doc.status, docNum: doc.docNum, diffs, line, withdrew, review };
+  } catch (e) {
+    throw failureAfter(e, { sent, withdrew, docId, withdrawnId: plan.withdraw });
   } finally {
     page.off('dialog', accept);
   }
@@ -339,6 +400,7 @@ export function compareForm(got, want) {
 
 /** 기안 화면에서 첨부 하나를 지운다. 확인 창이 뜨면 승인한다. */
 async function removeAttachment(page, name) {
+  requireExecute('옛 첨부 삭제');   // 화면 안의 편집이다. 서버는 상신할 때 바뀐다
   // 삭제 아이콘은 마우스를 올렸을 때만 엉뚱한 좌표에 그려진다. 좌표로 누르면 다른 것을 누른다.
   // 요소에 직접 click 을 보낸다.
   const found = await page.evaluate((n) => {

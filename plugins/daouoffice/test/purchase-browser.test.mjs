@@ -15,6 +15,7 @@ import * as purchaseTools from '../src/tools/purchase.mjs';
 import { fetchUsdKrw } from '../src/dao/fx.mjs';
 import { formValues } from '../src/dao/purchases.mjs';
 import { captureQuote, captureContextOptions } from '../src/dao/quotes.mjs';
+import { withGuardedContext } from '../src/dao/egress.mjs';
 import { parsePurchaseBody, LABELS, diffPurchaseDoc } from '../src/dao/purchase-doc.mjs';
 import { fillFormInPage, readFormInPage, compareForm } from '../src/dao/purchase-submit.mjs';
 
@@ -48,8 +49,13 @@ const SITES = {
 function server() {
   const s = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
-    if (url.pathname === '/redirect-login') {
-      res.writeHead(302, { Location: '/login?next=%2Fproduct' });
+    const redirects = {
+      '/redirect-login': '/login?next=%2Fproduct',
+      '/to-internal': `http://internal.test:${s.address().port}/product`,
+      '/to-metadata': 'http://169.254.169.254/latest/meta-data/',
+    };
+    if (redirects[url.pathname]) {
+      res.writeHead(302, { Location: redirects[url.pathname] });
       res.end();
       return;
     }
@@ -127,9 +133,29 @@ describe('in Chromium', () => {
       await context.close();
     }
   };
-  const shoot = (t, pathname, over = {}) => withPage(t, (p) => captureQuote(p, {
-    url: `${base}${pathname}`, expect: ['테스트 카메라', '테스트상점'], waitMs: 100, ...over,
-  }));
+  /** The shared-browser seam (`withScratchContext`) over this test's browser. */
+  const sessions = {
+    async withScratchContext(fn, { contextOptions } = {}) {
+      const context = await browser.newContext(typeof contextOptions === 'function' ? await contextOptions(browser) : contextOptions);
+      try {
+        return await fn({ context, page: await context.newPage(), browser });
+      } finally {
+        await context.close();
+      }
+    },
+  };
+  /** Captures through the guard proxy. `policy` overrides the test switch (lookup, allowAddresses, allowPrivate). */
+  const shoot = async (t, pathname, over = {}, policy = {}) => {
+    if (!browser) return t.skip('chromium is not installed');
+    return withGuardedContext(sessions, ({ page: p, guard }) => captureQuote(p, {
+      url: `${over.host ?? base}${pathname}`, expect: ['테스트 카메라', '테스트상점'], waitMs: 100, ...over,
+    }, { guard }), { contextOptions: captureContextOptions, ...policy });
+  };
+  const lookup = async (host) => {
+    const a = { 'shop.test': '127.0.0.1', 'internal.test': '10.0.0.5' }[host];
+    if (!a) throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
+    return [{ address: a, family: 4 }];
+  };
 
   test('capture context hides the headless marker in the user agent', async (t) => {
     await withPage(t, async (p) => {
@@ -178,6 +204,30 @@ describe('in Chromium', () => {
     } finally {
       process.env.DAOUOFFICE_QUOTE_ALLOW_PRIVATE = '1';
     }
+  });
+
+  test('the browser never resolves names: a name only the proxy knows still loads', async (t) => {
+    const port = new URL(base).port;
+    const r = await shoot(t, '/product', { host: `http://shop.test:${port}` }, { lookup, allowPrivate: false, allowAddresses: ['127.0.0.1'] });
+    if (!r) return;
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(new URL(r.landedUrl).hostname, 'shop.test');
+  });
+
+  test('redirects to internal hosts and cloud metadata are blocked by the proxy', async (t) => {
+    const port = new URL(base).port;
+    for (const pathname of ['/to-internal', '/to-metadata']) {
+      const r = await shoot(t, pathname, { host: `http://shop.test:${port}` }, { lookup, allowPrivate: false, allowAddresses: ['127.0.0.1'] });
+      if (!r) return;
+      assert.equal(r.ok, false, pathname);
+      assert.equal(r.kind, 'private', `${pathname}: ${r.reason}`);
+    }
+  });
+
+  test('a capture without the guard proxy is refused', async (t) => {
+    await withPage(t, async (p) => {
+      await assert.rejects(captureQuote(p, { url: `${base}/product`, expect: ['테스트'] }), (e) => e.code === 'INTERNAL');
+    });
   });
 
   test('a popup with a close button is closed before the shot', async (t) => {
@@ -322,7 +372,7 @@ describe('capture_quote through the shared browser', () => {
 
   test('the exchange rate page is read in a scratch context', async (t) => {
     if (!chromium) return t.skip('chromium is not installed');
-    const fx = await sessions.withScratchContext(({ page }) => fetchUsdKrw(page, { url: `${base}/fx` }));
+    const fx = await withGuardedContext(sessions, ({ page }) => fetchUsdKrw(page, { url: `${base}/fx` }));
     assert.deepEqual(fx, { rate: 1385.2, at: '2026-01-15 11:00', source: '하나은행 매매기준율 (고시 100회차)' });
   });
 });
