@@ -160,6 +160,57 @@ INSERT INTO fts_documents(fts_documents) VALUES('rebuild');
 		version: 5,
 		sql:     `ALTER TABLE scheduled_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'slack';`,
 	},
+	{
+		version: 6,
+		sql: `
+-- Plugin accounts: one row per person and plugin. secret is the vault's
+-- nonce||ciphertext of the account form values and is never stored in clear.
+CREATE TABLE IF NOT EXISTS plugin_accounts (
+	user_key TEXT NOT NULL,
+	plugin TEXT NOT NULL,
+	secret BLOB NOT NULL,
+	account_name TEXT NOT NULL DEFAULT '',
+	account_id TEXT NOT NULL DEFAULT '',
+	allow_kick INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'ok',
+	connected_at DATETIME NOT NULL,
+	updated_at DATETIME NOT NULL,
+	PRIMARY KEY (user_key, plugin)
+);
+
+-- Records that a person was asked once to connect a plugin account.
+CREATE TABLE IF NOT EXISTS plugin_prompts (
+	user_key TEXT NOT NULL,
+	plugin TEXT NOT NULL,
+	prompted_at DATETIME NOT NULL,
+	PRIMARY KEY (user_key, plugin)
+);
+
+-- Plugin calls held for a human decision (approve, cancel, allow a login kick).
+CREATE TABLE IF NOT EXISTS plugin_actions (
+	id TEXT PRIMARY KEY,
+	kind TEXT NOT NULL,
+	user_key TEXT NOT NULL,
+	plugin TEXT NOT NULL,
+	tool TEXT NOT NULL,
+	args TEXT NOT NULL,
+	attachments TEXT NOT NULL DEFAULT '[]',
+	origin TEXT NOT NULL DEFAULT '{}',
+	channel TEXT NOT NULL DEFAULT '',
+	thread TEXT NOT NULL DEFAULT '',
+	preview TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL,
+	result TEXT NOT NULL DEFAULT '',
+	prompt_channel TEXT NOT NULL DEFAULT '',
+	prompt_message TEXT NOT NULL DEFAULT '',
+	created_at DATETIME NOT NULL,
+	expires_at DATETIME NOT NULL,
+	updated_at DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plugin_actions_thread ON plugin_actions(user_key, channel, thread, status);
+CREATE INDEX IF NOT EXISTS idx_plugin_actions_expiry ON plugin_actions(status, expires_at);
+`,
+	},
 }
 
 // runMigrations applies all pending migrations.
