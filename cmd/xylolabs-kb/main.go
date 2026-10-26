@@ -354,12 +354,6 @@ func main() {
 		discordPlatform.StopCleanup()
 	}
 
-	if pluginRegistry != nil {
-		if err := pluginRegistry.Close(); err != nil {
-			logger.Warn("plugin shutdown error", "error", err)
-		}
-	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -367,7 +361,50 @@ func main() {
 		logger.Error("api server shutdown error", "error", err)
 	}
 
+	// Let running bot work finish before the plugin goes away: an approved
+	// submission cut off halfway has an unknown outcome. The bound is the
+	// plugin execute timeout plus its status write; the systemd unit's
+	// TimeoutStopSec leaves room for it.
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), botDrainTimeout)
+	for _, b := range []*bot.Bot{botHandler, discordBotHandler} {
+		if b != nil {
+			b.Shutdown(drainCtx)
+		}
+	}
+	cancelDrain()
+
+	if pluginRegistry != nil {
+		if err := pluginRegistry.Close(); err != nil {
+			logger.Warn("plugin shutdown error", "error", err)
+		}
+	}
+
 	logger.Info("xylolabs-kb stopped")
+}
+
+// botDrainTimeout bounds how long shutdown waits for running bot work: the
+// plugin execute timeout (5 minutes) plus the status write after it.
+const botDrainTimeout = 5*time.Minute + 10*time.Second
+
+// daouOfficePassThroughEnv lists the bot's variables the plugin process gets
+// when set. mcpstdio starts plugins with a minimal environment, so anything
+// the plugin reads must be named here or in its Config.Env.
+var daouOfficePassThroughEnv = []string{
+	"PLAYWRIGHT_BROWSERS_PATH",
+	"DAOUOFFICE_LOG_LEVEL",
+	"DAOUOFFICE_MAX_CONTEXTS", // browser contexts open at once (plugin default 2)
+	"DAOUOFFICE_MAX_PARKED",   // idle signed-in sessions kept (plugin default 6)
+}
+
+// forwardEnv returns KEY=VALUE for each key that getenv reports as set.
+func forwardEnv(keys []string, getenv func(string) string) []string {
+	var env []string
+	for _, key := range keys {
+		if v := getenv(key); v != "" {
+			env = append(env, key+"="+v)
+		}
+	}
+	return env
 }
 
 // newPluginRegistry returns the plugin registry, or nil with the reason
@@ -418,11 +455,7 @@ func startDaouOffice(done <-chan struct{}, cfg *config.Config, reg *plugin.Regis
 			logger.Warn("daouoffice company config not found; the plugin starts with empty rules", "path", configPath)
 		}
 	}
-	for _, key := range []string{"PLAYWRIGHT_BROWSERS_PATH", "DAOUOFFICE_LOG_LEVEL"} {
-		if v := os.Getenv(key); v != "" {
-			env = append(env, key+"="+v)
-		}
-	}
+	env = append(env, forwardEnv(daouOfficePassThroughEnv, os.Getenv)...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

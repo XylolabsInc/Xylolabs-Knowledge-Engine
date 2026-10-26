@@ -17,6 +17,15 @@ import (
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
 )
 
+func TestForwardEnv(t *testing.T) {
+	env := map[string]string{"DAOUOFFICE_LOG_LEVEL": "debug", "DAOUOFFICE_MAX_PARKED": "4", "SLACK_BOT_TOKEN": "xoxb-secret"}
+	got := forwardEnv(append(daouOfficePassThroughEnv, "UNSET"), func(k string) string { return env[k] })
+	want := []string{"DAOUOFFICE_LOG_LEVEL=debug", "DAOUOFFICE_MAX_PARKED=4"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("forwardEnv() = %v, want %v", got, want)
+	}
+}
+
 func TestNewPluginRegistry(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	store, err := storage.New(filepath.Join(t.TempDir(), "kb.db"), logger)

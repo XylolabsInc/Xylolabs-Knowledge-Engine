@@ -908,18 +908,6 @@ func (r *Registry) Connect(ctx context.Context, id Identity, pluginName string, 
 	return name, nil
 }
 
-// Disconnect forgets a person's account for a plugin.
-func (r *Registry) Disconnect(ctx context.Context, id Identity, pluginName string) error {
-	if r.plugin(pluginName) == nil {
-		return fmt.Errorf("plugin: disconnect %s: %w", pluginName, ErrUnknownPlugin)
-	}
-	if err := r.store.DeletePluginAccount(ctx, id.Key(), pluginName); err != nil {
-		return fmt.Errorf("plugin: disconnect %s: %w", pluginName, err)
-	}
-	r.logger.Info("plugin account disconnected", "plugin", pluginName, "user", id.Key())
-	return nil
-}
-
 // NeedsConnectPrompt returns a first-contact connect prompt for every account
 // plugin the person has neither connected nor been asked about. The bot posts
 // them by DM and then calls MarkPrompted.

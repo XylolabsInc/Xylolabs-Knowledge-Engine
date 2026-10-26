@@ -103,11 +103,7 @@ func (b *Bot) afterReply(ctx context.Context, id plugin.Identity, prompts *plugi
 	for _, pr := range prompts.List() {
 		b.postPluginPrompt(ctx, id, pr)
 	}
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		b.firstContact(ctx, id)
-	}()
+	b.goTracked(func() { b.firstContact(ctx, id) })
 }
 
 func (b *Bot) postPluginPrompt(ctx context.Context, id plugin.Identity, pr plugin.Prompt) {
@@ -297,11 +293,19 @@ func withStatus(preview, status string) string {
 	return preview + "\n\n" + status
 }
 
-// HandleAction handles a button click.
+// HandleAction handles a button click. It returns at once; the work runs in
+// the background, and Shutdown waits for it, so a deploy does not cut an
+// approved submission short.
 func (b *Bot) HandleAction(ctx context.Context, a *Action) {
 	if b.plugins == nil || a == nil || a.UserID == "" {
 		return
 	}
+	if !b.goTracked(func() { b.handleAction(ctx, a) }) {
+		b.logger.Warn("button click ignored: shutting down", "action", a.ActionID, "user", a.UserID)
+	}
+}
+
+func (b *Bot) handleAction(ctx context.Context, a *Action) {
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error("panic recovered in HandleAction", "action", a.ActionID, "panic", r)
@@ -331,7 +335,9 @@ func (b *Bot) HandleAction(ctx context.Context, a *Action) {
 func (b *Bot) owned(ctx context.Context, a *Action) (*plugin.Action, bool) {
 	act, err := b.plugins.Action(ctx, a.Value)
 	if err != nil {
-		if !errors.Is(err, plugin.ErrActionNotFound) {
+		if errors.Is(err, plugin.ErrActionNotFound) {
+			b.dm(ctx, a.UserID, "이미 처리되었거나 없는 요청입니다.")
+		} else {
 			b.logger.Warn("failed to load plugin action", "action", a.Value, "error", err)
 		}
 		return nil, false
@@ -342,6 +348,44 @@ func (b *Bot) owned(ctx context.Context, a *Action) (*plugin.Action, bool) {
 		return nil, false
 	}
 	return act, true
+}
+
+var statusLabels = map[plugin.ActionStatus]string{
+	plugin.StatusPending:   "대기 중",
+	plugin.StatusRunning:   "처리 중",
+	plugin.StatusDone:      "완료",
+	plugin.StatusFailed:    "실패",
+	plugin.StatusCancelled: "취소됨",
+	plugin.StatusExpired:   "만료됨",
+}
+
+func settledText(status plugin.ActionStatus) string {
+	label := statusLabels[status]
+	if label == "" {
+		label = string(status)
+	}
+	return fmt.Sprintf("이미 처리된 요청입니다 (상태: %s).", label)
+}
+
+// settled reports whether a clicked action is no longer waiting, and tells
+// the clicker so, unless this bot is still working on it: a second click
+// while the first runs stays silent, the first one shows the outcome.
+func (b *Bot) settled(ctx context.Context, userID string, act *plugin.Action) bool {
+	if act.Status == plugin.StatusPending {
+		return false
+	}
+	if _, busy := b.inflight.Load(act.ID); !busy {
+		b.dm(ctx, userID, settledText(act.Status))
+	}
+	return true
+}
+
+// raced tells the clicker the current status of an action that something
+// else (expiry, another decision) settled while this bot held it.
+func (b *Bot) raced(ctx context.Context, userID, actionID string) {
+	if act, err := b.plugins.Action(ctx, actionID); err == nil {
+		b.dm(ctx, userID, settledText(act.Status))
+	}
 }
 
 // begin marks an action as being handled by this bot, so a second click
@@ -359,7 +403,7 @@ func (b *Bot) end(actionID string) { b.inflight.Delete(actionID) }
 // ending the person's other session.
 func (b *Bot) approve(ctx context.Context, a *Action, kick bool) {
 	act, ok := b.owned(ctx, a)
-	if !ok || act.Kind != plugin.ActionCall || act.Status != plugin.StatusPending {
+	if !ok || act.Kind != plugin.ActionCall || b.settled(ctx, a.UserID, act) {
 		return
 	}
 	if !b.begin(act.ID) {
@@ -402,7 +446,8 @@ func (b *Bot) decisionFailed(ctx context.Context, ref promptRef, act *plugin.Act
 	b.logger.Warn("plugin action not completed", "action", act.ID, "plugin", act.Plugin, "tool", act.Tool, "error", err)
 	switch {
 	case errors.Is(err, plugin.ErrNotPending):
-		// Another click or reply got there first; its flow shows the outcome.
+		// Something else settled it while this bot held it (expiry, a reply).
+		b.raced(ctx, userID, act.ID)
 	case errors.Is(err, plugin.ErrExpired):
 		ref.final(ctx, act.Preview, textExpired)
 	case errors.Is(err, plugin.ErrDuplicateSession):
@@ -438,7 +483,7 @@ func (b *Bot) decisionFailed(ctx context.Context, ref promptRef, act *plugin.Act
 // cancelAction cancels a pending action.
 func (b *Bot) cancelAction(ctx context.Context, a *Action) {
 	act, ok := b.owned(ctx, a)
-	if !ok || act.Status != plugin.StatusPending {
+	if !ok || b.settled(ctx, a.UserID, act) {
 		return
 	}
 	if !b.begin(act.ID) {
@@ -447,7 +492,9 @@ func (b *Bot) cancelAction(ctx context.Context, a *Action) {
 	defer b.end(act.ID)
 	by := plugin.Identity{Platform: b.platform.Name(), UserID: a.UserID}
 	if _, err := b.plugins.Cancel(ctx, act.ID, by); err != nil {
-		if !errors.Is(err, plugin.ErrNotPending) {
+		if errors.Is(err, plugin.ErrNotPending) {
+			b.raced(ctx, a.UserID, act.ID)
+		} else {
 			b.logger.Warn("failed to cancel plugin action", "action", act.ID, "error", err)
 		}
 		return
@@ -459,7 +506,7 @@ func (b *Bot) cancelAction(ctx context.Context, a *Action) {
 // other session, then runs the stored message again as that person.
 func (b *Bot) resumeAfterKick(ctx context.Context, a *Action) {
 	act, ok := b.owned(ctx, a)
-	if !ok || act.Kind != plugin.ActionLoginKick || act.Status != plugin.StatusPending {
+	if !ok || act.Kind != plugin.ActionLoginKick || b.settled(ctx, a.UserID, act) {
 		return
 	}
 	if !b.begin(act.ID) {
@@ -475,6 +522,7 @@ func (b *Bot) resumeAfterKick(ctx context.Context, a *Action) {
 	switch {
 	case err == nil:
 	case errors.Is(err, plugin.ErrNotPending):
+		b.raced(ctx, a.UserID, act.ID)
 		return
 	case errors.Is(err, plugin.ErrExpired):
 		ref.final(ctx, "", textExpired)
@@ -517,7 +565,7 @@ func (b *Bot) resumeAfterKick(ctx context.Context, a *Action) {
 // button; the model can only ask for it.
 func (b *Bot) confirmDisconnect(ctx context.Context, a *Action) {
 	act, ok := b.owned(ctx, a)
-	if !ok || act.Kind != plugin.ActionDisconnect || act.Status != plugin.StatusPending {
+	if !ok || act.Kind != plugin.ActionDisconnect || b.settled(ctx, a.UserID, act) {
 		return
 	}
 	if !b.begin(act.ID) {
@@ -531,6 +579,7 @@ func (b *Bot) confirmDisconnect(ctx context.Context, a *Action) {
 	case err == nil:
 		ref.final(ctx, "", res.Text)
 	case errors.Is(err, plugin.ErrNotPending):
+		b.raced(ctx, a.UserID, act.ID)
 	case errors.Is(err, plugin.ErrExpired):
 		ref.final(ctx, act.Preview, textExpired)
 	default:
@@ -568,12 +617,19 @@ func (b *Bot) openConnectForm(ctx context.Context, a *Action) {
 	}
 }
 
-// HandleFormSubmission handles a submitted account form. The submitted
+// HandleFormSubmission handles a submitted account form. Like HandleAction
+// it returns at once and the check runs in the background. The submitted
 // values are passed to the registry and never logged.
 func (b *Bot) HandleFormSubmission(ctx context.Context, f *FormSubmission) {
 	if b.plugins == nil || f == nil || f.CallbackID != formConnect || f.UserID == "" {
 		return
 	}
+	if !b.goTracked(func() { b.handleFormSubmission(ctx, f) }) {
+		b.logger.Warn("form submission ignored: shutting down", "user", f.UserID)
+	}
+}
+
+func (b *Bot) handleFormSubmission(ctx context.Context, f *FormSubmission) {
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error("panic recovered in HandleFormSubmission", "panic", r)
@@ -665,10 +721,12 @@ func (b *Bot) handleTextDecision(ctx context.Context, msg *IncomingMessage, thre
 	click := &Action{Platform: b.platform.Name(), UserID: msg.UserID, Channel: act.PromptChannel, MessageID: act.PromptMessage, Value: act.ID}
 	b.logger.Info("plugin action decided by text reply", "action", act.ID, "approve", approve)
 	ctx = context.WithoutCancel(ctx)
+	decide := func() { b.cancelAction(ctx, click) }
 	if approve {
-		b.approve(ctx, click, false)
-	} else {
-		b.cancelAction(ctx, click)
+		decide = func() { b.approve(ctx, click, false) }
+	}
+	if !b.goTracked(decide) {
+		b.logger.Warn("text decision ignored: shutting down", "action", act.ID)
 	}
 	return true
 }
@@ -688,12 +746,28 @@ func RunPluginJanitor(done <-chan struct{}, reg *plugin.Registry, interval time.
 		if err != nil {
 			logger.Warn("plugin janitor: expire actions", "error", err)
 		}
+		covered := map[string]bool{}
 		for _, b := range bots {
 			if b == nil {
 				continue
 			}
+			covered[b.platform.Name()] = true
 			b.notifyStale(ctx, stale)
 			b.notifyExpired(ctx, expired)
+		}
+		// Rows still change (an expired action is expired either way), but
+		// nobody on a platform without a running bot hears about it.
+		for _, group := range []struct {
+			what string
+			acts []plugin.Action
+		}{{"stale", stale}, {"expired", expired}} {
+			for _, act := range group.acts {
+				platform, _, _ := strings.Cut(act.UserKey, ":")
+				if !covered[platform] {
+					logger.Warn("plugin janitor: no bot for this platform; owner not notified",
+						"kind", group.what, "action", act.ID, "platform", platform, "plugin", act.Plugin)
+				}
+			}
 		}
 	}
 	tick()

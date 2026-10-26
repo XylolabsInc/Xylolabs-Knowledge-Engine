@@ -131,6 +131,8 @@ type Platform interface {
 }
 
 // BotHandler is the interface that platform connectors use to dispatch messages to the bot.
+// HandleAction and HandleFormSubmission return at once and run their work in
+// the background, so connectors call them inline, right after acknowledging.
 type BotHandler interface {
 	HandleMention(ctx context.Context, msg *IncomingMessage)
 	HandleDirectMessage(ctx context.Context, msg *IncomingMessage)

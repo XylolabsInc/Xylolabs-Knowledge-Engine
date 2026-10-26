@@ -11,6 +11,12 @@ ExecStart=/opt/xylolabs-kb/bin/xylolabs-kb
 EnvironmentFile=/opt/xylolabs-kb/.env
 Restart=always
 RestartSec=5
+# On stop, SIGTERM only the bot. It waits for a running plugin submission
+# (up to 5m10s) and then closes the DaouOffice plugin itself; the default
+# control-group mode would SIGTERM the Node plugin at once and cut the
+# submission off. Anything left after the bot exits is killed.
+KillMode=mixed
+TimeoutStopSec=340
 StandardOutput=journal
 StandardError=journal
 AmbientCapabilities=CAP_NET_BIND_SERVICE

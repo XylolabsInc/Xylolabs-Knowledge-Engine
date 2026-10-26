@@ -46,7 +46,7 @@ function intEnv(value, fallback) {
   return value !== undefined && value !== '' && Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
-export async function main({ env = process.env, stdin = process.stdin, stdout = process.stdout } = {}) {
+export async function main({ env = process.env, stdin = process.stdin, stdout = process.stdout, exitAfterStop = false } = {}) {
   const logger = createLogger({ level: env.DAOUOFFICE_LOG_LEVEL ?? 'info' });
   const dataDir = path.resolve(env.DAOUOFFICE_DATA_DIR || path.join(ROOT, 'data'));
   const { config, source } = loadConfig(env.DAOUOFFICE_CONFIG);
@@ -67,6 +67,9 @@ export async function main({ env = process.env, stdin = process.stdin, stdout = 
   );
   registerAll(server, rt);
 
+  // The bot stops the plugin by closing stdin after any running submission has finished (systemd
+  // KillMode=mixed sends us no signal). Close the browser, the database and the transport, then let
+  // the process end; the unref'd timer only fires if some handle would keep it alive.
   let stopping = null;
   const stop = (why) => {
     stopping ??= (async () => {
@@ -74,6 +77,8 @@ export async function main({ env = process.env, stdin = process.stdin, stdout = 
       await sessions.close().catch((e) => logger.warn('session close failed', { error: e }));
       try { db.close(); } catch { /* already closed */ }
       await server.close().catch(() => {});
+      logger.info('stopped', { why });
+      if (exitAfterStop) setTimeout(() => process.exit(0), 3000).unref();
     })();
     return stopping;
   };
@@ -90,7 +95,7 @@ export async function main({ env = process.env, stdin = process.stdin, stdout = 
 
 const isEntry = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isEntry) {
-  main().then(({ stop }) => {
+  main({ exitAfterStop: true }).then(({ stop }) => {
     for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { void stop(sig).finally(() => process.exit(0)); });
   }).catch((e) => {
     process.stderr.write(`${JSON.stringify({ level: 'error', msg: 'daouoffice plugin failed to start', error: e?.message ?? String(e) })}\n`);

@@ -283,7 +283,30 @@ func (c *Connector) Sync(ctx context.Context) error {
 	return nil
 }
 
+// Events API callbacks (messages to index, mentions to route) are handled by
+// a few workers, so a slow one (a rate-limited lookup, a large attachment to
+// extract) never holds up the read loop. The loop blocks only if the queue
+// fills up.
+const (
+	eventWorkers   = 4
+	eventQueueSize = 1000
+)
+
 func (c *Connector) handleEvents(ctx context.Context) {
+	queue := make(chan slackevents.EventsAPIEvent, eventQueueSize)
+	var workers sync.WaitGroup
+	for range eventWorkers {
+		workers.Go(func() {
+			for ev := range queue {
+				c.handleEventsAPI(ctx, ev)
+			}
+		})
+	}
+	defer func() {
+		close(queue)
+		workers.Wait()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -292,13 +315,20 @@ func (c *Connector) handleEvents(ctx context.Context) {
 			if !ok {
 				return
 			}
-			c.processEvent(ctx, evt)
+			c.processEvent(ctx, evt, queue)
 		}
 	}
 }
 
-func (c *Connector) processEvent(ctx context.Context, evt socketmode.Event) {
+func (c *Connector) processEvent(ctx context.Context, evt socketmode.Event, queue chan<- slackevents.EventsAPIEvent) {
 	c.logger.Debug("socket event received", "type", evt.Type)
+
+	// Ack every envelope before anything else: Slack resends unacknowledged
+	// events and shows an error on an interaction after 3 seconds, and an ack
+	// without a payload is what closes a submitted modal.
+	if evt.Request != nil && evt.Request.EnvelopeID != "" {
+		c.socketClient.Ack(*evt.Request)
+	}
 
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
@@ -307,15 +337,14 @@ func (c *Connector) processEvent(ctx context.Context, evt socketmode.Event) {
 			c.logger.Warn("failed to cast events API event")
 			return
 		}
-		c.socketClient.Ack(*evt.Request)
 		c.logger.Debug("events API event", "event_type", eventsAPIEvent.Type, "inner_type", eventsAPIEvent.InnerEvent.Type)
-		c.handleEventsAPI(ctx, eventsAPIEvent)
-	case socketmode.EventTypeInteractive:
-		// Ack first: Slack shows an error after 3 seconds, and an ack without a
-		// payload is what closes a submitted modal.
-		if evt.Request != nil {
-			c.socketClient.Ack(*evt.Request)
+		select {
+		case queue <- eventsAPIEvent:
+		case <-ctx.Done():
 		}
+	case socketmode.EventTypeInteractive:
+		// Handled inline: the bot returns at once and does the work in the
+		// background, so a click is never queued behind messages.
 		cb, ok := evt.Data.(slack.InteractionCallback)
 		if !ok {
 			c.logger.Warn("failed to cast interactive event")
@@ -330,9 +359,6 @@ func (c *Connector) processEvent(ctx context.Context, evt socketmode.Event) {
 		c.logger.Warn("slack connection error")
 	default:
 		c.logger.Debug("unhandled socket event", "type", evt.Type)
-		if evt.Request != nil && evt.Request.EnvelopeID != "" {
-			c.socketClient.Ack(*evt.Request)
-		}
 	}
 }
 
@@ -434,11 +460,11 @@ func (c *Connector) handleInteraction(ctx context.Context, cb slack.InteractionC
 	switch cb.Type {
 	case slack.InteractionTypeBlockActions:
 		for _, a := range interactionActions(cb) {
-			go c.botHandler.HandleAction(ctx, a)
+			c.botHandler.HandleAction(ctx, a)
 		}
 	case slack.InteractionTypeViewSubmission:
 		if f := interactionForm(cb); f != nil {
-			go c.botHandler.HandleFormSubmission(ctx, f)
+			c.botHandler.HandleFormSubmission(ctx, f)
 		}
 	default:
 		c.logger.Debug("unhandled interaction", "type", cb.Type)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -43,7 +44,12 @@ type Bot struct {
 	extractor    *extractor.Extractor
 	plugins      *plugin.Registry
 	inflight     sync.Map // plugin action IDs being decided by this bot
-	wg           sync.WaitGroup
+
+	// Background work runs through goTracked so Shutdown can wait for it.
+	wg      sync.WaitGroup
+	trackMu sync.Mutex
+	closing bool
+	running atomic.Int64
 }
 
 // New creates a Bot handler backed by the given Platform.
@@ -107,6 +113,55 @@ func (b *Bot) SetExtractor(ext *extractor.Extractor) {
 // Wait blocks until all background goroutines started by the bot have finished.
 func (b *Bot) Wait() {
 	b.wg.Wait()
+}
+
+// goTracked runs f in a goroutine that Shutdown waits for. Once Shutdown has
+// begun it starts nothing and reports false.
+func (b *Bot) goTracked(f func()) bool {
+	b.trackMu.Lock()
+	defer b.trackMu.Unlock()
+	if b.closing {
+		return false
+	}
+	b.wg.Add(1)
+	b.running.Add(1)
+	go func() {
+		defer b.wg.Done()
+		defer b.running.Add(-1)
+		f()
+	}()
+	return true
+}
+
+// Shutdown stops new background work and waits for what is running (an
+// approved submission, a connect check) until ctx ends. Stopping a submission
+// halfway leaves its outcome unknown, so main gives this the plugin execute
+// timeout before it closes the plugins. It reports whether everything finished.
+func (b *Bot) Shutdown(ctx context.Context) bool {
+	b.trackMu.Lock()
+	b.closing = true
+	b.trackMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
+	for {
+		if n := b.running.Load(); n > 0 {
+			b.logger.Info("waiting for bot work to finish before shutdown", "platform", b.platform.Name(), "running", n)
+		}
+		select {
+		case <-done:
+			return true
+		case <-ctx.Done():
+			b.logger.Warn("shutdown without waiting for running bot work", "platform", b.platform.Name(), "running", b.running.Load())
+			return false
+		case <-tick.C:
+		}
+	}
 }
 
 // IsTrackedThread delegates to the platform.
@@ -474,9 +529,8 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 	if b.toolExecutor != nil {
 		if screenshotData, ok := b.toolExecutor.PopScreenshot(); ok {
 			asyncCtx := context.WithoutCancel(ctx)
-			b.wg.Add(1)
-			go func(data []byte, channel, ts string) {
-				defer b.wg.Done()
+			data, channel, ts := screenshotData, msg.Channel, threadID
+			b.goTracked(func() {
 				uploadCtx, cancel := context.WithTimeout(asyncCtx, 60*time.Second)
 				defer cancel()
 				if err := b.platform.UploadFile(uploadCtx, channel, ts, "screenshot.png", data); err != nil {
@@ -484,7 +538,7 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 				} else {
 					b.logger.Info("screenshot uploaded", "platform", b.platform.Name(), "channel", channel, "size_bytes", len(data))
 				}
-			}(screenshotData, msg.Channel, threadID)
+			})
 		}
 	}
 
@@ -508,13 +562,11 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		for _, lb := range learnBlocks {
 			topic := strings.TrimSpace(lb[1])
 			content := strings.TrimSpace(lb[2])
-			b.wg.Add(1)
-			go func(topic, content, author string) {
-				defer b.wg.Done()
+			b.goTracked(func() {
 				if err := b.kbReader.SaveFact(topic, content, author); err != nil {
 					b.logger.Warn("failed to save learned fact", "topic", topic, "error", err)
 				}
-			}(topic, content, author)
+			})
 		}
 		responseText = reLearnBlock.ReplaceAllString(responseText, "")
 		responseText = strings.TrimSpace(responseText)
@@ -574,15 +626,14 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 	// Add emoji reaction to the user's original message.
 	if reactEmoji != "" {
 		asyncCtx := context.WithoutCancel(ctx)
-		b.wg.Add(1)
-		go func(emoji string) {
-			defer b.wg.Done()
+		emoji := reactEmoji
+		b.goTracked(func() {
 			reactionCtx, cancel := context.WithTimeout(asyncCtx, 5*time.Second)
 			defer cancel()
 			if err := b.platform.AddReaction(reactionCtx, msg.Channel, msg.MessageID, emoji); err != nil {
 				b.logger.Warn("failed to add reaction", "emoji", emoji, "error", err)
 			}
-		}(reactEmoji)
+		})
 	}
 }
 

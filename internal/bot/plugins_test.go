@@ -175,7 +175,8 @@ type testPlugin struct {
 	calls         []plugin.CallRequest
 	dataDir       string
 	connectErr    error
-	executeErrs   []error // returned by successive execute calls of the write tool
+	executeErrs   []error       // returned by successive execute calls of the write tool
+	gate          chan struct{} // when set, write executes wait for it to close
 	dupUntilLogin bool
 	loggedIn      bool
 }
@@ -203,6 +204,9 @@ func (p *testPlugin) AccountFields() []plugin.AccountField {
 }
 
 func (p *testPlugin) Call(_ context.Context, req plugin.CallRequest) (*plugin.Result, error) {
+	if p.gate != nil && req.Tool == "submit_purchase" && req.Mode == plugin.ModeExecute {
+		<-p.gate
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, req)
@@ -349,6 +353,11 @@ func (tb *testBot) ask(msg *IncomingMessage) {
 	tb.Wait()
 }
 
+func (tb *testBot) submitForm(f *FormSubmission) {
+	tb.HandleFormSubmission(context.Background(), f)
+	tb.Wait()
+}
+
 func (tb *testBot) click(user, actionID, value, messageID string) {
 	tb.HandleAction(context.Background(), &Action{
 		Platform: "slack", UserID: user, Channel: "C1", MessageID: messageID, ActionID: actionID, Value: value, Trigger: "T1",
@@ -428,7 +437,7 @@ func TestConnectForm(t *testing.T) {
 
 	t.Run("submission connects and reports", func(t *testing.T) {
 		tb := newTestBot(t)
-		tb.HandleFormSubmission(context.Background(), &FormSubmission{
+		tb.submitForm(&FormSubmission{
 			Platform: "slack", UserID: "U1", CallbackID: formConnect, Metadata: "testoffice",
 			Values: map[string]string{"username": "hong", "password": testPassword, "allowKick": "예"},
 		})
@@ -446,7 +455,7 @@ func TestConnectForm(t *testing.T) {
 	t.Run("wrong password is reported once, without retry", func(t *testing.T) {
 		tb := newTestBot(t)
 		tb.plug.connectErr = &plugin.Error{Code: plugin.CodeAuthFailed, Message: "틀림"}
-		tb.HandleFormSubmission(context.Background(), &FormSubmission{
+		tb.submitForm(&FormSubmission{
 			Platform: "slack", UserID: "U1", CallbackID: formConnect, Metadata: "testoffice",
 			Values: map[string]string{"username": "hong", "password": testPassword},
 		})
@@ -533,11 +542,13 @@ func TestApproveFlow(t *testing.T) {
 		}
 	})
 
-	t.Run("a late second click does nothing", func(t *testing.T) {
+	t.Run("a late second click only says it is done", func(t *testing.T) {
 		before := len(tb.pf.list(""))
 		tb.click("U1", actionApprove, id, prompt.message)
-		if len(tb.pf.list("")) != before || tb.plug.count("submit_purchase", plugin.ModeExecute) != 1 {
-			t.Error("a second click after the outcome did something")
+		events := tb.pf.list("")[before:]
+		if len(events) != 1 || events[0].channel != "D-U1" || events[0].text != "이미 처리된 요청입니다 (상태: 완료)." ||
+			tb.plug.count("submit_purchase", plugin.ModeExecute) != 1 {
+			t.Errorf("events after a late click = %+v", events)
 		}
 	})
 }
@@ -849,5 +860,128 @@ func TestFailureAfterWriteIsUnknownOutcome(t *testing.T) {
 	}
 	if !strings.Contains(said, "결과를 확인하지 못했습니다") || strings.Contains(said, "상신하지 못했습니다") {
 		t.Errorf("thread message = %q; want an unknown outcome, not a failure", said)
+	}
+}
+
+func TestShutdownWaitsForRunningApproval(t *testing.T) {
+	tb := newTestBot(t)
+	tb.connect(t)
+	prompt := tb.requestApproval(t)
+	tb.plug.gate = make(chan struct{})
+
+	start := time.Now()
+	tb.HandleAction(context.Background(), &Action{
+		Platform: "slack", UserID: "U1", Channel: "C1", MessageID: prompt.message, ActionID: actionApprove, Value: prompt.buttons[0].Value,
+	})
+	if time.Since(start) > time.Second {
+		t.Fatal("HandleAction blocked on the submission; connectors would miss Slack's 3-second window")
+	}
+
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if tb.Shutdown(short) {
+		t.Fatal("Shutdown reported done while a submission was running")
+	}
+	before := len(tb.pf.list(""))
+	tb.HandleAction(context.Background(), &Action{
+		Platform: "slack", UserID: "U1", Channel: "C1", MessageID: prompt.message, ActionID: actionCancel, Value: prompt.buttons[1].Value,
+	})
+
+	close(tb.plug.gate)
+	if !tb.Shutdown(context.Background()) {
+		t.Fatal("Shutdown did not finish after the submission completed")
+	}
+	if n := tb.plug.count("submit_purchase", plugin.ModeExecute); n != 1 {
+		t.Errorf("executed %d times, want 1", n)
+	}
+	for _, e := range tb.pf.list("")[before:] {
+		if e.kind == "update" && strings.HasSuffix(e.text, textCancelled) {
+			t.Error("a click after shutdown began was handled")
+		}
+	}
+	updates := tb.pf.list("update")
+	if last := updates[len(updates)-1]; !strings.HasSuffix(last.text, textSubmitted) {
+		t.Errorf("last update = %+v; the running submission should have finished", last)
+	}
+}
+
+func TestDeadButtonsSayWhy(t *testing.T) {
+	t.Run("settled action", func(t *testing.T) {
+		tb := newTestBot(t)
+		tb.connect(t)
+		prompt := tb.requestApproval(t)
+		tb.click("U1", actionCancel, prompt.buttons[1].Value, prompt.message)
+		before := len(tb.pf.list(""))
+		tb.click("U1", actionApprove, prompt.buttons[0].Value, prompt.message)
+		events := tb.pf.list("")[before:]
+		if len(events) != 1 || events[0].channel != "D-U1" || events[0].text != "이미 처리된 요청입니다 (상태: 취소됨)." {
+			t.Errorf("events = %+v", events)
+		}
+	})
+
+	t.Run("unknown action", func(t *testing.T) {
+		tb := newTestBot(t)
+		tb.click("U1", actionApprove, "no-such-action", "P1")
+		replies := tb.pf.list("reply")
+		if len(replies) != 1 || replies[0].channel != "D-U1" || replies[0].text != "이미 처리되었거나 없는 요청입니다." {
+			t.Errorf("replies = %+v", replies)
+		}
+	})
+
+	t.Run("second click while the first runs stays silent", func(t *testing.T) {
+		tb := newTestBot(t)
+		tb.connect(t)
+		prompt := tb.requestApproval(t)
+		tb.plug.gate = make(chan struct{})
+		click := func() {
+			tb.HandleAction(context.Background(), &Action{
+				Platform: "slack", UserID: "U1", Channel: "C1", MessageID: prompt.message, ActionID: actionApprove, Value: prompt.buttons[0].Value,
+			})
+		}
+		click()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, busy := tb.inflight.Load(prompt.buttons[0].Value); busy {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("first click never started")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		click()
+		time.Sleep(50 * time.Millisecond)
+		close(tb.plug.gate)
+		tb.Wait()
+		for _, r := range tb.pf.list("reply") {
+			if strings.HasPrefix(r.text, "이미 처리된 요청입니다") {
+				t.Errorf("in-flight double click got a notice: %+v", r)
+			}
+		}
+		if n := tb.plug.count("submit_purchase", plugin.ModeExecute); n != 1 {
+			t.Errorf("executed %d times, want 1", n)
+		}
+	})
+}
+
+func TestJanitorLogsPlatformsWithoutABot(t *testing.T) {
+	tb := newTestBot(t)
+	discordUser := plugin.Identity{Platform: "discord", UserID: "D7", Channel: "C9", ThreadID: "9"}
+	if _, err := tb.reg.Connect(context.Background(), discordUser, "testoffice",
+		map[string]string{"username": "kim", "password": testPassword}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, prompts := plugin.ContextWithPrompts(plugin.ContextWithIdentity(context.Background(), discordUser))
+	if _, err := tb.reg.Dispatch(ctx, "testoffice_submit_purchase", map[string]any{"key": "p1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	id := prompts.List()[0].ActionID
+	tb.setActionTime(t, id, "expires_at", time.Now().Add(-time.Minute))
+	runJanitorOnce(tb)
+	if !strings.Contains(tb.logs.String(), "no bot for this platform") || !strings.Contains(tb.logs.String(), "platform=discord") {
+		t.Errorf("no warning for the discord action; logs:\n%s", tb.logs.String())
+	}
+	if len(tb.pf.list("update")) != 0 {
+		t.Error("the slack bot touched a discord prompt")
 	}
 }

@@ -333,7 +333,7 @@ Disconnecting works the same way. When someone asks the bot to disconnect their 
 
 A DaouOffice account can be signed in in one place only. If the person is signed in elsewhere and did not tick the checkbox when connecting, the bot asks first: **끊고 진행** signs in (ending the other session) and runs the original message again; **취소** drops it. When this happens at submission time, the bot offers **끊고 상신** instead.
 
-If the bot restarts while a submission is running, it marks the submission failed on the next start and DMs the person to check the document box, because the outcome is unknown.
+A restart or deploy waits for a submission that is already running (up to about five minutes) before it stops the plugin; the systemd unit uses `KillMode=mixed` so the plugin is not stopped underneath it. If the bot still stops mid-submission (a crash, a kill), it marks the submission failed on the next start and DMs the person to check the document box, because the outcome is unknown.
 
 ---
 

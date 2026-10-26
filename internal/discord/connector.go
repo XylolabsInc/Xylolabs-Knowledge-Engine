@@ -315,12 +315,12 @@ func (c *Connector) handleInteraction(s *discordgo.Session, i *discordgo.Interac
 		if !bot.ActionOpensForm(actionID) {
 			c.ackInteraction(s, i.Interaction)
 		}
-		go c.botHandler.HandleAction(c.ctx, a)
+		c.botHandler.HandleAction(c.ctx, a)
 	case discordgo.InteractionModalSubmit:
 		data := i.ModalSubmitData()
 		callbackID, metadata, _ := strings.Cut(data.CustomID, "|")
 		c.ackInteraction(s, i.Interaction)
-		go c.botHandler.HandleFormSubmission(c.ctx, &bot.FormSubmission{
+		c.botHandler.HandleFormSubmission(c.ctx, &bot.FormSubmission{
 			Platform:   "discord",
 			UserID:     userID,
 			CallbackID: callbackID,

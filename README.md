@@ -236,6 +236,9 @@ Plugins connect the bot to other systems through a per-person account and a huma
 | `DAOUOFFICE_COMMAND` | Command line that starts the plugin; quoted like a shell command but run without one | `node --disable-warning=ExperimentalWarning plugins/daouoffice/src/server.mjs` |
 | `DAOUOFFICE_DATA_DIR` | Plugin database, files, and attachment inbox | `data/plugins/daouoffice` |
 | `DAOUOFFICE_CONFIG` | Company rules JSON for the plugin (server only, not committed) | `configs/daouoffice.json` |
+| `DAOUOFFICE_LOG_LEVEL` | Plugin log level: `debug`, `info`, `warn`, `error` | `info` |
+| `DAOUOFFICE_MAX_CONTEXTS` | Browser contexts the plugin keeps open at once | `2` |
+| `DAOUOFFICE_MAX_PARKED` | Idle signed-in sessions the plugin keeps | `6` |
 
 ### KB Generation (Go tool: `kb-gen`)
 
