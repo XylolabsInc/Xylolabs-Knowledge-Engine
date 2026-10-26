@@ -102,6 +102,7 @@ func (c *Connector) Name() kb.Source {
 // Start begins listening for real-time Discord events via the gateway.
 func (c *Connector) Start(done <-chan struct{}) error {
 	c.session.AddHandler(c.handleMessageCreate)
+	c.session.AddHandler(c.handleInteraction)
 
 	if err := c.session.Open(); err != nil {
 		return fmt.Errorf("open discord gateway: %w", err)
@@ -282,6 +283,86 @@ func (c *Connector) handleMessageCreate(s *discordgo.Session, m *discordgo.Messa
 			"error", err,
 		)
 	}
+}
+
+// handleInteraction routes button clicks and modal submissions to the bot.
+// Every interaction must be answered within 3 seconds: clicks are
+// acknowledged at once, except a click that opens a form, which the bot
+// answers with the modal itself. Submitted form values are never logged.
+func (c *Connector) handleInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if c.botHandler == nil || i.Interaction == nil {
+		return
+	}
+	userID := interactionUserID(i.Interaction)
+	if userID == "" {
+		return
+	}
+	switch i.Type {
+	case discordgo.InteractionMessageComponent:
+		data := i.MessageComponentData()
+		actionID, value, _ := strings.Cut(data.CustomID, "|")
+		a := &bot.Action{
+			Platform: "discord",
+			UserID:   userID,
+			Channel:  i.ChannelID,
+			ActionID: actionID,
+			Value:    value,
+			Trigger:  bot.DiscordTrigger(i.ID, i.Token),
+		}
+		if i.Message != nil {
+			a.MessageID = i.Message.ID
+		}
+		if !bot.ActionOpensForm(actionID) {
+			c.ackInteraction(s, i.Interaction)
+		}
+		go c.botHandler.HandleAction(c.ctx, a)
+	case discordgo.InteractionModalSubmit:
+		data := i.ModalSubmitData()
+		callbackID, metadata, _ := strings.Cut(data.CustomID, "|")
+		c.ackInteraction(s, i.Interaction)
+		go c.botHandler.HandleFormSubmission(c.ctx, &bot.FormSubmission{
+			Platform:   "discord",
+			UserID:     userID,
+			CallbackID: callbackID,
+			Metadata:   metadata,
+			Values:     modalValues(data.Components),
+		})
+	}
+}
+
+func (c *Connector) ackInteraction(s *discordgo.Session, i *discordgo.Interaction) {
+	err := s.InteractionRespond(i, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate})
+	if err != nil {
+		c.logger.Warn("failed to acknowledge discord interaction", "error", err)
+	}
+}
+
+// interactionUserID is the clicking user, in a guild (Member) or a DM (User).
+func interactionUserID(i *discordgo.Interaction) string {
+	if i.Member != nil && i.Member.User != nil {
+		return i.Member.User.ID
+	}
+	if i.User != nil {
+		return i.User.ID
+	}
+	return ""
+}
+
+// modalValues collects the text inputs of a submitted modal by custom ID.
+func modalValues(components []discordgo.MessageComponent) map[string]string {
+	values := map[string]string{}
+	for _, comp := range components {
+		row, ok := comp.(*discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, inner := range row.Components {
+			if input, ok := inner.(*discordgo.TextInput); ok {
+				values[input.CustomID] = input.Value
+			}
+		}
+	}
+	return values
 }
 
 func discordMsgToIncoming(m *discordgo.Message, isDM bool) *bot.IncomingMessage {

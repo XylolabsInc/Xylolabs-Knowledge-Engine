@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/slack-go/slack"
 
@@ -168,6 +170,27 @@ func (p *SlackPlatform) TrackThread(channel, threadID string) {
 
 // PostReply posts a reply to the given channel/thread using Slack Block Kit.
 func (p *SlackPlatform) PostReply(ctx context.Context, channel, threadID, text string) error {
+	blocks := slackSectionBlocks(text)
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(slackFallbackText(blocks), false),
+		slack.MsgOptionTS(threadID),
+		slack.MsgOptionBlocks(blocks...),
+	}
+	_, _, err := p.client.PostMessageContext(ctx, channel, opts...)
+	if err != nil {
+		return fmt.Errorf("post message: %w", err)
+	}
+	p.TrackThread(channel, threadID)
+	return nil
+}
+
+// slackSectionBlocks splits text into mrkdwn sections of at most 3000
+// characters, Slack's limit per section, cutting at paragraph or line breaks.
+func slackSectionBlocks(text string) []slack.Block {
 	const maxBlockTextLen = 3000
 
 	var blocks []slack.Block
@@ -181,6 +204,9 @@ func (p *SlackPlatform) PostReply(ctx context.Context, channel, threadID, text s
 			}
 			if cut < maxBlockTextLen/2 {
 				cut = maxBlockTextLen
+				for cut > 0 && !utf8.RuneStart(chunk[cut]) {
+					cut--
+				}
 			}
 			chunk = remaining[:cut]
 			remaining = strings.TrimLeft(remaining[cut:], "\n")
@@ -192,27 +218,121 @@ func (p *SlackPlatform) PostReply(ctx context.Context, channel, threadID, text s
 			nil, nil,
 		))
 	}
+	return blocks
+}
 
-	if len(blocks) == 0 {
-		return nil
-	}
-
+// slackFallbackText is the notification text for a message made of sections.
+func slackFallbackText(blocks []slack.Block) string {
 	fallback := blocks[0].(*slack.SectionBlock).Text.Text
 	if len(fallback) > 300 {
-		fallback = fallback[:297] + "..."
+		cut := 297
+		for cut > 0 && !utf8.RuneStart(fallback[cut]) {
+			cut--
+		}
+		fallback = fallback[:cut] + "..."
 	}
+	return fallback
+}
 
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(fallback, false),
+// PostPrompt posts text with a row of buttons and returns the message timestamp.
+func (p *SlackPlatform) PostPrompt(ctx context.Context, channel, threadID string, pr Prompt) (string, error) {
+	blocks := slackSectionBlocks(pr.Text)
+	if len(blocks) == 0 {
+		return "", errors.New("post prompt: empty text")
+	}
+	if len(pr.Buttons) > 0 {
+		elements := make([]slack.BlockElement, 0, len(pr.Buttons))
+		for _, b := range pr.Buttons {
+			btn := slack.NewButtonBlockElement(b.ActionID, b.Value, slack.NewTextBlockObject("plain_text", b.Label, false, false))
+			switch b.Style {
+			case "primary":
+				btn = btn.WithStyle(slack.StylePrimary)
+			case "danger":
+				btn = btn.WithStyle(slack.StyleDanger)
+			}
+			elements = append(elements, btn)
+		}
+		blocks = append(blocks, slack.NewActionBlock("plugin_buttons", elements...))
+	}
+	_, ts, err := p.client.PostMessageContext(ctx, channel,
+		slack.MsgOptionText(slackFallbackText(blocks), false),
 		slack.MsgOptionTS(threadID),
 		slack.MsgOptionBlocks(blocks...),
-	}
-	_, _, err := p.client.PostMessageContext(ctx, channel, opts...)
+	)
 	if err != nil {
-		return fmt.Errorf("post message: %w", err)
+		return "", fmt.Errorf("post prompt: %w", err)
 	}
-	p.TrackThread(channel, threadID)
+	if threadID != "" {
+		p.TrackThread(channel, threadID)
+	}
+	return ts, nil
+}
+
+// UpdatePrompt replaces a prompt's text and drops its buttons.
+func (p *SlackPlatform) UpdatePrompt(ctx context.Context, channel, messageID, text string) error {
+	blocks := slackSectionBlocks(text)
+	if len(blocks) == 0 {
+		return errors.New("update prompt: empty text")
+	}
+	_, _, _, err := p.client.UpdateMessageContext(ctx, channel, messageID,
+		slack.MsgOptionText(slackFallbackText(blocks), false),
+		slack.MsgOptionBlocks(blocks...),
+	)
+	if err != nil {
+		return fmt.Errorf("update prompt: %w", err)
+	}
 	return nil
+}
+
+// OpenForm opens a modal (views.open) for the click that produced trigger.
+// Slack's plain_text_input cannot mask input, so secret fields are only
+// labelled as such; their values are never echoed back.
+func (p *SlackPlatform) OpenForm(ctx context.Context, trigger string, f Form) error {
+	plain := func(s string, limit int) *slack.TextBlockObject {
+		return slack.NewTextBlockObject("plain_text", truncateRunes(s, limit), false, false)
+	}
+	var blocks []slack.Block
+	if f.Intro != "" {
+		blocks = append(blocks, slack.NewContextBlock("intro", slack.NewTextBlockObject("mrkdwn", f.Intro, false, false)))
+	}
+	for _, field := range f.Fields {
+		var hint *slack.TextBlockObject
+		if field.Hint != "" {
+			hint = plain(field.Hint, 2000)
+		}
+		var element slack.BlockElement
+		if field.Checkbox {
+			element = slack.NewCheckboxGroupsBlockElement(field.ID,
+				slack.NewOptionBlockObject("true", plain("예", 75), nil))
+		} else {
+			element = slack.NewPlainTextInputBlockElement(nil, field.ID)
+		}
+		input := slack.NewInputBlock(field.ID, plain(field.Label, 2000), hint, element)
+		input.Optional = field.Optional || field.Checkbox
+		blocks = append(blocks, input)
+	}
+	view := slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		CallbackID:      f.CallbackID,
+		Title:           plain(f.Title, 24),
+		Submit:          plain(f.Submit, 24),
+		Close:           plain("취소", 24),
+		PrivateMetadata: f.Metadata,
+		Blocks:          slack.Blocks{BlockSet: blocks},
+	}
+	if _, err := p.client.OpenViewContext(ctx, trigger, view); err != nil {
+		return fmt.Errorf("open form: %w", err)
+	}
+	return nil
+}
+
+// OpenDM opens (or reuses) the direct message channel with a user.
+func (p *SlackPlatform) OpenDM(ctx context.Context, userID string) (string, error) {
+	ch, _, _, err := p.client.OpenConversationContext(ctx, &slack.OpenConversationParameters{Users: []string{userID}})
+	if err != nil {
+		return "", fmt.Errorf("open dm: %w", err)
+	}
+	return ch.ID, nil
 }
 
 // UploadFile uploads a file to the given Slack channel/thread.

@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"strings"
 	"sync"
@@ -61,9 +62,13 @@ func NewConnector(botToken, appToken string, engine *kb.Engine, store kb.Storage
 		botToken,
 		slack.OptionAppLevelToken(appToken),
 	)
+	// OptionDebug stays off: in debug mode socketmode prints every raw
+	// WebSocket message, and a view_submission carries the password typed into
+	// the plugin connect form. redactingLog drops such lines in case someone
+	// turns it on.
 	socketClient := socketmode.New(
 		client,
-		socketmode.OptionLog(slog.NewLogLogger(logger.Handler(), slog.LevelDebug)),
+		socketmode.OptionLog(redactingLog{slog.NewLogLogger(logger.Handler(), slog.LevelDebug)}),
 	)
 
 	return &Connector{
@@ -305,6 +310,18 @@ func (c *Connector) processEvent(ctx context.Context, evt socketmode.Event) {
 		c.socketClient.Ack(*evt.Request)
 		c.logger.Debug("events API event", "event_type", eventsAPIEvent.Type, "inner_type", eventsAPIEvent.InnerEvent.Type)
 		c.handleEventsAPI(ctx, eventsAPIEvent)
+	case socketmode.EventTypeInteractive:
+		// Ack first: Slack shows an error after 3 seconds, and an ack without a
+		// payload is what closes a submitted modal.
+		if evt.Request != nil {
+			c.socketClient.Ack(*evt.Request)
+		}
+		cb, ok := evt.Data.(slack.InteractionCallback)
+		if !ok {
+			c.logger.Warn("failed to cast interactive event")
+			return
+		}
+		c.handleInteraction(ctx, cb)
 	case socketmode.EventTypeConnecting:
 		c.logger.Debug("slack connecting")
 	case socketmode.EventTypeConnected:
@@ -406,6 +423,102 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event slackevents.Event
 			}
 		}
 	}
+}
+
+// handleInteraction routes button clicks and modal submissions to the bot.
+// Submitted form values are never logged.
+func (c *Connector) handleInteraction(ctx context.Context, cb slack.InteractionCallback) {
+	if c.botHandler == nil {
+		return
+	}
+	switch cb.Type {
+	case slack.InteractionTypeBlockActions:
+		for _, a := range interactionActions(cb) {
+			go c.botHandler.HandleAction(ctx, a)
+		}
+	case slack.InteractionTypeViewSubmission:
+		if f := interactionForm(cb); f != nil {
+			go c.botHandler.HandleFormSubmission(ctx, f)
+		}
+	default:
+		c.logger.Debug("unhandled interaction", "type", cb.Type)
+	}
+}
+
+// interactionActions converts a block_actions payload to button clicks.
+func interactionActions(cb slack.InteractionCallback) []*bot.Action {
+	channel := cb.Channel.ID
+	if channel == "" {
+		channel = cb.Container.ChannelID
+	}
+	messageID := cb.Message.Timestamp
+	if messageID == "" {
+		messageID = cb.Container.MessageTs
+	}
+	threadID := cb.Message.ThreadTimestamp
+	if threadID == "" {
+		threadID = cb.Container.ThreadTs
+	}
+	var out []*bot.Action
+	for _, ba := range cb.ActionCallback.BlockActions {
+		if ba == nil || ba.ActionID == "" {
+			continue
+		}
+		out = append(out, &bot.Action{
+			Platform:  "slack",
+			UserID:    cb.User.ID,
+			Channel:   channel,
+			ThreadID:  threadID,
+			MessageID: messageID,
+			ActionID:  ba.ActionID,
+			Value:     ba.Value,
+			Trigger:   cb.TriggerID,
+		})
+	}
+	return out
+}
+
+// interactionForm converts a view_submission payload to a form submission.
+// Each input's block ID and action ID are the form field ID.
+func interactionForm(cb slack.InteractionCallback) *bot.FormSubmission {
+	if cb.View.CallbackID == "" {
+		return nil
+	}
+	values := map[string]string{}
+	if cb.View.State != nil {
+		for _, actions := range cb.View.State.Values {
+			for actionID, v := range actions {
+				switch v.Type {
+				case slack.ActionType("checkboxes"):
+					if len(v.SelectedOptions) > 0 {
+						values[actionID] = "true"
+					} else {
+						values[actionID] = ""
+					}
+				default:
+					values[actionID] = v.Value
+				}
+			}
+		}
+	}
+	return &bot.FormSubmission{
+		Platform:   "slack",
+		UserID:     cb.User.ID,
+		CallbackID: cb.View.CallbackID,
+		Metadata:   cb.View.PrivateMetadata,
+		Values:     values,
+	}
+}
+
+// redactingLog wraps the socketmode logger and drops any line that carries
+// a modal submission.
+type redactingLog struct{ l *log.Logger }
+
+func (r redactingLog) Output(depth int, s string) error {
+	if strings.Contains(s, "view_submission") || strings.Contains(s, `"state"`) {
+		return r.l.Output(depth+1, "socketmode: line withheld (interactive payload)")
+	}
+	return r.l.Output(depth+1, s)
 }
 
 // slackEventToIncomingMessage converts a Slack event to a platform-agnostic IncomingMessage.

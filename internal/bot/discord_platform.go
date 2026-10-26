@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -229,6 +230,126 @@ func (p *DiscordPlatform) UploadFile(ctx context.Context, channel, threadID, fil
 		return fmt.Errorf("upload file: %w", err)
 	}
 	return nil
+}
+
+// discordCustomIDSep joins an action ID and its value in a component custom_id.
+const discordCustomIDSep = "|"
+
+// PostPrompt posts text with a row of buttons. Text longer than one message
+// goes out first as plain messages; the buttons ride on the last part. The
+// returned ID is "<channel>/<message>", because the message may live in a
+// thread channel rather than in channel.
+func (p *DiscordPlatform) PostPrompt(ctx context.Context, channel, threadID string, pr Prompt) (string, error) {
+	targetChannel := threadID
+	if targetChannel == "" {
+		targetChannel = channel
+	}
+	if strings.TrimSpace(pr.Text) == "" {
+		return "", errors.New("post prompt: empty text")
+	}
+	chunks := splitDiscordMessage(pr.Text)
+	for _, chunk := range chunks[:len(chunks)-1] {
+		if _, err := p.session.ChannelMessageSend(targetChannel, chunk, discordgo.WithContext(ctx)); err != nil {
+			return "", fmt.Errorf("post prompt: %w", err)
+		}
+	}
+	send := &discordgo.MessageSend{Content: chunks[len(chunks)-1]}
+	if len(pr.Buttons) > 0 {
+		row := discordgo.ActionsRow{}
+		for _, b := range pr.Buttons {
+			style := discordgo.SecondaryButton
+			switch b.Style {
+			case "primary":
+				style = discordgo.PrimaryButton
+			case "danger":
+				style = discordgo.DangerButton
+			}
+			row.Components = append(row.Components, discordgo.Button{
+				Label: b.Label, Style: style, CustomID: b.ActionID + discordCustomIDSep + b.Value,
+			})
+		}
+		send.Components = []discordgo.MessageComponent{row}
+	}
+	msg, err := p.session.ChannelMessageSendComplex(targetChannel, send, discordgo.WithContext(ctx))
+	if err != nil {
+		return "", fmt.Errorf("post prompt: %w", err)
+	}
+	p.TrackThread(channel, threadID)
+	return targetChannel + "/" + msg.ID, nil
+}
+
+// UpdatePrompt replaces a prompt's text and removes its buttons.
+func (p *DiscordPlatform) UpdatePrompt(ctx context.Context, channel, messageID, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("update prompt: empty text")
+	}
+	if c, m, ok := strings.Cut(messageID, "/"); ok {
+		channel, messageID = c, m
+	}
+	content := truncateRunes(text, discordMaxLen)
+	none := []discordgo.MessageComponent{}
+	_, err := p.session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+		ID: messageID, Channel: channel, Content: &content, Components: &none,
+	}, discordgo.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("update prompt: %w", err)
+	}
+	return nil
+}
+
+// DiscordTrigger encodes the interaction a form opens in reply to. A modal
+// must be the first response to an interaction, so the connector does not
+// acknowledge clicks for which ActionOpensForm is true.
+func DiscordTrigger(interactionID, token string) string { return interactionID + ":" + token }
+
+// OpenForm answers a button click with a modal. Discord modals hold at most
+// five text inputs and have no checkbox, so a checkbox becomes a short
+// input that takes "예".
+func (p *DiscordPlatform) OpenForm(ctx context.Context, trigger string, f Form) error {
+	id, token, ok := strings.Cut(trigger, ":")
+	if !ok || id == "" || token == "" {
+		return errors.New("open form: invalid trigger")
+	}
+	var rows []discordgo.MessageComponent
+	for i, field := range f.Fields {
+		if i == 5 {
+			break
+		}
+		input := discordgo.TextInput{
+			CustomID:    field.ID,
+			Label:       truncateRunes(field.Label, 45),
+			Style:       discordgo.TextInputShort,
+			Placeholder: truncateRunes(field.Hint, 100),
+			Required:    !field.Optional && !field.Checkbox,
+			MaxLength:   256,
+		}
+		if field.Checkbox {
+			input.Placeholder = "허락하면 '예'라고 적어 주세요"
+			input.MaxLength = 10
+		}
+		rows = append(rows, discordgo.ActionsRow{Components: []discordgo.MessageComponent{input}})
+	}
+	err := p.session.InteractionRespond(&discordgo.Interaction{ID: id, Token: token}, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID:   f.CallbackID + discordCustomIDSep + f.Metadata,
+			Title:      truncateRunes(f.Title, 45),
+			Components: rows,
+		},
+	}, discordgo.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("open form: %w", err)
+	}
+	return nil
+}
+
+// OpenDM opens (or reuses) the direct message channel with a user.
+func (p *DiscordPlatform) OpenDM(ctx context.Context, userID string) (string, error) {
+	ch, err := p.session.UserChannelCreate(userID, discordgo.WithContext(ctx))
+	if err != nil {
+		return "", fmt.Errorf("open dm: %w", err)
+	}
+	return ch.ID, nil
 }
 
 // slackToUnicodeEmoji maps common Slack emoji names to Unicode equivalents.

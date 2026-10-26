@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,17 +16,23 @@ import (
 	"github.com/xylolabsinc/xylolabs-kb/internal/extractor"
 	"github.com/xylolabsinc/xylolabs-kb/internal/gemini"
 	"github.com/xylolabsinc/xylolabs-kb/internal/kbrepo"
+	"github.com/xylolabsinc/xylolabs-kb/internal/plugin"
 	"github.com/xylolabsinc/xylolabs-kb/internal/tools"
 )
 
 //go:embed system_prompt.txt
 var systemPromptTemplate string
 
+// generator is the model call the bot makes; *gemini.Client implements it.
+type generator interface {
+	Generate(ctx context.Context, req gemini.GenerateRequest) (*gemini.GenerateResponse, error)
+}
+
 // Bot handles incoming messages with Gemini-powered responses.
 // It is platform-agnostic: all platform I/O is delegated to b.platform.
 type Bot struct {
 	platform     Platform
-	gemini       *gemini.Client
+	gemini       generator
 	kbReader     *kbrepo.Reader
 	proModel     string
 	systemPrompt string
@@ -34,6 +41,8 @@ type Bot struct {
 	logger       *slog.Logger
 	toolExecutor *tools.ToolExecutor
 	extractor    *extractor.Extractor
+	plugins      *plugin.Registry
+	inflight     sync.Map // plugin action IDs being decided by this bot
 	wg           sync.WaitGroup
 }
 
@@ -145,6 +154,13 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		threadID = msg.MessageID
 	}
 
+	// A bare "승인" or "취소" in a thread with a pending plugin action decides
+	// it directly; the model is not involved.
+	if !msg.rerun && b.handleTextDecision(ctx, msg, threadID, query) {
+		return
+	}
+	originalQuery := query
+
 	// Resolve user mentions in the query text.
 	query = b.platform.CleanMentions(ctx, query)
 
@@ -228,6 +244,18 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 		fileNames = append(fileNames, fileName)
 	}
 
+	// Files kept from an earlier run of this message (see resumeAfterKick).
+	for name, data := range msg.preloaded {
+		if _, exists := fileAttachments[name]; exists || len(data) == 0 {
+			continue
+		}
+		if mimeType := http.DetectContentType(data); strings.HasPrefix(mimeType, "image/") {
+			images = append(images, gemini.Image{MimeType: mimeType, Data: data})
+		}
+		fileAttachments[name] = data
+		fileNames = append(fileNames, name)
+	}
+
 	// Also fetch files from previous messages in the thread.
 	if msg.ThreadID != "" {
 		threadFiles := b.platform.FetchThreadFiles(ctx, msg.Channel, threadID, msg.MessageID)
@@ -285,11 +313,25 @@ func (b *Bot) respond(ctx context.Context, msg *IncomingMessage, query string, s
 	userName := b.platform.ResolveUserName(ctx, msg.UserID)
 	now := time.Now().In(b.location)
 	currentTime := now.Format("2006-01-02 (Monday) 15:04 MST") + " (" + b.location.String() + ")"
-	systemPrompt := fmt.Sprintf(b.systemPrompt, userName, platformFormattingInstructions(b.platform.Name())) + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
+	systemPrompt := fmt.Sprintf(b.systemPrompt, userName, platformFormattingInstructions(b.platform.Name())) + b.pluginInstructions() + "\n\nCurrent date and time: " + currentTime + "\n\n--- Reference Materials ---\n" + kbContext + "\n---"
 
 	if len(systemPrompt) > maxSystemPromptChars {
 		systemPrompt = truncateUTF8(systemPrompt, maxSystemPromptChars) + "\n[... truncated ...]"
 		b.logger.Warn("system prompt truncated", "length", len(systemPrompt), "max", maxSystemPromptChars)
+	}
+
+	// Plugin tools need to know who is asking. The prompts they queue (buttons,
+	// connect DMs, files) are posted after the reply, whichever way this returns.
+	if b.plugins != nil {
+		id := plugin.Identity{
+			Platform: b.platform.Name(), UserID: msg.UserID, UserName: userName,
+			Channel: msg.Channel, ThreadID: threadID, MessageID: msg.MessageID,
+			Text: originalQuery, IsDM: msg.IsDM,
+		}
+		var prompts *plugin.Prompts
+		ctx = plugin.ContextWithIdentity(ctx, id)
+		ctx, prompts = plugin.ContextWithPrompts(ctx)
+		defer b.afterReply(ctx, id, prompts)
 	}
 
 	// 4. Build conversation messages with thread history for context continuity.
