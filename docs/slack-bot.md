@@ -325,6 +325,10 @@ Tools that submit something (구매 품의서, 검수조서, 지출결의, 출�
 
 Typing exactly `승인`, `상신`, `진행`, `ok` or `OK` in the thread approves the person's pending preview, and `취소` cancels it, without going through the model. This also works in workspaces where buttons are not available.
 
+Which tools wait for approval is decided by the plugin's tool metadata and fails closed: a tool runs at once only when its `_meta["xylolabs/kind"]` is `read` or `local` (or, without a kind, when it is annotated read-only). Everything else waits for the button.
+
+Disconnecting works the same way. When someone asks the bot to disconnect their account, it posts **연결 해제** and **취소** buttons and removes the stored ID and password only after the owner presses **연결 해제**, so text the model reads (a document, a forwarded message) cannot disconnect anyone.
+
 ### Another session is open
 
 A DaouOffice account can be signed in in one place only. If the person is signed in elsewhere and did not tick the checkbox when connecting, the bot asks first: **끊고 진행** signs in (ending the other session) and runs the original message again; **취소** drops it. When this happens at submission time, the bot offers **끊고 상신** instead.

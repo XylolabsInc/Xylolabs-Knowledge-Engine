@@ -53,7 +53,7 @@ Every connector must implement all four methods: `Name() Source`, `Start(done <-
 | `internal/tools/` | MessagePoster/ChannelResolver interfaces for bot tools | Platform-specific logic |
 | `internal/kbrepo/` | Markdown KB repo reader for bot context | HTTP, SQL, connector logic |
 | `internal/plugin/` | Plugin registry (tool prefixing, write gating, pending actions), credential vault, schema sanitizer | Platform calls, MCP transport |
-| `internal/plugin/mcpstdio/` | Runs a plugin as an MCP server over stdio and adapts it to `plugin.Plugin` | Registry logic, storage |
+| `internal/plugin/mcpstdio/` | Runs a plugin as an MCP server over stdio and adapts it to `plugin.Plugin`; gating fails closed (only `_meta["xylolabs/kind"]` `read`/`local`, or `readOnlyHint` without a kind, skips approval) | Registry logic, storage |
 | `plugins/daouoffice/` | Node 24 MCP server for DaouOffice (Playwright); own `node:sqlite` DB | Go code, company data (config lives on the server) |
 | `internal/gemini/` | Gemini API client (text + vision) | Storage, bot logic |
 | `internal/extractor/` | Content extraction (PDF, images, Office, web) | HTTP routing, sync logic |

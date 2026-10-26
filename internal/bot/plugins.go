@@ -20,6 +20,7 @@ const (
 	actionCancel      = "plugin_cancel"       // Value: action ID
 	actionKick        = "plugin_kick"         // Value: login_kick action ID; signs in, then runs the message again
 	actionKickApprove = "plugin_kick_approve" // Value: call action ID; signs in, then approves
+	actionDisconnect  = "plugin_disconnect"   // Value: disconnect action ID; forgets the stored account
 	formConnect       = "plugin_connect_form"
 )
 
@@ -48,6 +49,7 @@ const (
 	textNotOwner      = "이 요청은 요청한 사람만 승인하거나 취소할 수 있습니다."
 	textPrivateFiles  = "개인정보가 있어 DM으로 보냈습니다"
 	textConnectIntro  = "입력한 값은 암호화해 보관하고 대화에는 남기지 않습니다. 비밀번호는 이 창에만 넣어 주세요."
+	textServerConfig  = "서버 설정 문제로 계정을 읽지 못했습니다. 관리자에게 알려 주세요."
 	textPromptMissing = "확인이 필요한 요청이 있습니다. 아래 버튼으로 진행하거나 취소해 주세요."
 )
 
@@ -125,6 +127,11 @@ func (b *Bot) postPluginPrompt(ctx context.Context, id plugin.Identity, pr plugi
 		})
 	case plugin.PromptNotice:
 		b.postFiles(ctx, id.Channel, id.ThreadID, id.UserID, pr.Files)
+	case plugin.PromptDisconnect:
+		b.postActionPrompt(ctx, id.Channel, id.ThreadID, pr.ActionID, pr.Text, []Button{
+			{ActionID: actionDisconnect, Label: "연결 해제", Value: pr.ActionID, Style: "danger"},
+			{ActionID: actionCancel, Label: "취소", Value: pr.ActionID},
+		})
 	}
 }
 
@@ -312,6 +319,8 @@ func (b *Bot) HandleAction(ctx context.Context, a *Action) {
 		b.cancelAction(ctx, a)
 	case actionKick:
 		b.resumeAfterKick(ctx, a)
+	case actionDisconnect:
+		b.confirmDisconnect(ctx, a)
 	default:
 		b.logger.Debug("unknown button", "action", a.ActionID)
 	}
@@ -404,14 +413,22 @@ func (b *Bot) decisionFailed(ctx context.Context, ref promptRef, act *plugin.Act
 				{ActionID: actionKickApprove, Label: "끊고 상신", Value: act.ID, Style: "primary"},
 				{ActionID: actionCancel, Label: "취소", Value: act.ID, Style: "danger"},
 			})
+	case errors.Is(err, plugin.ErrVaultOpen):
+		ref.final(ctx, act.Preview, textServerConfig)
 	case errors.Is(err, plugin.ErrAuthFailed), errors.Is(err, plugin.ErrNotConnected):
 		ref.final(ctx, act.Preview, fmt.Sprintf("%s에 로그인하지 못해 상신하지 못했습니다. DM으로 보낸 버튼으로 계정을 다시 연결한 뒤, 이 스레드에 '승인'이라고 답하면 이어서 상신합니다.", title))
 		b.sendConnectPrompt(ctx, userID, act.Plugin, fmt.Sprintf("저장된 %s 비밀번호로 로그인하지 못했습니다. 비밀번호를 바꿨다면 다시 연결해 주세요.", title))
 	default:
+		// Without a plugin error, or with one raised after the plugin started
+		// changing the other system, nobody knows whether it went through.
 		msg := fmt.Sprintf("결과를 확인하지 못했습니다. %s 문서함에서 상신됐는지 직접 확인해 주세요.", title)
 		var pe *plugin.Error
 		if errors.As(err, &pe) && pe.Message != "" {
-			msg = "상신하지 못했습니다: " + pe.Message
+			if pe.OutcomeUnknown {
+				msg = fmt.Sprintf("처리 중에 문제가 생겨 결과를 확인하지 못했습니다: %s %s 문서함에서 상신됐는지 직접 확인해 주세요.", pe.Message, title)
+			} else {
+				msg = "상신하지 못했습니다: " + pe.Message
+			}
 		}
 		ref.progress(ctx, act.Preview, msg)
 		b.say(ctx, ref.threadsCh, ref.thread, msg)
@@ -462,6 +479,9 @@ func (b *Bot) resumeAfterKick(ctx context.Context, a *Action) {
 	case errors.Is(err, plugin.ErrExpired):
 		ref.final(ctx, "", textExpired)
 		return
+	case errors.Is(err, plugin.ErrVaultOpen):
+		ref.final(ctx, "", textServerConfig)
+		return
 	case errors.Is(err, plugin.ErrAuthFailed):
 		ref.final(ctx, "", fmt.Sprintf("%s에 로그인하지 못했습니다. 비밀번호를 바꿨다면 DM으로 보낸 버튼으로 다시 연결해 주세요.", title))
 		b.sendConnectPrompt(ctx, a.UserID, act.Plugin, fmt.Sprintf("저장된 %s 비밀번호로 로그인하지 못했습니다. 비밀번호를 바꿨다면 다시 연결해 주세요.", title))
@@ -491,6 +511,32 @@ func (b *Bot) resumeAfterKick(ctx context.Context, a *Action) {
 		msg.ThreadID = "" // the request opened its own thread
 	}
 	b.respond(ctx, msg, o.Text, false)
+}
+
+// confirmDisconnect forgets the owner's account after they pressed the
+// button; the model can only ask for it.
+func (b *Bot) confirmDisconnect(ctx context.Context, a *Action) {
+	act, ok := b.owned(ctx, a)
+	if !ok || act.Kind != plugin.ActionDisconnect || act.Status != plugin.StatusPending {
+		return
+	}
+	if !b.begin(act.ID) {
+		return
+	}
+	defer b.end(act.ID)
+	ref := b.refFor(a, act)
+	ref.progress(ctx, act.Preview, "연결을 해제하는 중…")
+	res, _, err := b.plugins.Approve(ctx, act.ID, plugin.Identity{Platform: b.platform.Name(), UserID: a.UserID})
+	switch {
+	case err == nil:
+		ref.final(ctx, "", res.Text)
+	case errors.Is(err, plugin.ErrNotPending):
+	case errors.Is(err, plugin.ErrExpired):
+		ref.final(ctx, act.Preview, textExpired)
+	default:
+		b.logger.Warn("plugin disconnect failed", "action", act.ID, "error", err)
+		ref.final(ctx, act.Preview, "연결을 해제하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+	}
 }
 
 // openConnectForm opens the account form of the clicked plugin.

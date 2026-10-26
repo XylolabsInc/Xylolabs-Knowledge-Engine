@@ -794,3 +794,60 @@ func TestCheckboxValue(t *testing.T) {
 		}
 	}
 }
+
+func TestDisconnectNeedsTheButton(t *testing.T) {
+	tb := newTestBot(t)
+	tb.connect(t)
+	tb.gen.tool, tb.gen.args = "accounts_disconnect", map[string]any{"plugin": "testoffice"}
+	tb.ask(message("U1", "다우오피스 연결 끊어줘", "1.0", ""))
+
+	var prompt event
+	for _, p := range tb.pf.list("prompt") {
+		if len(p.buttons) == 2 && p.buttons[0].ActionID == actionDisconnect {
+			prompt = p
+		}
+	}
+	if prompt.message == "" || prompt.channel != "C1" || prompt.thread != "1.0" || prompt.buttons[0].Label != "연결 해제" || prompt.buttons[1].ActionID != actionCancel {
+		t.Fatalf("no disconnect prompt; events = %+v", tb.pf.list(""))
+	}
+	stored := func() bool {
+		acct, _ := tb.store.GetPluginAccount(context.Background(), "slack:U1", "testoffice")
+		return acct != nil
+	}
+	if !stored() {
+		t.Fatal("the model removed the account without the button")
+	}
+
+	tb.click("U9", actionDisconnect, prompt.buttons[0].Value, prompt.message)
+	if !stored() {
+		t.Fatal("a stranger's click removed the account")
+	}
+	tb.click("U1", actionDisconnect, prompt.buttons[0].Value, prompt.message)
+	if stored() {
+		t.Error("account still stored after the owner confirmed")
+	}
+	updates := tb.pf.list("update")
+	if last := updates[len(updates)-1]; last.message != prompt.message || !strings.Contains(last.text, "연결을 해제했습니다") {
+		t.Errorf("last update = %+v", last)
+	}
+}
+
+func TestFailureAfterWriteIsUnknownOutcome(t *testing.T) {
+	tb := newTestBot(t)
+	tb.connect(t)
+	prompt := tb.requestApproval(t)
+	tb.plug.mu.Lock()
+	tb.plug.executeErrs = []error{&plugin.Error{Code: plugin.CodeUpstream, Message: "중간에 끊겼습니다.", OutcomeUnknown: true}}
+	tb.plug.mu.Unlock()
+	tb.click("U1", actionApprove, prompt.buttons[0].Value, prompt.message)
+
+	var said string
+	for _, r := range tb.pf.list("reply") {
+		if r.channel == "C1" && r.thread == "1.0" && strings.Contains(r.text, "중간에 끊겼습니다") {
+			said = r.text
+		}
+	}
+	if !strings.Contains(said, "결과를 확인하지 못했습니다") || strings.Contains(said, "상신하지 못했습니다") {
+		t.Errorf("thread message = %q; want an unknown outcome, not a failure", said)
+	}
+}
