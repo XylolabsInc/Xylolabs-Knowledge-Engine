@@ -269,6 +269,33 @@ func (s *SQLiteStore) ExpirePluginActions(ctx context.Context, now time.Time) ([
 	return actions, nil
 }
 
+// FailStalePluginActions marks every action still running since before as
+// failed with result, and returns them. A running action that old outlived
+// its call timeout, which means the bot stopped while it ran.
+func (s *SQLiteStore) FailStalePluginActions(ctx context.Context, before time.Time, result string) ([]PluginAction, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		UPDATE plugin_actions SET status = 'failed', result = ?, updated_at = ?
+		WHERE status = 'running' AND updated_at <= ?
+		RETURNING `+pluginActionColumns,
+		result, time.Now().UTC(), before.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("storage: fail stale plugin actions: %w", err)
+	}
+	defer rows.Close()
+	var actions []PluginAction
+	for rows.Next() {
+		a, err := scanPluginAction(rows)
+		if err != nil {
+			return nil, fmt.Errorf("storage: scan stale plugin action: %w", err)
+		}
+		actions = append(actions, *a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: fail stale plugin actions: %w", err)
+	}
+	return actions, nil
+}
+
 func scanPluginAccount(row scanner) (*PluginAccount, error) {
 	var a PluginAccount
 	var allowKick int

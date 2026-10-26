@@ -35,6 +35,7 @@ type Store interface {
 	SetPluginActionPrompt(ctx context.Context, id, channel, message string) error
 	PendingPluginActionInThread(ctx context.Context, userKey, channel, thread string, now time.Time) (*storage.PluginAction, error)
 	ExpirePluginActions(ctx context.Context, now time.Time) ([]storage.PluginAction, error)
+	FailStalePluginActions(ctx context.Context, before time.Time, result string) ([]storage.PluginAction, error)
 }
 
 // ActionKind is what a pending action does once a person decides.
@@ -718,6 +719,40 @@ func (r *Registry) Cancel(ctx context.Context, actionID string, by Identity) (*A
 		r.removeInbox(p, actionID)
 	}
 	return act, nil
+}
+
+// Action returns an action by ID without changing it, or ErrActionNotFound.
+// The bot uses it to check the owner before it updates a prompt.
+func (r *Registry) Action(ctx context.Context, actionID string) (*Action, error) {
+	row, err := r.store.GetPluginAction(ctx, actionID)
+	if err != nil {
+		return nil, fmt.Errorf("plugin: load action %s: %w", actionID, err)
+	}
+	if row == nil {
+		return nil, ErrActionNotFound
+	}
+	return decodeAction(row), nil
+}
+
+// RecoverStale marks actions that have been running for longer than
+// olderThan as failed and returns them, so the bot can tell their owners
+// that the outcome is unknown. olderThan must exceed the execute timeout.
+func (r *Registry) RecoverStale(ctx context.Context, olderThan time.Duration) ([]Action, error) {
+	rows, err := r.store.FailStalePluginActions(ctx, r.now().Add(-olderThan),
+		mustJSON(map[string]string{"error": "the bot stopped while this ran; the outcome is unknown"}, ""))
+	if err != nil {
+		return nil, fmt.Errorf("plugin: recover stale actions: %w", err)
+	}
+	actions := make([]Action, 0, len(rows))
+	for i := range rows {
+		act := decodeAction(&rows[i])
+		if p := r.plugin(act.Plugin); p != nil {
+			r.removeInbox(p, act.ID)
+		}
+		r.logger.Warn("plugin action was left running; marked failed", "plugin", act.Plugin, "tool", act.Tool, "action", act.ID, "user", act.UserKey)
+		actions = append(actions, *act)
+	}
+	return actions, nil
 }
 
 // PendingInThread returns the person's newest pending action in their

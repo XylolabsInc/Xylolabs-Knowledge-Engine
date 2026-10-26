@@ -888,3 +888,33 @@ func stringify(v any) string {
 	walk(v)
 	return b.String()
 }
+
+func TestActionAndRecoverStale(t *testing.T) {
+	env := newTestEnv(t)
+	env.connect(t, false)
+	id := env.submit(t, map[string][]byte{"photo.jpg": []byte("jpeg")})
+	path := env.p.callsTo("submit_purchase")[0].req.Attachments[0].Path
+
+	act, err := env.reg.Action(context.Background(), id)
+	if err != nil || act.ID != id || act.UserKey != "slack:U1" || act.Status != StatusPending || act.Preview != "품의서 미리보기" {
+		t.Fatalf("Action() = %+v, %v", act, err)
+	}
+	if _, err := env.reg.Action(context.Background(), "nope"); !errors.Is(err, ErrActionNotFound) {
+		t.Errorf("Action(missing) = %v, want ErrActionNotFound", err)
+	}
+
+	if ok, _ := env.store.TransitionPluginAction(context.Background(), id, "pending", "running", ""); !ok {
+		t.Fatal("could not move the action to running")
+	}
+	if got, err := env.reg.RecoverStale(context.Background(), 10*time.Minute); err != nil || len(got) != 0 {
+		t.Fatalf("RecoverStale() right after start = %+v, %v; want none", got, err)
+	}
+	env.now = env.now.Add(11 * time.Minute)
+	got, err := env.reg.RecoverStale(context.Background(), 10*time.Minute)
+	if err != nil || len(got) != 1 || got[0].ID != id || got[0].Status != StatusFailed {
+		t.Fatalf("RecoverStale() = %+v, %v", got, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("attachments of a recovered action were kept")
+	}
+}

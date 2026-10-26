@@ -223,3 +223,27 @@ func TestExpirePluginActions(t *testing.T) {
 		}
 	}
 }
+
+func TestFailStalePluginActions(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"run", "wait"} {
+		if err := store.CreatePluginAction(ctx, newTestAction(id, time.Now().Add(time.Hour))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, _ := store.TransitionPluginAction(ctx, "run", "pending", "running", ""); !ok {
+		t.Fatal("transition to running failed")
+	}
+
+	if got, err := store.FailStalePluginActions(ctx, time.Now().Add(-time.Minute), `{"error":"x"}`); err != nil || len(got) != 0 {
+		t.Fatalf("FailStalePluginActions(before the start) = %+v, %v; want none", got, err)
+	}
+	got, err := store.FailStalePluginActions(ctx, time.Now().Add(time.Minute), `{"error":"x"}`)
+	if err != nil || len(got) != 1 || got[0].ID != "run" || got[0].Status != "failed" || got[0].Result != `{"error":"x"}` {
+		t.Fatalf("FailStalePluginActions() = %+v, %v; want the running action only", got, err)
+	}
+	if wait, _ := store.GetPluginAction(ctx, "wait"); wait.Status != "pending" {
+		t.Errorf("pending action status = %s, want pending", wait.Status)
+	}
+}
