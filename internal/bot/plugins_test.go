@@ -177,6 +177,8 @@ type testPlugin struct {
 	connectErr    error
 	executeErrs   []error       // returned by successive execute calls of the write tool
 	gate          chan struct{} // when set, write executes wait for it to close
+	loginGate     chan struct{} // when set, login waits for it to close
+	atGate        atomic.Int32  // executes currently waiting on gate
 	dupUntilLogin bool
 	loggedIn      bool
 }
@@ -205,7 +207,12 @@ func (p *testPlugin) AccountFields() []plugin.AccountField {
 
 func (p *testPlugin) Call(_ context.Context, req plugin.CallRequest) (*plugin.Result, error) {
 	if p.gate != nil && req.Tool == "submit_purchase" && req.Mode == plugin.ModeExecute {
+		p.atGate.Add(1)
 		<-p.gate
+		p.atGate.Add(-1)
+	}
+	if p.loginGate != nil && req.Tool == "login" {
+		<-p.loginGate
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -876,6 +883,14 @@ func TestShutdownWaitsForRunningApproval(t *testing.T) {
 	if time.Since(start) > time.Second {
 		t.Fatal("HandleAction blocked on the submission; connectors would miss Slack's 3-second window")
 	}
+	// Shutdown waits only for a submission already running, so let it start.
+	deadline := time.Now().Add(5 * time.Second)
+	for tb.plug.atGate.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the submission never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -983,5 +998,116 @@ func TestJanitorLogsPlatformsWithoutABot(t *testing.T) {
 	}
 	if len(tb.pf.list("update")) != 0 {
 		t.Error("the slack bot touched a discord prompt")
+	}
+}
+
+// Shutdown waits only for submissions already running. A kick-approve that
+// is still signing in when shutdown begins must not start its submission.
+func TestKickApproveDoesNotSubmitOnceShuttingDown(t *testing.T) {
+	tb := newTestBot(t)
+	tb.connect(t)
+	prompt := tb.requestApproval(t)
+	tb.plug.mu.Lock()
+	tb.plug.executeErrs = []error{&plugin.Error{Code: plugin.CodeDuplicateSession, Message: "다른 곳에서 접속 중"}}
+	tb.plug.mu.Unlock()
+	tb.click("U1", actionApprove, prompt.buttons[0].Value, prompt.message)
+	var offer event
+	for _, p := range tb.pf.list("prompt") {
+		if len(p.buttons) == 2 && p.buttons[0].ActionID == actionKickApprove {
+			offer = p
+		}
+	}
+	if offer.message == "" {
+		t.Fatal("no [끊고 상신] prompt")
+	}
+
+	tb.plug.loginGate = make(chan struct{})
+	tb.HandleAction(context.Background(), &Action{
+		Platform: "slack", UserID: "U1", Channel: "C1", MessageID: offer.message, ActionID: actionKickApprove, Value: offer.buttons[0].Value,
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, busy := tb.inflight.Load(offer.buttons[0].Value); busy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the kick-approve never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	tb.Shutdown(short) // shutdown begins while the login is still running
+	close(tb.plug.loginGate)
+	if !tb.Shutdown(context.Background()) {
+		t.Fatal("Shutdown did not finish")
+	}
+
+	if n := tb.plug.count("submit_purchase", plugin.ModeExecute); n != 1 {
+		t.Errorf("execute calls = %d, want only the refused first one", n)
+	}
+	act, _ := tb.reg.Action(context.Background(), offer.buttons[0].Value)
+	if act.Status != plugin.StatusPending {
+		t.Errorf("status = %s, want pending so it can be approved after the restart", act.Status)
+	}
+	var told, shown bool
+	for _, e := range tb.pf.list("") {
+		if e.kind == "reply" && e.channel == "D-U1" && e.text == textPausedRestart {
+			told = true
+		}
+		if e.kind == "update" && e.message == offer.message && strings.HasSuffix(e.text, textPausedRestart) {
+			shown = true
+		}
+	}
+	if !told || !shown {
+		t.Errorf("DM sent %v, prompt updated %v; events = %+v", told, shown, tb.pf.list(""))
+	}
+}
+
+func TestInputDuringShutdownGetsANotice(t *testing.T) {
+	tb := newTestBot(t)
+	tb.connect(t)
+	prompt := tb.requestApproval(t)
+	if !tb.Shutdown(context.Background()) {
+		t.Fatal("idle Shutdown did not finish")
+	}
+	before := len(tb.pf.list(""))
+
+	tb.HandleAction(context.Background(), &Action{
+		Platform: "slack", UserID: "U1", Channel: "C1", MessageID: prompt.message, ActionID: actionApprove, Value: prompt.buttons[0].Value,
+	})
+	tb.HandleFormSubmission(context.Background(), &FormSubmission{
+		Platform: "slack", UserID: "U2", CallbackID: formConnect, Metadata: "testoffice", Values: map[string]string{"username": "kim"},
+	})
+	tb.HandleMention(context.Background(), message("U1", "승인", "2.0", "1.0"))
+
+	want := map[string]bool{
+		"D-U1|" + textRestarting: false,
+		"D-U2|재시작 중이라 계정을 확인하지 못했습니다. 잠시 후 다시 연결해 주세요.": false,
+		"C1|재시작 중입니다. 잠시 후 다시 보내 주세요.":                  false,
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, e := range tb.pf.list("")[before:] {
+			if e.kind == "reply" {
+				if _, ok := want[e.channel+"|"+e.text]; ok {
+					want[e.channel+"|"+e.text] = true
+				}
+			}
+		}
+		all := true
+		for _, seen := range want {
+			all = all && seen
+		}
+		if all {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("notices seen = %v; events = %+v", want, tb.pf.list("")[before:])
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := tb.plug.count("submit_purchase", plugin.ModeExecute); n != 0 {
+		t.Errorf("executed %d times during shutdown", n)
 	}
 }

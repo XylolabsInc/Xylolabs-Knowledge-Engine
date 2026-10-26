@@ -133,6 +133,13 @@ func (b *Bot) goTracked(f func()) bool {
 	return true
 }
 
+// isClosing reports whether Shutdown has begun.
+func (b *Bot) isClosing() bool {
+	b.trackMu.Lock()
+	defer b.trackMu.Unlock()
+	return b.closing
+}
+
 // Shutdown stops new background work and waits for what is running (an
 // approved submission, a connect check) until ctx ends. Stopping a submission
 // halfway leaves its outcome unknown, so main gives this the plugin execute

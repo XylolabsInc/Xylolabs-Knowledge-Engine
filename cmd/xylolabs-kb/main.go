@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -338,53 +339,100 @@ func main() {
 
 	logger.Info("received shutdown signal", "signal", sig)
 
-	// Graceful shutdown
+	// Graceful shutdown. Every step is bounded and they run side by side, so
+	// the whole stop takes at most the bot drain plus the plugin close
+	// (stopBudget), which the systemd unit's TimeoutStopSec must exceed.
 	close(done)
-	scheduler.Stop()
-	if jobScheduler != nil {
-		jobScheduler.Stop()
-	}
 	if slackPlatform != nil {
 		slackPlatform.StopCleanup()
-	}
-	if discordJobScheduler != nil {
-		discordJobScheduler.Stop()
 	}
 	if discordPlatform != nil {
 		discordPlatform.StopCleanup()
 	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("api server shutdown error", "error", err)
+	var stopping sync.WaitGroup
+	step := func(name string, limit time.Duration, stop func()) {
+		stopping.Go(func() {
+			if !runWithin(limit, stop) {
+				logger.Warn("shutdown step did not finish in time; moving on", "step", name, "limit", limit.String())
+			}
+		})
 	}
-
+	// A sync or a scheduled post that is still running is cut off; the next
+	// start picks it up again.
+	step("sync scheduler", schedulerStopTimeout, scheduler.Stop)
+	if jobScheduler != nil {
+		step("slack job scheduler", schedulerStopTimeout, jobScheduler.Stop)
+	}
+	if discordJobScheduler != nil {
+		step("discord job scheduler", schedulerStopTimeout, discordJobScheduler.Stop)
+	}
+	step("api server", apiStopTimeout, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), apiStopTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			logger.Error("api server shutdown error", "error", err)
+		}
+	})
 	// Let running bot work finish before the plugin goes away: an approved
-	// submission cut off halfway has an unknown outcome. The bound is the
-	// plugin execute timeout plus its status write; the systemd unit's
-	// TimeoutStopSec leaves room for it.
-	drainCtx, cancelDrain := context.WithTimeout(context.Background(), botDrainTimeout)
+	// submission cut off halfway has an unknown outcome. Once draining, the
+	// bots start no new submissions, so a running one is the longest wait.
 	for _, b := range []*bot.Bot{botHandler, discordBotHandler} {
 		if b != nil {
-			b.Shutdown(drainCtx)
+			step("bot drain", botDrainTimeout, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), botDrainTimeout)
+				defer cancel()
+				b.Shutdown(ctx)
+			})
 		}
 	}
-	cancelDrain()
+	stopping.Wait()
 
 	if pluginRegistry != nil {
-		if err := pluginRegistry.Close(); err != nil {
-			logger.Warn("plugin shutdown error", "error", err)
+		closed := runWithin(pluginCloseTimeout, func() {
+			if err := pluginRegistry.Close(); err != nil {
+				logger.Warn("plugin shutdown error", "error", err)
+			}
+		})
+		if !closed {
+			logger.Warn("plugins did not close in time", "limit", pluginCloseTimeout.String())
 		}
 	}
 
 	logger.Info("xylolabs-kb stopped")
 }
 
-// botDrainTimeout bounds how long shutdown waits for running bot work: the
-// plugin execute timeout (5 minutes) plus the status write after it.
-const botDrainTimeout = 5*time.Minute + 10*time.Second
+// Shutdown bounds. The bot drain is the plugin execute timeout (5 minutes)
+// plus the status write after it: once draining, bots start no new
+// submission, so one already running is the longest wait. The plugin close
+// allows the MCP SDK's three 5-second waits (stdin closed, SIGTERM, SIGKILL).
+const (
+	schedulerStopTimeout = 20 * time.Second
+	apiStopTimeout       = 15 * time.Second
+	botDrainTimeout      = 5*time.Minute + 10*time.Second
+	pluginCloseTimeout   = 20 * time.Second
+)
+
+// stopBudget is the longest a shutdown takes: the parallel steps, then the
+// plugin close. TimeoutStopSec in configs/xylolabs-kb.service must exceed it.
+var stopBudget = max(schedulerStopTimeout, apiStopTimeout, botDrainTimeout) + pluginCloseTimeout
+
+// runWithin runs stop and waits for it at most limit. It reports whether stop
+// finished; one that did not keeps running until the process exits.
+func runWithin(limit time.Duration, stop func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stop()
+	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
 
 // daouOfficePassThroughEnv lists the bot's variables the plugin process gets
 // when set. mcpstdio starts plugins with a minimal environment, so anything

@@ -11,11 +11,55 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xylolabsinc/xylolabs-kb/internal/config"
 	"github.com/xylolabsinc/xylolabs-kb/internal/plugin"
 	"github.com/xylolabsinc/xylolabs-kb/internal/storage"
 )
+
+// The unit must give the bot longer than its own shutdown takes, or systemd
+// SIGKILLs the cgroup mid-submission; and only the bot may get SIGTERM.
+func TestStopBudgetFitsTheUnit(t *testing.T) {
+	unit, err := os.ReadFile(filepath.Join("..", "..", "configs", "xylolabs-kb.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stopSec int
+	var mixed bool
+	for _, line := range strings.Split(string(unit), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "TimeoutStopSec="); ok {
+			if stopSec, err = strconv.Atoi(v); err != nil {
+				t.Fatalf("TimeoutStopSec=%q is not plain seconds", v)
+			}
+		}
+		if line == "KillMode=mixed" {
+			mixed = true
+		}
+	}
+	if !mixed {
+		t.Error("the unit must use KillMode=mixed so systemd does not SIGTERM the plugin")
+	}
+	if need := stopBudget + 30*time.Second; time.Duration(stopSec)*time.Second < need {
+		t.Errorf("TimeoutStopSec=%d, want at least %v (stop budget %v plus margin)", stopSec, need, stopBudget)
+	}
+}
+
+func TestRunWithin(t *testing.T) {
+	if !runWithin(time.Second, func() {}) {
+		t.Error("a quick step reported as timed out")
+	}
+	release := make(chan struct{})
+	defer close(release)
+	start := time.Now()
+	if runWithin(20*time.Millisecond, func() { <-release }) {
+		t.Error("a stuck step reported as finished")
+	}
+	if waited := time.Since(start); waited > time.Second {
+		t.Errorf("runWithin waited %v for a 20ms limit", waited)
+	}
+}
 
 func TestForwardEnv(t *testing.T) {
 	env := map[string]string{"DAOUOFFICE_LOG_LEVEL": "debug", "DAOUOFFICE_MAX_PARKED": "4", "SLACK_BOT_TOKEN": "xoxb-secret"}

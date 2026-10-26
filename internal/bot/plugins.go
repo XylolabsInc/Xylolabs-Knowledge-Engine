@@ -50,6 +50,8 @@ const (
 	textPrivateFiles  = "개인정보가 있어 DM으로 보냈습니다"
 	textConnectIntro  = "입력한 값은 암호화해 보관하고 대화에는 남기지 않습니다. 비밀번호는 이 창에만 넣어 주세요."
 	textServerConfig  = "서버 설정 문제로 계정을 읽지 못했습니다. 관리자에게 알려 주세요."
+	textRestarting    = "재시작 중입니다. 잠시 후 다시 눌러 주세요."
+	textPausedRestart = "봇이 다시 시작하는 중이라 상신하지 않았습니다. 다시 시작한 뒤 이 스레드에 '승인'이라고 답하면 이어서 상신합니다."
 	textPromptMissing = "확인이 필요한 요청이 있습니다. 아래 버튼으로 진행하거나 취소해 주세요."
 )
 
@@ -302,7 +304,19 @@ func (b *Bot) HandleAction(ctx context.Context, a *Action) {
 	}
 	if !b.goTracked(func() { b.handleAction(ctx, a) }) {
 		b.logger.Warn("button click ignored: shutting down", "action", a.ActionID, "user", a.UserID)
+		b.noticeWhileClosing(ctx, a.UserID, textRestarting)
 	}
+}
+
+// noticeWhileClosing tells someone their request was not taken because the
+// bot is restarting. It runs untracked with a short deadline: shutdown does
+// not wait for it.
+func (b *Bot) noticeWhileClosing(ctx context.Context, userID, text string) {
+	go func() {
+		nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		b.dm(nctx, userID, text)
+	}()
 }
 
 func (b *Bot) handleAction(ctx context.Context, a *Action) {
@@ -424,6 +438,16 @@ func (b *Bot) approve(ctx context.Context, a *Action, kick bool) {
 			b.decisionFailed(ctx, ref, act, a.UserID, title, err)
 			return
 		}
+	}
+
+	// Shutdown waits only for a submission already running. Do not start one
+	// now (a kick-approve may have spent minutes signing in): the action stays
+	// pending, and "승인" in the thread picks it up after the restart.
+	if b.isClosing() {
+		b.logger.Info("plugin submission not started: shutting down", "action", act.ID)
+		ref.final(ctx, act.Preview, textPausedRestart)
+		b.dm(ctx, a.UserID, textPausedRestart)
+		return
 	}
 
 	ref.progress(ctx, act.Preview, textSubmitting)
@@ -626,6 +650,7 @@ func (b *Bot) HandleFormSubmission(ctx context.Context, f *FormSubmission) {
 	}
 	if !b.goTracked(func() { b.handleFormSubmission(ctx, f) }) {
 		b.logger.Warn("form submission ignored: shutting down", "user", f.UserID)
+		b.noticeWhileClosing(ctx, f.UserID, "재시작 중이라 계정을 확인하지 못했습니다. 잠시 후 다시 연결해 주세요.")
 	}
 }
 
@@ -727,6 +752,7 @@ func (b *Bot) handleTextDecision(ctx context.Context, msg *IncomingMessage, thre
 	}
 	if !b.goTracked(decide) {
 		b.logger.Warn("text decision ignored: shutting down", "action", act.ID)
+		b.say(ctx, msg.Channel, threadID, "재시작 중입니다. 잠시 후 다시 보내 주세요.")
 	}
 	return true
 }
