@@ -22,7 +22,14 @@
     "approvers": [{ "role": "ceo", "type": "결재" }],
     "referers": [{ "name": "<referer name>", "dept": "<referer department>" }]
   },
-  "purposeMap": [],
+  "certificate": { "selfApproval": false },
+  "purposeMap": [
+    { "category": "비품", "purpose": "소모품비" },
+    { "match": "<item word>", "unless": "<exception regex>", "purpose": "<purpose>" },
+    { "vendor": "<vendor regex>", "detail": "<detail text>" },
+    { "purpose": "재료비", "fallback": "<stand-in purpose>" },
+    { "purpose": "수수료비용", "prefer": "지급수수료" }
+  ],
   "minPurchaseKrw": 100000,
   "departments": {
     "<department name>": { "code": "<org tree code>" }

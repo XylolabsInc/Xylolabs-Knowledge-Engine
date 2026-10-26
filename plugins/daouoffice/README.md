@@ -52,6 +52,9 @@ Copy `config.example.json` to the server and fill it in. Never commit the filled
 | `departments.<name>.code` | Fallback department code when the org tree does not give one |
 | `cardMatch.vendorAliases`, `.subscriptionMerchants`, `.requisitionFrom` | Receipt vendor ↔ card merchant aliases, subscription merchant regexes, date from which purchases need a requisition |
 | `inspection.perOrderMerchants`, `.perOrderFrom`, `.serialFromKrw` | Merchants (regexes, default `ALIEXPRESS`) whose charges get one 검수조서 per requisition, and from which payment date; amount from which an item needs a serial photo besides the device keywords |
+| `purposeMap` entries | `{ category, purpose }` 비목 or trip expense kind (주유, 철도, 식대, 주차, 택시, 숙박) → 사용용도 (over the built-in tables), `{ match, unless?, purpose }` item word with an exception regex, `{ vendor, detail }` detail text for a subscription without a requisition (vendor regex), `{ purpose, fallback }` purpose to use only while `purpose` is missing from the live list, `{ purpose, prefer }` purpose to use when the live list has it. A purpose missing from the live list stops the claim |
+| `trip.form`, `trip.transports` | Trip form name (default `국내출장신청`) and its 교통편 options (default the five the form offers) |
+| `certificate.selfApproval` | `true` lets `issue_certificate` put the person alone on the line and approve their own request (default `false`) |
 
 Unknown keys are kept, so a module can add its own section.
 
@@ -108,12 +111,15 @@ success. It returns `{ accountId, accountName, duplicate }`; `login` returns the
 | `payment_status` | read | Receipt, requisition, photos, serials, report and claim per payment |
 | `file_inspection_report` | write | One 검수조서 per payment (per order for per-order merchants); `action` new, fix (withdraw and refile), refile (new report linking the completed one) |
 | `attach_photos_to_claim` | write | Post inspection photos as comments on the expense claim that holds the payment |
+| `file_expense_claim` | write | 법인카드 지출결의: one card, one KST month, one 사용용도 per document; receipts, trips, requisitions and notes explain each row; links approved requisitions and inspection reports |
+| `file_trip` | write | 국내출장신청 with purpose checks, duplicate check against the draft and department boxes, line and referers from config |
+| `list_trips` | read | Recorded trips, optionally the trip documents in DaouOffice |
+| `issue_certificate` | write | 재직·경력증명서: save, submit, (self) approve, print; the PDF comes back as a private file |
+| `certificate_history` | read | Certificate requests without employee numbers or request ids |
 | `draft_purchase` | local | 구매 품의 초안 저장, 검증 결과와 칸별 값 |
 | `list_purchases` | read | 저장된 품의 초안과 올린 품의, 키와 판 |
 | `capture_quote` | local | 상품 페이지 캡처(견적서 대용) 또는 사람이 찍은 화면을 초안에 붙인다 |
 | `submit_purchase` | write | 구매 품의서 상신. `fix`(상신취소 후 같은 문서로), `refile`(새 결재선으로 다시) |
-
-`src/tools/{claim,trip,cert}.mjs` are filled by the next modules.
 
 ## Writing a tool module
 
