@@ -78,6 +78,17 @@ scp_cmd() {
     scp "${SSH_OPTS[@]}" "$@"
 }
 
+# ssh_bash runs the bash script on stdin on the server with the given
+# arguments. ssh joins its arguments into one command line for the remote
+# shell, so each one is quoted here; an empty one would otherwise vanish.
+ssh_bash() {
+    local quoted=() arg
+    for arg in "$@"; do
+        quoted+=("$(printf '%q' "$arg")")
+    done
+    ssh_cmd bash -s -- "${quoted[@]}"
+}
+
 # -----------------------------------------------------------------------------
 # Build
 # -----------------------------------------------------------------------------
@@ -151,7 +162,7 @@ stage_plugin() {
 
     # Unpack next to the live plugin. The live one keeps running untouched
     # until restart() swaps the two.
-    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_PLUGIN_DATA_DIR" "$SERVER_USER" <<'REMOTE' \
+    ssh_bash "$REMOTE_PLUGIN_DIR" "$REMOTE_PLUGIN_DATA_DIR" "$SERVER_USER" <<'REMOTE' \
         || die "Staging the plugin failed; the running service was not touched"
 set -euo pipefail
 dir=$1 data_dir=$2 owner=$3
@@ -172,7 +183,7 @@ REMOTE
 install_plugin_deps() {
     local with_deps="${1:-false}" browsers_path="${2:-}"
     log "Installing plugin packages in the staged plugin..."
-    ssh_cmd bash -s -- "$REMOTE_PLUGIN_DIR" "$REMOTE_NODE_DIR" "$with_deps" "$browsers_path" <<'REMOTE' \
+    ssh_bash "$REMOTE_PLUGIN_DIR" "$REMOTE_NODE_DIR" "$with_deps" "$browsers_path" <<'REMOTE' \
         || die "Installing the plugin's packages failed; the running service was not touched"
 set -euo pipefail
 dir=$1 node_dir=$2 with_deps=$3 browsers_path=$4
@@ -236,7 +247,7 @@ PYEOF
 # enabled. Not run by default.
 provision() {
     log "Provisioning Node.js ${NODE_VERSION:-$NODE_MAJOR.x} in $REMOTE_NODE_DIR and Korean fonts..."
-    ssh_cmd bash -s -- "$REMOTE_NODE_DIR" "$NODE_MAJOR" "${NODE_VERSION:-}" <<'REMOTE'
+    ssh_bash "$REMOTE_NODE_DIR" "$NODE_MAJOR" "${NODE_VERSION:-}" <<'REMOTE'
 set -euo pipefail
 node_dir=$1 major=$2 version=$3
 case "$(uname -m)" in
@@ -294,7 +305,7 @@ REMOTE
 # those forms are reported rather than quietly accepted. Exit status 2: the
 # server has no .env.
 server_env() {
-    ssh_cmd bash -s -- "$REMOTE_DIR/.env" "$1" <<'REMOTE'
+    ssh_bash "$REMOTE_DIR/.env" "$1" <<'REMOTE'
 set -euo pipefail
 file=$1 key=$2
 sudo test -f "$file" || exit 2
@@ -438,7 +449,7 @@ restart() {
     local stop_timeout
     stop_timeout=$(ssh_cmd "systemctl show -p TimeoutStopUSec --value xylolabs-kb" 2>/dev/null || echo "unknown")
     log "Stopping xylolabs-kb; it first lets a running plugin submission finish (up to ${stop_timeout})..."
-    ssh_cmd bash -s -- "$REMOTE_DIR/bin/${BINARY_NAME}" "$REMOTE_PLUGIN_DIR" "$swap_plugin" <<'REMOTE' \
+    ssh_bash "$REMOTE_DIR/bin/${BINARY_NAME}" "$REMOTE_PLUGIN_DIR" "$swap_plugin" <<'REMOTE' \
         || die "Restart failed"
 set -euo pipefail
 bin=$1 dir=$2 swap_plugin=$3
