@@ -7,9 +7,12 @@ import { createRuntime, createLogger } from '../src/runtime.mjs';
 import { openDb } from '../src/db.mjs';
 import { parseConfig } from '../src/config.mjs';
 import { runWithMode, assertExecute } from '../src/guard.mjs';
+import { PluginError } from '../src/errors.mjs';
 import { register } from '../src/tools/cert.mjs';
+import { EventEmitter } from 'node:events';
 import {
   normalizeCert, pickRequest, certSteps, isExpired, selfLineOthers, strayNames, selfApprovalAllowed, saveRequest,
+  onlyMe, downloadSink, downloadCertificate,
 } from '../src/dao/certificate.mjs';
 
 // Made-up rows in the list API's shape, including the fields that must never leave the plugin.
@@ -55,6 +58,16 @@ describe('certificate: rows and steps', () => {
     assert.deepEqual(certSteps(rowOf({ docStatusCode: '02' }), { self: false }), ['print']);
   });
 
+  test('an unknown status code stops instead of submitting again', () => {
+    assert.throws(() => certSteps(rowOf({ docStatusCode: '03', docId: '1000000000000803' }), { self: true }), (e) => e.code === 'CONFLICT' && /코드 03/.test(e.message));
+  });
+
+  test('a pending request may be self-approved only when the line is me alone', () => {
+    assert.ok(onlyMe(['홍길동', '홍길동'], '홍길동'));
+    assert.ok(!onlyMe(['홍길동', '김결재'], '홍길동'));
+    assert.ok(!onlyMe([], '홍길동'), 'an unread line is not "only me"');
+  });
+
   test('self-approval lines are checked for anyone else', () => {
     assert.deepEqual(selfLineOthers('기안 홍길동(연구개발팀) → 결재 홍길동(연구개발팀)', '홍길동'), []);
     assert.deepEqual(selfLineOthers('기안 홍길동(연구개발팀) → 결재 김철수(경영지원팀)', '홍길동'), ['김철수']);
@@ -71,6 +84,54 @@ describe('certificate: rows and steps', () => {
     const page = fakePage({ clicks: [] });
     await assert.rejects(runWithMode('preview', () => saveRequest(page, 'https://example.daouoffice.com', { kind: '재직증명서', purpose: '기타', target: '테스트은행' })), (e) => e.code === 'INTERNAL');
     assert.ok(!page.clicks.includes('저장'));
+  });
+});
+
+/** A browser context and pages as event emitters, with downloads that record their deletion. */
+function fakeBrowser() {
+  const context = new EventEmitter();
+  const pages = [];
+  context.pages = () => [...pages];
+  const newPage = () => {
+    const p = new EventEmitter();
+    Object.assign(p, {
+      context: () => context,
+      async goto() {}, async waitForLoadState() {}, async waitForTimeout() {}, async close() { pages.splice(pages.indexOf(p), 1); },
+      keyboard: { press: async () => {} },
+      locator: () => ({ count: async () => 0, first() { return this; }, async scrollIntoViewIfNeeded() {}, async click() {} }),
+      async evaluate() { return true; },
+    });
+    pages.push(p);
+    context.emit('page', p);
+    return p;
+  };
+  const download = (data = Buffer.from('%PDF-1.4 made-up')) => {
+    const d = { deleted: false, async path() { return null; }, async delete() { d.deleted = true; }, data };
+    return d;
+  };
+  return { context, newPage, download };
+}
+
+describe('certificate: downloads never outlive the call', () => {
+  test('a download nobody waits for is deleted at once', async () => {
+    const b = fakeBrowser();
+    const page = b.newPage();
+    downloadSink(b.context);
+    const d = b.download();
+    page.emit('download', d);
+    await new Promise((res) => setImmediate(res));
+    assert.equal(d.deleted, true);
+  });
+
+  test('a download that starts after the timeout is still deleted', async () => {
+    const b = fakeBrowser();
+    const page = b.newPage();
+    await assert.rejects(downloadCertificate(page, 'https://example.daouoffice.com', 'id-1', { timeoutMs: 20 }), /다운로드가 시작되지 않았습니다/);
+    const late = b.download();
+    const popup = b.newPage();
+    popup.emit('download', late);
+    await new Promise((res) => setImmediate(res));
+    assert.equal(late.deleted, true);
   });
 });
 
@@ -102,9 +163,13 @@ const BASE = 'https://example.daouoffice.com';
 const CREDS = { 'xylolabs/credentials': { username: 'hong', password: 'pw' } };
 
 describe('issue_certificate and certificate_history over MCP', () => {
-  const state = { rows: [], clicks: [], calls: [], steps: [] };
+  const state = { rows: [], clicks: [], calls: [], steps: [], lines: {} };
   let client;
   const issue = (args) => client.callTool({ name: 'issue_certificate', arguments: args, _meta: CREDS });
+  const executeOn = async (c, args) => {
+    await c.callTool({ name: 'issue_certificate', arguments: args, _meta: CREDS });
+    return c.callTool({ name: 'issue_certificate', arguments: args, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+  };
 
   // The HR app and approval window steps, replaced: they check the guard and move the list row along.
   const dom = {
@@ -116,8 +181,10 @@ describe('issue_certificate and certificate_history over MCP', () => {
     },
     async submitRequest(page, baseUrl, id, { self, me }) {
       assertExecute('전자결재');
+      if (state.failAfterSend) throw new PluginError('UPSTREAM', '화면이 제때 응답하지 않았습니다.');
       state.steps.push(`submit:${self}:${me}`);
       Object.assign(state.rows.find((r) => r.issuecertId === id), { docStatusCode: '01', docId: '1000000000000810' });
+      state.lines['1000000000000810'] = self ? [me, me] : ['홍길동', '김결재'];
       return self ? `기안 ${me} → 결재 ${me}` : '기안 홍길동 → 결재 김결재';
     },
     async approveRequest(page, baseUrl, docId) {
@@ -134,6 +201,10 @@ describe('issue_certificate and certificate_history over MCP', () => {
     const api = async (p, opts = {}) => {
       state.calls.push({ path: p, method: opts.method ?? 'GET' });
       if (p === '/eacc/api/ess/certIsu/getIssueCertList') return { status: 200, ok: true, data: { data: { list: state.rows } } };
+      const doc = p.match(/^\/gw\/api\/approval\/document\/(\d+)$/)?.[1];
+      if (doc && state.lines[doc]) {
+        return { status: 200, ok: true, data: { data: { apprFlow: { activityGroups: [{ name: '결재', activities: state.lines[doc].map((userName) => ({ userName })) }] } } } };
+      }
       return { status: 404, ok: false, data: null };
     };
     const page = fakePage(state);
@@ -145,12 +216,13 @@ describe('issue_certificate and certificate_history over MCP', () => {
     await server.connect(a);
     const c = new Client({ name: 't', version: '0' });
     await c.connect(b);
+    c.db = db;
     return c;
   }
 
   before(async () => { client = await connect({ certificate: { selfApproval: true } }); });
   after(async () => { await client.close(); });
-  beforeEach(() => { state.rows = []; state.clicks.length = 0; state.calls.length = 0; state.steps.length = 0; });
+  beforeEach(() => { state.rows = []; state.clicks.length = 0; state.calls.length = 0; state.steps.length = 0; state.lines = {}; });
 
   test('kinds: issue_certificate is gated, certificate_history is a read', async () => {
     const { tools } = await client.listTools();
@@ -188,6 +260,24 @@ describe('issue_certificate and certificate_history over MCP', () => {
     assert.deepEqual(state.clicks, [], 'no dialog for an existing request');
   });
 
+  test('a pending request with someone else on the line is not self-approved', async () => {
+    state.rows = [rowOf({ docStatusCode: '01', docId: '1000000000000804' })];
+    state.lines['1000000000000804'] = ['홍길동', '김결재'];
+    const r = await issue({ kind: '재직증명서', purpose: '기타', target: '테스트은행' });
+    assert.equal(r.structuredContent.code, 'CONFLICT');
+    assert.match(r.content[0].text, /결재선에 다른 사람이 있어 본인 승인으로 끝낼 수 없습니다: 홍길동 → 김결재/);
+    state.lines['1000000000000804'] = ['홍길동', '홍길동'];
+    const ok = await issue({ kind: '재직증명서', purpose: '기타', target: '테스트은행' });
+    assert.ok(!ok.isError, ok.content[0].text);
+    assert.match(ok.content[0].text, /남은 단계: 본인 승인 → PDF 출력/);
+  });
+
+  test('a request with an unknown status is not submitted again', async () => {
+    state.rows = [rowOf({ docStatusCode: '03', docId: '1000000000000805' })];
+    const r = await issue({ kind: '재직증명서', purpose: '기타', target: '테스트은행' });
+    assert.equal(r.structuredContent.code, 'CONFLICT');
+  });
+
   test('a request waiting for others is a CONFLICT when not self-approving', async () => {
     state.rows = [rowOf({ docStatusCode: '01', docId: '1000000000000801' })];
     const r = await issue({ kind: '재직증명서', purpose: '기타', target: '테스트은행', selfApprove: false });
@@ -208,7 +298,7 @@ describe('issue_certificate and certificate_history over MCP', () => {
   test('execute with self-approval saves, submits, approves and returns the PDF as a private file', async () => {
     const c = await connect({ certificate: { selfApproval: true } }, { fakeDom: true });
     try {
-      const r = await c.callTool({ name: 'issue_certificate', arguments: { kind: '재직증명서', purpose: '기타', target: '테스트은행' }, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+      const r = await executeOn(c, { kind: '재직증명서', purpose: '기타', target: '테스트은행' });
       assert.ok(!r.isError, r.content[0].text);
       assert.deepEqual(state.steps, ['save', 'submit:true:홍길동', 'approve:1000000000000810', 'print:new']);
       const file = r.content.find((b) => b.type === 'resource');
@@ -223,10 +313,69 @@ describe('issue_certificate and certificate_history over MCP', () => {
     }
   });
 
+  test('a request that moved on after the preview is refused, nothing approved', async () => {
+    const c = await connect({ certificate: { selfApproval: true } }, { fakeDom: true });
+    try {
+      state.rows = [rowOf({ issuecertId: 'p-1', docStatusCode: '01', docId: '1000000000000808' })];
+      state.lines['1000000000000808'] = ['홍길동', '홍길동'];
+      const args = { kind: '재직증명서', purpose: '기타', target: '테스트은행' };
+      const pre = await c.callTool({ name: 'issue_certificate', arguments: args, _meta: CREDS });
+      assert.match(pre.content[0].text, /본인 승인 → PDF 출력/);
+      state.rows[0].docStatusCode = '02';
+      const r = await c.callTool({ name: 'issue_certificate', arguments: args, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+      assert.equal(r.structuredContent.code, 'CONFLICT');
+      assert.deepEqual(state.steps, []);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test('execute refuses to approve a pending request whose line has someone else', async () => {
+    const c = await connect({ certificate: { selfApproval: true } }, { fakeDom: true });
+    try {
+      state.rows = [rowOf({ issuecertId: 'old-1', docStatusCode: '01', docId: '1000000000000806' })];
+      state.lines['1000000000000806'] = ['홍길동', '김결재'];
+      const r = await executeOn(c, { kind: '재직증명서', purpose: '기타', target: '테스트은행' });
+      assert.equal(r.structuredContent.code, 'CONFLICT');
+      assert.deepEqual(state.steps, [], 'nothing approved');
+    } finally {
+      await c.close();
+    }
+  });
+
+  test('printing an approved certificate again updates its filing instead of adding one', async () => {
+    const c = await connect({ certificate: { selfApproval: true } }, { fakeDom: true });
+    try {
+      state.rows = [rowOf({ issuecertId: 'done-1', docStatusCode: '02', docId: '1000000000000807', expireDate: '20991231' })];
+      for (let i = 0; i < 2; i++) {
+        const r = await executeOn(c, { kind: '재직증명서', purpose: '기타', target: '테스트은행' });
+        assert.ok(!r.isError, r.content[0].text);
+      }
+      assert.equal(c.db.filings('hong', { kind: 'certificate' }).filter((f) => f.docId === '1000000000000807').length, 1);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test('a failure after the submit click is an unknown outcome', async () => {
+    const c = await connect({ certificate: { selfApproval: true } }, { fakeDom: true });
+    state.failAfterSend = true;
+    try {
+      const r = await executeOn(c, { kind: '재직증명서', purpose: '기타', target: '테스트은행' });
+      assert.equal(r.structuredContent.code, 'UPSTREAM');
+      assert.equal(r.structuredContent.data.afterWrite, true);
+      assert.match(r.content[0].text, /화면이 제때 응답하지 않았습니다/, 'the cause is the fake PluginError, not a ReferenceError');
+      assert.match(r.content[0].text, /다시 올리기 전에 다우오피스에서 문서를 확인해 주세요/);
+    } finally {
+      state.failAfterSend = false;
+      await c.close();
+    }
+  });
+
   test('execute on the regular line stops after submitting, without a file', async () => {
     const c = await connect({}, { fakeDom: true });
     try {
-      const r = await c.callTool({ name: 'issue_certificate', arguments: { kind: '경력증명서', purpose: '기타', target: '테스트은행' }, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+      const r = await executeOn(c, { kind: '경력증명서', purpose: '기타', target: '테스트은행' });
       assert.ok(!r.isError, r.content[0].text);
       assert.deepEqual(state.steps, ['save', 'submit:false:홍길동']);
       assert.equal(r.content.some((b) => b.type === 'resource'), false);

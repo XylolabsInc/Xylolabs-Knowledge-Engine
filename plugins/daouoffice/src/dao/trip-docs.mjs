@@ -11,7 +11,8 @@ import { TRIP_FORM_NAME } from './trips.mjs';
  * 본다. 다른 부서 사람이 올린 건은 여기에 안 나온다. 사람이 마지막으로 확인해야 한다.
  */
 
-const LIST_QUERY = 'page=0&offset=100&property=draftedAt&direction=desc&searchtype=&keyword=&fromDate=&toDate=&duration=all';
+const PAGE = 100;
+const listQuery = (page) => `page=${page}&offset=${PAGE}&property=draftedAt&direction=desc&searchtype=&keyword=&fromDate=&toDate=&duration=all`;
 
 /** 본문 표의 라벨들. 라벨 다음 칸이 값이고, 다음 칸이 또 라벨이면 빈 값이다. */
 const LABELS = [
@@ -50,22 +51,34 @@ export function parseTripBody(html) {
 }
 
 /**
- * 내 기안 문서함과 부서 문서함의 출장 신청을 모두 읽어 온다. 문서마다 본문을 읽는다.
+ * 내 기안 문서함과 부서 문서함의 출장 신청을 읽어 온다. 문서마다 본문을 읽는다.
  * `[{ documentId, box, drafter, status, draftedAt, start, end, place, transport, goal, note }]`
+ *
+ * 문서함은 기안일 최신순으로 100건씩 읽는다. `since`(YYYY-MM-DD)를 주면 그보다 앞에 기안한 문서가
+ * 나올 때까지 `maxPages` 쪽까지 넘기고, 그 앞 문서는 보지 않는다. 주지 않으면 첫 쪽만 본다. 부서
+ * 문서함이 쪽 번호를 무시하면 새 문서가 없는 쪽에서 멈춘다.
  */
-export async function listSubmittedTrips(api, { deptId, formName = TRIP_FORM_NAME } = {}) {
+export async function listSubmittedTrips(api, { deptId, formName = TRIP_FORM_NAME, since = null, maxPages = 10 } = {}) {
   const boxes = [
-    ['내 기안', `/gw/api/approval/doclist/draft/all?${LIST_QUERY}`],
-    ...(deptId ? [['부서', `/gw/api/approval/deptfolder/draft/${encodeURIComponent(deptId)}?${LIST_QUERY}`]] : []),
+    ['내 기안', (page) => `/gw/api/approval/doclist/draft/all?${listQuery(page)}`],
+    ...(deptId ? [['부서', (page) => `/gw/api/approval/deptfolder/draft/${encodeURIComponent(deptId)}?${listQuery(page)}`]] : []),
   ];
+  const drafted = (doc) => String(doc.draftedAt ?? '').slice(0, 10);
 
   const seen = new Map();
   for (const [box, path] of boxes) {
-    const res = ensureOk(await api(path), `${box} 문서함`);
-    for (const doc of Array.isArray(res.data?.data) ? res.data.data : []) {
-      if (doc.formName !== formName) continue;
-      if (seen.has(String(doc.documentId))) continue;
-      seen.set(String(doc.documentId), { box, doc });
+    const ids = new Set();
+    for (let page = 0; page < (since ? maxPages : 1); page++) {
+      const res = ensureOk(await api(path(page)), `${box} 문서함`);
+      const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+      const fresh = rows.filter((d) => !ids.has(String(d.documentId)));
+      for (const doc of fresh) {
+        ids.add(String(doc.documentId));
+        if (doc.formName !== formName || (since && drafted(doc) && drafted(doc) < since)) continue;
+        if (!seen.has(String(doc.documentId))) seen.set(String(doc.documentId), { box, doc });
+      }
+      const oldest = rows.map(drafted).filter(Boolean).sort()[0];
+      if (rows.length < PAGE || !fresh.length || (since && oldest && oldest < since)) break;
     }
   }
 

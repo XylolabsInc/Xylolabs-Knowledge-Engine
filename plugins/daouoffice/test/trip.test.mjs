@@ -13,9 +13,9 @@ import { register } from '../src/tools/trip.mjs';
 import {
   validateTrip, tripTitle, tripKey, placeName, tripTransports, tripFormName, TRANSPORTS, TRIP_STATUS,
 } from '../src/dao/trips.mjs';
-import { parseTripBody, findDuplicates, placeTokens } from '../src/dao/trip-docs.mjs';
+import { parseTripBody, findDuplicates, placeTokens, listSubmittedTrips } from '../src/dao/trip-docs.mjs';
 import { tripsForExpenses, tripExpense, tripKind, TRIP_EXPENSE_KIND } from '../src/dao/trip-expenses.mjs';
-import { compareTripFields, verifyTrip } from '../src/dao/trip-submit.mjs';
+import { compareTripFields, verifyTrip, setTripApprovalInfo, checkTripApprovalInfo, refererNames } from '../src/dao/trip-submit.mjs';
 
 const code = (fn) => { try { fn(); } catch (e) { return e instanceof PluginError ? e.code : e.name; } return null; };
 const good = { start: '2026-03-09', end: '2026-03-09', place: '테스트시청 (테스트시)', transport: '기타', goal: '실증 부지 인허가 협의' };
@@ -110,6 +110,38 @@ describe('trip documents: body parsing and duplicates', () => {
   });
 });
 
+describe('trip documents: reading the mailboxes back to the trip window', () => {
+  const doc = (id, formName, draftedAt) => ({ documentId: id, formName, title: '', drafterName: '홍길동', docStatusName: '진행중', draftedAt: `${draftedAt} 09:00` });
+  const others = (n, start, date) => Array.from({ length: n }, (_, i) => doc(String(start + i), '구매 품의서', date));
+
+  test('pages until documents are older than the window; a box that ignores the page stops at no new rows', async () => {
+    const mine = [...others(100, 1_000_000_000_002_000, '2026-03-20'), doc('1000000000000710', '국내출장신청', '2026-02-10'), ...others(99, 1_000_000_000_003_000, '2025-08-01'), ...others(100, 1_000_000_000_004_000, '2025-07-01')];
+    const dept = [doc('1000000000000711', '국내출장신청', '2026-03-01'), ...others(99, 1_000_000_000_005_000, '2026-03-01')];
+    const seen = [];
+    const api = async (p) => {
+      seen.push(p.replace(/&.*/, ''));
+      const page = Number(p.match(/page=(\d+)/)?.[1] ?? 0);
+      if (p.startsWith('/gw/api/approval/doclist/draft/all')) return { status: 200, ok: true, data: { data: mine.slice(page * 100, page * 100 + 100) } };
+      if (p.startsWith('/gw/api/approval/deptfolder/draft/10')) return { status: 200, ok: true, data: { data: dept } };
+      return { status: 200, ok: true, data: { data: { document: { docBodyContent: body(good) } } } };
+    };
+    const trips = await listSubmittedTrips(api, { deptId: '10', since: '2025-09-15' });
+    assert.deepEqual(trips.map((t) => t.documentId).sort(), ['1000000000000710', '1000000000000711']);
+    const lists = seen.filter((x) => !x.includes('/document/'));
+    assert.deepEqual(lists, [
+      '/gw/api/approval/doclist/draft/all?page=0', '/gw/api/approval/doclist/draft/all?page=1',
+      '/gw/api/approval/deptfolder/draft/10?page=0', '/gw/api/approval/deptfolder/draft/10?page=1',
+    ]);
+  });
+
+  test('without a window only the first page is read', async () => {
+    const pages = [];
+    const api = async (p) => { pages.push(p); return { status: 200, ok: true, data: { data: p.includes('/document/') ? {} : others(100, 1_000_000_000_006_000, '2026-03-01') } }; };
+    await listSubmittedTrips(api, {});
+    assert.equal(pages.length, 1);
+  });
+});
+
 describe('trip expenses: receipt-less charges by trip date', () => {
   const tripRows = [
     { key: 'a', status: TRIP_STATUS.submitted, data: { start: '2026-03-09', end: '2026-03-10', claimUntil: '2026-03-11', place: '테스트시청 (테스트시)', claimName: '테스트시' } },
@@ -177,7 +209,104 @@ describe('trip submit: read-back and server verification', () => {
     doc.docBodyContent = body({ ...good, goal: '다른 목적 협의' });
     data.docInfo.docReferenceReaders = [];
     const bad = await verifyTrip(api, '1000000000000500', { ...good, title: 'T' }, { approvers: [{ name: '김대표' }], referers: [{ name: '이참조' }], waitMs: 0 });
-    assert.deepEqual(bad.mismatches, ['출장목적: "다른 목적 협의" (기대 "실증 부지 인허가 협의")', '참조자에 이참조 이 없습니다']);
+    assert.deepEqual(bad.mismatches, ['출장목적: "다른 목적 협의" (기대 "실증 부지 인허가 협의")', '참조자: (없음) (기대 이참조)']);
+  });
+
+  test('verifyTrip matches names exactly and refuses anyone not in the preview', async () => {
+    const data = {
+      document: { docStatusName: '진행중', title: 'T', docBodyContent: body(good) },
+      apprFlow: { activityGroups: [
+        { name: '신청', activities: [{ userName: '홍길동' }] },
+        { name: '승인', activities: [{ userName: '김철수' }, { userName: '김대표' }] },
+      ] },
+      docInfo: { docReferenceReaders: [{ reader: { name: '이참조' } }, { reader: { fullName: '박기본 팀장' } }] },
+    };
+    const api = async () => ({ status: 200, ok: true, data: { data } });
+    const v = await verifyTrip(api, '1000000000000500', { ...good, title: 'T' }, { approvers: [{ name: '김철' }, { name: '김대표' }], referers: [{ name: '이참조' }], drafter: '홍길동', waitMs: 0 });
+    assert.deepEqual(v.mismatches, ['결재선: 김철수 → 김대표 (기대 김철 → 김대표)', '참조자: 이참조, 박기본 (기대 이참조)']);
+  });
+});
+
+/**
+ * A stand-in for the approval editor: semantic state instead of DOM. It keeps the real primitives'
+ * weak spots, so the checks around them are tested: removal and the referer skip match by substring,
+ * and a drop can bring in a different person when names overlap.
+ */
+function fakeEditor({ line = [{ group: '신청', kind: '기안', name: '홍길동' }], referers = [], dropAs = {} } = {}) {
+  const st = { line: line.map((r) => ({ ...r })), referers: referers.map((r) => ({ ...r })), saved: 0, opened: 0 };
+  const text = () => st.referers.map((r) => `${r.name}${r.dept ? `(${r.dept})` : ''}`).join(', ') || '(비어 있음)';
+  const ed = {
+    async openApprovalLineEditor() { st.opened++; },
+    async saveApprovalLineEditor() { st.saved++; },
+    async approvalLineRows() { return st.line.map((r) => ({ ...r })); },
+    async removeFromApprovalLine(page, name) {
+      const i = st.line.findIndex((r) => r.name.includes(name));
+      if (i < 0 || st.line[i].kind === '기안') return false;
+      st.line.splice(i, 1);
+      return true;
+    },
+    async dropIntoApprovalLine(page, name) { st.line.push({ group: '승인', kind: '결재', name: dropAs[name] ?? name }); },
+    async setApprovalLineType(page, name, want) {
+      const row = st.line.findLast((r) => r.name.includes(name));
+      row.kind = want;
+      return want;
+    },
+    async readApprovalLine() { return st.line.map((r) => `${r.kind} ${r.name}`).join(' → '); },
+    async addRecipients(page, entries) {
+      for (const e of entries) if (!st.referers.some((r) => r.name.startsWith(e.name))) st.referers.push({ name: e.name, dept: e.dept });
+      return text();
+    },
+    async readRecipients() { return text(); },
+    async switchEditorTab() {},
+  };
+  return { st, ed };
+}
+
+describe('trip submit: the approval line and referers are exactly the previewed ones', () => {
+  const approvers = [{ name: '김대표', type: '결재' }];
+  const referers = [{ name: '이참조', dept: '경영지원팀' }];
+
+  test('the form\'s default line is cleared before the configured approvers go in', async () => {
+    const { st, ed } = fakeEditor({ line: [{ group: '신청', kind: '기안', name: '홍길동' }, { group: '확인', kind: '확인', name: '박퇴사' }, { group: '승인', kind: '결재', name: '김대표' }] });
+    const r = await setTripApprovalInfo(null, { approvers, referers }, ed);
+    assert.deepEqual(st.line.map((x) => `${x.kind} ${x.name}`), ['기안 홍길동', '결재 김대표']);
+    assert.deepEqual(r.referers, ['이참조']);
+    assert.equal(st.saved, 1);
+  });
+
+  test('a default referer that is not in the config stops before saving', async () => {
+    const { st, ed } = fakeEditor({ referers: [{ name: '박기본', dept: '재무팀' }] });
+    await assert.rejects(setTripApprovalInfo(null, { approvers, referers }, ed), /참조자가 설정과 다릅니다.*박기본 은 양식 기본 참조자/);
+    assert.equal(st.saved, 0);
+  });
+
+  test('a referer whose name is a prefix of someone already there is not taken as present', async () => {
+    const { ed } = fakeEditor({ referers: [{ name: '이참조원', dept: '재무팀' }] });
+    await assert.rejects(setTripApprovalInfo(null, { approvers, referers }, ed), /참조자가 설정과 다릅니다/);
+  });
+
+  test('a drop that brings in a different person with an overlapping name is refused', async () => {
+    const { ed } = fakeEditor({ dropAs: { 김대: '김대표' } });
+    await assert.rejects(setTripApprovalInfo(null, { approvers: [{ name: '김대', type: '결재' }], referers: [] }, ed), /결재선에 "김대" 이 들어가지 않았습니다/);
+  });
+
+  test('no configured referers means none may be left on the form', async () => {
+    const { ed } = fakeEditor({ referers: [{ name: '박기본' }] });
+    await assert.rejects(setTripApprovalInfo(null, { approvers, referers: [] }, ed), /참조자가 설정과 다릅니다: 박기본/);
+  });
+
+  test('the check right before submitting catches a line that changed after saving', async () => {
+    const { st, ed } = fakeEditor();
+    await setTripApprovalInfo(null, { approvers, referers }, ed);
+    await checkTripApprovalInfo(null, { approvers, referers }, ed);
+    st.line.push({ group: '승인', kind: '합의', name: '최추가' });
+    await assert.rejects(checkTripApprovalInfo(null, { approvers, referers }, ed), /결재선 결재 김대표 → 합의 최추가/);
+  });
+
+  test('referer names come from the referer table text', () => {
+    assert.deepEqual(refererNames('이참조(경영지원팀), 박기본(재무팀)'), ['이참조', '박기본']);
+    assert.deepEqual(refererNames('(비어 있음)'), []);
+    assert.deepEqual(refererNames('(referer 탭 없음)'), []);
   });
 });
 
@@ -217,7 +346,9 @@ function fakeDaou() {
   // The draft window, replaced: checks the guard like the real one and leaves a server document.
   const dom = {
     async submitTrip(page, api_, baseUrl, args) {
+      if (state.failBeforeSend) throw new PluginError('UPSTREAM', '결재 정보 편집기가 열리지 않았습니다.');
       assertExecute('결재요청');
+      if (state.failAfterSend) throw new PluginError('UPSTREAM', '화면이 제때 응답하지 않았습니다.');
       state.submits.push(args);
       const docId = String(1_000_000_000_000_650 + state.submits.length);
       state.filed[docId] = {
@@ -236,6 +367,10 @@ describe('file_trip and list_trips over MCP with a fake DaouOffice', () => {
   let daou;
   let db;
   const fileTrip = (args) => client.callTool({ name: 'file_trip', arguments: args, _meta: CREDS });
+  const executeTrip = async (args) => {
+    await fileTrip(args);
+    return client.callTool({ name: 'file_trip', arguments: args, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+  };
 
   before(async () => {
     daou = fakeDaou();
@@ -308,9 +443,17 @@ describe('file_trip and list_trips over MCP with a fake DaouOffice', () => {
     assert.ok(!daou.state.calls.some((c) => c.path.endsWith('/1000000000000701')), 'no detail read for other forms');
   });
 
+  test('execute without the approved preview is refused before the draft window opens', async () => {
+    const trip = { ...good, start: '2026-03-24', end: '2026-03-24' };
+    const before = daou.state.submits.length;
+    const r = await client.callTool({ name: 'file_trip', arguments: trip, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+    assert.equal(r.structuredContent.code, 'CONFLICT');
+    assert.equal(daou.state.submits.length, before);
+  });
+
   test('execute files the trip in the draft department, records it and verifies the server document', async () => {
     const trip = { ...good, start: '2026-03-16', end: '2026-03-17' };
-    const r = await client.callTool({ name: 'file_trip', arguments: trip, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+    const r = await executeTrip(trip);
     assert.ok(!r.isError, r.content[0].text);
     const sent = daou.state.submits.at(-1);
     assert.deepEqual([sent.deptId, sent.formId, sent.title], ['10', 'form-1', "'26.03.16-03.17/테스트시청/rnd/홍길동"]);
@@ -322,11 +465,46 @@ describe('file_trip and list_trips over MCP with a fake DaouOffice', () => {
     assert.deepEqual([f.status, f.detail.verified], ['진행중', true]);
   });
 
+  test('execute keeps what was saved about the trip and only moves a draft to submitted', async () => {
+    const draft = { ...good, start: '2026-03-18', end: '2026-03-18' };
+    db.upsertTrip({ owner: 'hong', key: tripKey(draft), data: { ...draft, goal: '옛 목적', claimName: '테스트시', claimUntil: '2026-03-19', imported: true }, status: TRIP_STATUS.draft });
+    const r = await executeTrip(draft);
+    assert.ok(!r.isError, r.content[0].text);
+    const saved = db.trip('hong', tripKey(draft));
+    assert.deepEqual([saved.status, saved.data.goal, saved.data.claimName, saved.data.claimUntil, saved.data.imported], [TRIP_STATUS.submitted, good.goal, '테스트시', '2026-03-19', true]);
+
+    const other = { ...good, start: '2026-03-19', end: '2026-03-19' };
+    db.upsertTrip({ owner: 'hong', key: tripKey(other), data: other, status: TRIP_STATUS.elsewhere });
+    const r2 = await executeTrip(other);
+    assert.ok(!r2.isError, r2.content[0].text);
+    assert.equal(db.trip('hong', tripKey(other)).status, TRIP_STATUS.elsewhere);
+  });
+
+  test('a failure before the final click is a plain failure; after it, an unknown outcome', async () => {
+    const trip = { ...good, start: '2026-03-25', end: '2026-03-25' };
+    try {
+      daou.state.failBeforeSend = true;
+      const before = await executeTrip(trip);
+      assert.equal(before.structuredContent.code, 'UPSTREAM');
+      assert.equal(before.structuredContent.data?.afterWrite, undefined);
+      assert.match(before.content[0].text, /편집기가 열리지 않았습니다/);
+      daou.state.failBeforeSend = false;
+      daou.state.failAfterSend = true;
+      const after = await executeTrip(trip);
+      assert.equal(after.structuredContent.data.afterWrite, true);
+      assert.match(after.content[0].text, /다시 올리기 전에 다우오피스에서 문서를 확인해 주세요/);
+      assert.doesNotMatch(after.content[0].text, /다시 시도/);
+    } finally {
+      daou.state.failBeforeSend = false;
+      daou.state.failAfterSend = false;
+    }
+  });
+
   test('execute reports a server document that differs as a failure', async () => {
     daou.state.goalOnServer = '다른 목적 협의';
     try {
       const trip = { ...good, start: '2026-03-23', end: '2026-03-23' };
-      const r = await client.callTool({ name: 'file_trip', arguments: trip, _meta: { ...CREDS, 'xylolabs/mode': 'execute' } });
+      const r = await executeTrip(trip);
       assert.equal(r.structuredContent.code, 'UPSTREAM');
       assert.match(r.content[0].text, /출장목적: "다른 목적 협의"/);
       assert.equal(db.trip('hong', tripKey(trip)).status, TRIP_STATUS.submitted, 'the submitted document is still recorded');

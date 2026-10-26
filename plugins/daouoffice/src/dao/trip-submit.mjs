@@ -1,7 +1,10 @@
 import { PluginError } from '../errors.mjs';
 import { dismissDialogs } from './dialogs.mjs';
-import { editApprovalInfo, submitDocument } from './approval.mjs';
-import { listAllDrafts } from './documents.mjs';
+import {
+  openApprovalLineEditor, saveApprovalLineEditor, approvalLineRows, removeFromApprovalLine, dropIntoApprovalLine,
+  setApprovalLineType, readApprovalLine, addRecipients, readRecipients, switchEditorTab, submitDocument,
+} from './approval.mjs';
+import { listDrafts } from './documents.mjs';
 import { parseTripBody } from './trip-docs.mjs';
 
 /**
@@ -16,7 +19,9 @@ import { parseTripBody } from './trip-docs.mjs';
  * 통째로 밀려, 종료일에 넣을 값이 시작일에 들어간 적이 있다. 날짜 입력은 readonly 에 datepicker
  * 가 붙어 있지만 value 대입이 먹는다. `input` 과 `change` 를 모두 일으켜야 양식이 알아챈다.
  *
- * 결재선과 참조자는 한 편집기 세션 안에서 넣는다(`editApprovalInfo()`). 편집기의 확인은 화면
+ * 결재선과 참조자는 한 편집기 세션 안에서 넣는다(`setTripApprovalInfo()`). 양식 기본 결재선을 비우고
+ * 설정의 결재자를 순서대로 넣은 뒤 `타입 이름` 순서가 정확히 같은지 본다. 참조자도 이름이 정확히
+ * 같아야 한다. 미리보기에 없던 사람이 결재선이나 참조에 남으면 상신하지 않는다. 편집기의 확인은 화면
  * 안에서만 유지되므로 편집과 상신을 같은 페이지에서 끝낸다.
  */
 
@@ -24,6 +29,79 @@ const fail = (message) => new PluginError('UPSTREAM', message);
 const FIELD_LABELS = { title: '제목', start: '시작일', end: '종료일', place: '출장지', transport: '교통편', goal: '출장목적', note: '비고' };
 const BODY_LABELS = { start: '시작일', end: '종료일', place: '출장지', transport: '교통편', goal: '출장목적', note: '비고' };
 const norm = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+
+/** `결재 김대표 → 합의 이합의` 꼴. 기안 행은 뺀다. */
+const lineOf = (rows) => rows.filter((r) => r.kind !== '기안').map((r) => `${r.kind} ${r.name}`).join(' → ');
+const wantLine = (approvers) => approvers.map((a) => `${a.type ?? '결재'} ${a.name}`).join(' → ');
+
+/** 참조자 표 글(`홍길동(부서), 김철수(부서)`)의 이름들. 비어 있으면 빈 배열. */
+export function refererNames(text) {
+  const t = String(text ?? '').trim();
+  if (!t || t.startsWith('(')) return [];
+  return t.split(', ').map((x) => x.replace(/\([^)]*\)\s*$/, '').trim()).filter(Boolean);
+}
+
+/** 결재 정보 편집기의 단계들(approval.mjs). 시험에서 갈아 끼운다. */
+export const EDITOR = Object.freeze({
+  openApprovalLineEditor, saveApprovalLineEditor, approvalLineRows, removeFromApprovalLine, dropIntoApprovalLine,
+  setApprovalLineType, readApprovalLine, addRecipients, readRecipients, switchEditorTab,
+});
+
+/** 이름 목록이 순서와 상관없이 정확히 같은가. */
+const sameNames = (a, b) => [...a].sort().join('\n') === [...b].sort().join('\n');
+
+/**
+ * 결재선과 참조자를 한 편집기 세션 안에서 넣는다. 기본 결재선의 기안 아닌 사람을 모두 빼고, 결재자를
+ * 순서대로 넣고, 참조자 탭에서 참조자를 넣는다. 결재선은 `타입 이름` 순서가, 참조자는 이름 묶음이
+ * 정확히 같아야 한다(`김철` 이 `김철수` 에 맞는 식의 부분 일치는 쓰지 않는다). 양식 기본 참조자처럼
+ * 설정에 없는 사람이 남으면 멈춘다. `{ line, rows, referers }`
+ */
+export async function setTripApprovalInfo(page, { approvers, referers }, ed = EDITOR) {
+  await ed.openApprovalLineEditor(page);
+  for (let round = 0; round < 10; round++) {
+    const other = (await ed.approvalLineRows(page)).find((r) => r.kind !== '기안');
+    if (!other) break;
+    if (!(await ed.removeFromApprovalLine(page, other.name))) throw fail(`기본 결재선에서 "${other.name}" 을 빼지 못했습니다.`);
+  }
+  if (lineOf(await ed.approvalLineRows(page))) throw fail(`기본 결재선을 비우지 못했습니다: ${lineOf(await ed.approvalLineRows(page))}`);
+  for (const { name, dept, type = '결재' } of approvers) {
+    await ed.dropIntoApprovalLine(page, name, { dept });
+    if (!(await ed.approvalLineRows(page)).some((r) => r.kind !== '기안' && r.name === name)) throw fail(`결재선에 "${name}" 이 들어가지 않았습니다.`);
+    await ed.setApprovalLineType(page, name, type);
+  }
+  const rows = await ed.approvalLineRows(page);
+  if (lineOf(rows) !== wantLine(approvers)) throw fail(`결재선이 기대와 다릅니다: ${lineOf(rows) || '(비어 있음)'} (기대 ${wantLine(approvers)})`);
+  // 수신자, 참조자 표도 table.tb_approval_line 이라 결재선은 탭을 바꾸기 전에 읽는다.
+  const line = await ed.readApprovalLine(page);
+
+  const refText = referers.length ? await ed.addRecipients(page, referers, 'referer')
+    : (await ed.switchEditorTab(page, 'referer'), await ed.readRecipients(page, 'referer'));
+  const names = refererNames(refText);
+  const want = referers.map((r) => r.name);
+  if (!sameNames(names, want)) {
+    const extra = names.filter((n) => !want.includes(n));
+    throw fail([
+      `참조자가 설정과 다릅니다: ${names.join(', ') || '(없음)'} (설정 ${want.join(', ') || '(없음)'}).`,
+      extra.length ? `${extra.join(', ')} 은 양식 기본 참조자로 보입니다. 넣어야 하는 사람이면 회사 설정 trip.referers 에 넣어 미리보기에 보이게 해 주세요.` : '',
+    ].join(' ').trim());
+  }
+  if (names.some((n) => rows.some((r) => r.name === n))) throw fail(`참조자가 결재선에도 들어 있습니다: ${line}`);
+  await ed.saveApprovalLineEditor(page);
+  return { line, rows, referers: names };
+}
+
+/** 편집기를 다시 열어 저장된 결재선과 참조자가 그대로인지 본다. 상신 바로 전에 부른다. */
+export async function checkTripApprovalInfo(page, { approvers, referers }, ed = EDITOR) {
+  await ed.openApprovalLineEditor(page);
+  const rows = await ed.approvalLineRows(page);
+  await ed.switchEditorTab(page, 'referer');
+  const names = refererNames(await ed.readRecipients(page, 'referer'));
+  await ed.saveApprovalLineEditor(page);
+  const problems = [];
+  if (lineOf(rows) !== wantLine(approvers)) problems.push(`결재선 ${lineOf(rows) || '(비어 있음)'} (기대 ${wantLine(approvers)})`);
+  if (!sameNames(names, referers.map((r) => r.name))) problems.push(`참조자 ${names.join(', ') || '(없음)'} (기대 ${referers.map((r) => r.name).join(', ') || '(없음)'})`);
+  if (problems.length) throw fail(`상신 전에 다시 본 결재 정보가 기대와 다릅니다: ${problems.join('; ')}`);
+}
 
 /** 기안 창을 연다. */
 export async function openTripDraft(page, baseUrl, { deptId, formId }) {
@@ -100,7 +178,10 @@ export function compareTripFields(expected, got, labels = FIELD_LABELS) {
  * 상신한 출장 문서를 서버에서 다시 읽어 대조한다. 첨부가 없어도 상신 직후에는 상태가 빌 수
  * 있어 `waitMs` 까지 기다린다. `{ status, title, mismatches, referers, line }`
  */
-export async function verifyTrip(api, docId, expected, { approvers = [], referers = [], waitMs = 90_000, sleep = defaultSleep } = {}) {
+/** 결재선, 참조자 응답의 이름. `userName`/`name` 이 있으면 그것, 없으면 표시 이름의 첫 말이다. */
+const personName = (plain, display) => String(plain ?? '').trim() || String(display ?? '').trim().split(/[\s(]/)[0];
+
+export async function verifyTrip(api, docId, expected, { approvers = [], referers = [], drafter = null, waitMs = 90_000, sleep = defaultSleep } = {}) {
   const until = Date.now() + waitMs;
   let r = await api(`/gw/api/approval/document/${docId}`);
   while (!r.data?.data?.document?.docStatusName && Date.now() < until) {
@@ -118,10 +199,13 @@ export async function verifyTrip(api, docId, expected, { approvers = [], referer
   if (!body.start && !body.place && !body.goal) mismatches.push('본문 칸을 읽지 못해 대조하지 못했습니다');
   else mismatches.push(...compareTripFields(expected, body, BODY_LABELS));
 
-  const line = (data.apprFlow?.activityGroups ?? []).flatMap((g) => (g.activities ?? []).map((a) => a.displayName ?? a.userName ?? ''));
-  for (const a of approvers) if (!line.some((l) => String(l).includes(a.name))) mismatches.push(`결재선에 ${a.name} 이 없습니다`);
-  const refs = (data.docInfo?.docReferenceReaders ?? []).map((x) => x.reader?.fullName ?? x.reader?.name ?? '');
-  for (const p of referers) if (!refs.some((x) => String(x).includes(p.name))) mismatches.push(`참조자에 ${p.name} 이 없습니다`);
+  // 이름은 정확히 맞춘다. 기안자는 빼고 결재자 순서가 같아야 하고, 참조자는 이름 묶음이 같아야 한다.
+  const line = (data.apprFlow?.activityGroups ?? []).flatMap((g) => (g.activities ?? []).map((a) => personName(a.userName, a.displayName)));
+  const approving = drafter ? line.filter((n, i) => !(i === 0 && n === drafter)) : line;
+  const wantNames = approvers.map((a) => a.name);
+  if (approving.join(' → ') !== wantNames.join(' → ')) mismatches.push(`결재선: ${approving.join(' → ') || '(비어 있음)'} (기대 ${wantNames.join(' → ')})`);
+  const refs = (data.docInfo?.docReferenceReaders ?? []).map((x) => personName(x.reader?.name, x.reader?.fullName));
+  if (!sameNames(refs, referers.map((r) => r.name))) mismatches.push(`참조자: ${refs.join(', ') || '(없음)'} (기대 ${referers.map((r) => r.name).join(', ') || '(없음)'})`);
 
   return { status, title: doc.title ?? '', mismatches, line, referers: refs, body };
 }
@@ -133,16 +217,11 @@ const defaultSleep = (ms) => new Promise((res) => setTimeout(res, ms));
  * 대조하고, 하나라도 어긋나면 상신하지 않고 멈춘다. `{ docId, line, referers, filled }`
  */
 export async function submitTrip(page, api, baseUrl, { trip, title, deptId, formId, approvers, referers }) {
+  // 상신 뒤 주소에서 문서 ID 를 못 읽으면 새로 생긴 문서로 찾는다. 그 전에 있던 문서를 적어 둔다.
+  const before = new Set((await listDrafts(api, { offset: 100 })).map((d) => d.id));
   await openTripDraft(page, baseUrl, { deptId, formId });
 
-  const info = await editApprovalInfo(page, { approvers, referers });
-  for (const { name } of approvers) {
-    if (!info.line.includes(name)) throw fail(`결재선에 ${name} 이 들어가지 않았습니다: ${info.line}`);
-  }
-  for (const { name } of referers) {
-    if (!info.referers.includes(name)) throw fail(`참조자에 ${name} 이 들어가지 않았습니다: ${info.referers}`);
-    if (info.line.includes(name)) throw fail(`${name} 이 결재선에 남아 있습니다: ${info.line}`);
-  }
+  const info = await setTripApprovalInfo(page, { approvers, referers });
 
   const expected = { ...trip, title };
   const filled = await fillTripForm(page, expected);
@@ -152,16 +231,20 @@ export async function submitTrip(page, api, baseUrl, { trip, title, deptId, form
   }
   const off = compareTripFields(expected, filled);
   if (off.length) throw fail(`채운 값이 기대와 다릅니다: ${off.join('; ')}`);
+  await checkTripApprovalInfo(page, { approvers, referers });
 
+  // submitDocument() 가 확인 버튼 직전에 markSent() 를 부른다. 그 뒤의 실패는 런타임이 결과를 모르는
+  // 것(afterWrite)으로 알린다.
   await submitDocument(page);
 
   let docId = page.url().match(/document\/(\d{6,25})/)?.[1] ?? null;
   if (!docId) {
-    // 주소가 바뀌지 않으면 내 기안 문서에서 같은 제목의 가장 최근 문서를 찾는다.
-    const mine = await listAllDrafts(api, { maxPages: 1 });
-    docId = mine.find((d) => d.title === title)?.documentId ?? null;
-    if (docId) docId = String(docId);
+    // 주소가 바뀌지 않으면 상신 전에 없던 같은 제목의 문서를 찾는다. 하나가 아니면 고르지 않는다.
+    const fresh = (await listDrafts(api, { offset: 100 })).filter((d) => d.title === title && !before.has(d.id));
+    if (fresh.length === 1) docId = fresh[0].id;
   }
-  if (!docId) throw fail('상신 뒤 문서 ID 를 찾지 못했습니다. 다우오피스 내 기안 문서에서 확인해 주세요.');
+  if (!docId) {
+    throw new PluginError('UPSTREAM', '결재요청은 눌렀지만 새 문서의 ID 를 찾지 못했습니다. 다시 올리기 전에 다우오피스 내 기안 문서에서 확인해 주세요.', { data: { afterWrite: true } });
+  }
   return { docId, line: info.line, referers: info.referers, filled };
 }

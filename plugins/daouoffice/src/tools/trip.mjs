@@ -1,6 +1,8 @@
 import * as z from 'zod';
 import { PluginError } from '../errors.mjs';
+import { digestOf } from '../runtime.mjs';
 import { findForm } from '../dao/forms.mjs';
+import { addDays } from '../dao/kst.mjs';
 import { tripLine, describeLine } from '../dao/approvers.mjs';
 import {
   TRIP_STATUS, tripKey, tripTitle, validateTrip, tripFormName, tripTransports,
@@ -53,7 +55,8 @@ async function planTrip(rt, call, { api }, args) {
 
   const key = tripKey(trip);
   const saved = rt.db.trip(call.owner, key);
-  const submitted = await listSubmittedTrips(api, { deptId: account.deptId, formName });
+  // 출장 반년 앞부터 기안한 문서를 본다. 그보다 먼저 올린 출장 신청은 이 출장과 겹칠 일이 없다.
+  const submitted = await listSubmittedTrips(api, { deptId: account.deptId, formName, since: addDays(trip.start, -183) });
   if (saved?.status === TRIP_STATUS.submitted && saved.docId && !submitted.some((d) => d.documentId === String(saved.docId))) {
     const r = await api(`/gw/api/approval/document/${encodeURIComponent(saved.docId)}`);
     const status = r.ok ? r.data?.data?.document?.docStatusName ?? '' : '';
@@ -69,6 +72,14 @@ async function planTrip(rt, call, { api }, args) {
   }
   return { trip, title, key, form, account, approvers, referers, strong, weak };
 }
+
+/** 미리보기가 보여 준 것. 실행은 같은 값일 때만 올린다(결재선, 참조자 설정이 바뀌면 다르다). */
+const tripDigest = (p) => digestOf({
+  title: p.title, trip: p.trip, formId: p.form.id, deptId: p.account.deptId,
+  approvers: p.approvers.map((a) => ({ name: a.name, type: a.type, dept: a.dept ?? null })),
+  referers: p.referers.map((r) => ({ name: r.name, dept: r.dept ?? null })),
+  overlaps: p.strong.map((d) => d.documentId),
+});
 
 function previewText(p) {
   const t = p.trip;
@@ -100,6 +111,7 @@ export function register(server, rt, { dom = DOM } = {}) {
 
   rt.tool(server, 'file_trip', {
     kind: 'write',
+    previewDigest: true,
     description: [
       '국내 출장 신청서를 올린다. 출장목적은 무엇을 하러 가는지 쓴다(출장지를 되풀이하지 않는다). 목적을 모르면 지어내지 말고 사람에게 묻는다.',
       '이미 올라간 출장과 겹치면 멈춘다. 이 도구는 미리보기를 만들 뿐이고 사람이 승인해야 상신한다. 먼저 guide 의 trip 주제를 읽는다.',
@@ -124,6 +136,7 @@ export function register(server, rt, { dom = DOM } = {}) {
             title: p.title, key: p.key, trip: p.trip, approvers: p.approvers, referers: p.referers,
             overlaps: p.strong.map((d) => d.documentId), sameDays: p.weak.map((d) => d.documentId),
           },
+          digest: tripDigest(p),
         };
       });
     },
@@ -132,16 +145,22 @@ export function register(server, rt, { dom = DOM } = {}) {
       return rt.session(call, async (s) => {
         const { page, api, baseUrl } = s;
         const p = await planTrip(rt, call, s, args);
+        call.assertPreviewed(tripDigest(p));
+        // 결재요청 뒤의 실패는 런타임이 결과를 모르는 것(afterWrite)으로 알린다.
         const { docId, line, referers } = await dom.submitTrip(page, api, baseUrl, {
           trip: p.trip, title: p.title, deptId: p.account.deptId, formId: p.form.id, approvers: p.approvers, referers: p.referers,
         });
-        rt.db.upsertTrip({ owner: call.owner, key: p.key, data: { ...p.trip, title: p.title }, docId, status: TRIP_STATUS.submitted });
+        // 저장된 출장의 다른 값(claimName, claimUntil, 옮겨 온 기록)은 남기고 이번 값을 덮는다. 올리기 전
+        // 상태(draft, 취소)만 submitted 로 바꾸고, 다른 사람이 올린 출장(elsewhere) 같은 기록은 그대로 둔다.
+        const saved = rt.db.trip(call.owner, p.key);
+        const status = saved && ![TRIP_STATUS.draft, TRIP_STATUS.cancelled].includes(saved.status) ? saved.status : TRIP_STATUS.submitted;
+        rt.db.upsertTrip({ owner: call.owner, key: p.key, data: { ...saved?.data, ...p.trip, title: p.title }, docId, status });
         const filing = rt.db.addFiling({ owner: call.owner, kind: 'trip', ref: p.key, docId, title: p.title, status: '상신', detail: { line, referers } });
 
-        const v = await verifyTrip(api, docId, { ...p.trip, title: p.title }, { approvers: p.approvers, referers: p.referers, waitMs: VERIFY_MS });
+        const v = await verifyTrip(api, docId, { ...p.trip, title: p.title }, { approvers: p.approvers, referers: p.referers, drafter: p.account.name, waitMs: VERIFY_MS });
         rt.db.updateFiling(call.owner, filing.id, { status: v.status || '확인 못 함', detail: { line, referers, verified: !v.mismatches.length, mismatches: v.mismatches } });
         if (v.mismatches.length) {
-          throw new PluginError('UPSTREAM', `출장 신청을 올렸지만 서버 문서가 기대와 다릅니다 (문서 ID ${docId}): ${v.mismatches.join('; ')}. 다우오피스에서 확인하고, 잘못됐으면 결재자가 처리하기 전에 상신취소해 주세요.`, { data: { docId, mismatches: v.mismatches } });
+          throw new PluginError('UPSTREAM', `출장 신청을 올렸지만 서버 문서가 기대와 다릅니다 (문서 ID ${docId}): ${v.mismatches.join('; ')}. 다우오피스에서 확인하고, 잘못됐으면 결재자가 처리하기 전에 상신취소해 주세요.`, { data: { docId, mismatches: v.mismatches, afterWrite: true } });
         }
         return {
           text: [

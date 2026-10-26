@@ -1,8 +1,9 @@
 import { PluginError } from '../errors.mjs';
-import { assertExecute } from '../guard.mjs';
+import { assertExecute, markSent } from '../guard.mjs';
 import { dismissDialogs } from './dialogs.mjs';
 import { setApprovalLine, approvalLineRows, linkDocuments } from './approval.mjs';
-import { sameReceipt } from './card-match.mjs';
+import { sameReceipt, overrideRules } from './card-match.mjs';
+import { listUsage } from './cards.mjs';
 import { purposeNameFor, detailFor, effectivePurposeName } from './expense-map.mjs';
 import { tripExpense } from './trip-expenses.mjs';
 import { checkWriting } from './writing.mjs';
@@ -108,31 +109,103 @@ const cardOf = (receipt) => {
 const itemOf = (p) => String(p?.item ?? p?.data?.item ?? '');
 const vendorOf = (p) => String(p?.vendor ?? p?.data?.vendor ?? '');
 
+/** 청구가 끝난 카드 행인가. 사용용도만 저장한 행(작성중)은 아직 청구 전이다. card-match 와 같은 기준이다. */
+export const isClaimedRow = (r) => Boolean(r?.docId) || !['작성대기', '작성중'].includes(r?.status);
+
+/** 달 경계 너머에서 취소 짝을 찾을 날 수. 카드 대장은 영업일 2-3일 늦게 올라온다. */
+export const EDGE_DAYS = 10;
+
 /**
- * 짝지은 카드 행(`matchRows().audited`)을 이 달 청구에 맞게 나눈다. 다우오피스를 부르지 않는다.
+ * 이 달 카드 대장을 청구에 맞게 나눈다. 다우오피스를 부르지 않는다. 대장의 모든 행이 아래 가운데
+ * 꼭 한 곳에 들어가므로 명세서 대조의 합이 대장 합과 같다.
  *
  *   claimed      이미 청구한 행 (문서가 붙었거나 결재가 시작됐다)
  *   items        이번에 올릴 수 있는 행. 영수증, 출장 경비, 그대로 청구, 구매 품의, 메모 가운데 하나로 설명된다
  *   excluded     사람이 빼라고 한 행
  *   unexplained  어느 것으로도 설명되지 않는 행. 지어내지 않고 사람에게 묻는다
+ *   cancelled    취소 짝(같은 가맹점, 같은 금액의 +/−)이 있는 행과 0원 행. 달을 넘긴 짝도 찾는다
+ *   refunded     사람이 환불이라고 확인한 행 (`overrides` refunded)
+ *   elsewhere    다른 사람이 청구하는 행 (`overrides` elsewhere)
+ *
+ * `ledger` 는 이 달 대장 원본(`matchRows().rows`), `cancelled` 는 그 안의 취소 짝 id 들, `edge` 는 달
+ * 앞뒤 `EDGE_DAYS` 일의 대장이다. 말일 결제가 다음 달 1일에 취소되면 이 달에는 그 결제를 취소로 빼고,
+ * 다음 달에는 그 −금액 행을 앞 달 결제의 취소로 본다. 짝이 없는 음수 행, 이미 청구한 결제의 취소는
+ * 설명되지 않은 행으로 두고 멈춘다. 음수 행은 지출결의 행으로 넣지 않는다. 사람이 확인하면 notes 의
+ * exclude 로 남긴다.
  *
  * 영수증은 같은 결제의 둘째 문서(인보이스와 영수증)도 함께 붙인다. 영수증에 다른 카드가 적혀
  * 있으면(`data.cardLast4`, save_receipt 가 적는다) 이 카드 청구에 넣지 않는다. 적혀 있지 않으면 모르는
  * 것이지 다른 카드가 아니다.
  */
-export function sortClaimRows({ audited, from, to, receipts = [], trips = [], confirmed = [], notes = [], cardLast4 }) {
-  const inMonth = audited.filter((a) => dayOf(a.row) >= from && dayOf(a.row) <= to);
+export function sortClaimRows({
+  audited, ledger = null, cancelled: cancelledIds = new Set(), overrides = [], edge = [],
+  from, to, receipts = [], trips = [], confirmed = [], notes = [], cardLast4,
+}) {
+  const inRange = (r) => dayOf(r) >= from && dayOf(r) <= to;
+  const inMonth = audited.filter((a) => inRange(a.row));
+  const month = (ledger ?? inMonth.map((a) => a.row)).filter(inRange);
+  const { isRefund, isElsewhere } = overrideRules(overrides);
   const claimed = [];
   const items = [];
   const excluded = [];
   const unexplained = [];
+  const cancelled = [];
+  const refunded = [];
+  const elsewhere = [];
+  const warnings = [];
   const usedNotes = new Set();
+  const usedEdge = new Set();
+  // 이번 호출의 메모가 저장된 메모보다 먼저다.
+  const noteFor = (r) => notes.find((n) => !n.saved && noteMatches(n, r)) ?? notes.find((n) => n.saved && noteMatches(n, r));
+  const mateIn = (pool, r) => pool.find((e) => !usedEdge.has(e.id) && e.amount === -r.amount && e.merchant === r.merchant);
+  const after = edge.filter((e) => dayOf(e) > to);
+  const before = edge.filter((e) => dayOf(e) < from);
+
+  // 짝지은 행(live)에 들지 않은 대장 행: 취소 짝, 환불, 다른 사람 몫, 음수, 0원.
+  const live = new Set(inMonth.map((a) => a.row.id));
+  for (const r of month.filter((x) => !live.has(x.id))) {
+    if (cancelledIds.has(r.id)) {
+      const mate = month.find((p) => p.id !== r.id && cancelledIds.has(p.id) && p.amount === -r.amount && p.merchant === r.merchant);
+      if (r.amount > 0 && isClaimedRow(r)) claimed.push({ row: r });
+      else if (r.amount < 0 && mate && isClaimedRow(mate)) unexplained.push({ row: r, reason: `이미 청구한 결제(${tagOf(mate)})의 취소입니다. 회계에 처리 방법을 묻고 notes 의 exclude 로 남겨 주세요` });
+      else cancelled.push({ row: r, reason: '같은 달 취소 짝' });
+      continue;
+    }
+    if (isRefund(r)) { refunded.push({ row: r, reason: isRefund(r).data?.why ?? '환불 확인' }); continue; }
+    if (isElsewhere(r)) { elsewhere.push({ row: r, reason: isElsewhere(r).data?.why ?? '다른 사람이 청구' }); continue; }
+    if (!r.amount) { cancelled.push({ row: r, reason: '0원' }); continue; }
+    const note = noteFor(r);
+    if (note) usedNotes.add(note);
+    if (note?.exclude) { excluded.push({ row: r, reason: note.reason || '사람이 뺐다', note }); continue; }
+    if (r.amount < 0) {
+      const mate = mateIn(before, r);
+      if (mate) usedEdge.add(mate.id);
+      if (note) unexplained.push({ row: r, reason: '음수 결제(취소, 환불)는 지출결의 행으로 넣지 않습니다. 확인한 내용을 notes 의 exclude 와 reason 으로 남겨 주세요' });
+      else if (mate && isClaimedRow(mate)) unexplained.push({ row: r, reason: `앞 달에 청구한 결제(${tagOf(mate)})의 취소입니다. 회계에 처리 방법을 묻고 notes 의 exclude 로 남겨 주세요` });
+      else if (mate) cancelled.push({ row: r, reason: `앞 달 결제(${tagOf(mate)})의 취소` });
+      else unexplained.push({ row: r, reason: '짝이 되는 결제가 없는 취소나 환불입니다. 무엇인지 사람에게 묻고 notes 의 exclude 로 남겨 주세요' });
+      continue;
+    }
+    unexplained.push({ row: r, reason: '짝짓기에서 빠진 결제입니다' });
+  }
 
   for (const a of inMonth) {
     const r = a.row;
-    if (a.claimed || r.docId) { claimed.push(a); continue; }
-    // 이번 호출의 메모가 저장된 메모보다 먼저다.
-    const note = notes.find((n) => !n.saved && noteMatches(n, r)) ?? notes.find((n) => n.saved && noteMatches(n, r));
+    const lateCancel = mateIn(after, r);
+    if (a.claimed || r.docId) {
+      if (lateCancel) {
+        usedEdge.add(lateCancel.id);
+        warnings.push(`이미 청구한 결제 ${tagOf(r)} 가 ${dayOf(lateCancel)} 에 취소됐습니다. 다음 달 지출결의를 올릴 때 회계와 맞춥니다.`);
+      }
+      claimed.push(a);
+      continue;
+    }
+    if (lateCancel) {
+      usedEdge.add(lateCancel.id);
+      cancelled.push({ row: r, reason: `${dayOf(lateCancel)} 에 취소됨` });
+      continue;
+    }
+    const note = noteFor(r);
     if (note) usedNotes.add(note);
     if (note?.exclude) { excluded.push({ row: r, reason: note.reason || '사람이 뺐다', note }); continue; }
 
@@ -182,7 +255,10 @@ export function sortClaimRows({ audited, from, to, receipts = [], trips = [], co
   }
 
   const unusedNotes = notes.filter((n) => !n.saved && !usedNotes.has(n));
-  return { inMonth, claimed, items, excluded, unexplained, usedNotes: [...usedNotes], unusedNotes };
+  return {
+    month, inMonth, claimed, items, excluded, unexplained, cancelled, refunded, elsewhere, warnings,
+    usedNotes: [...usedNotes], unusedNotes,
+  };
 }
 
 /**
@@ -223,10 +299,11 @@ export const groupSummary = (groups) => [...groups].map(([purpose, rows]) => ({
 }));
 
 /**
- * 명세서 대조. 이 달 카드 내역 = 이미 청구 + 이번 문서 + 다른 사용용도 + 다른 사람 몫 + 뺀 결제
- * + 설명 안 된 결제. 취소 쌍과 환불은 카드 내역에서 이미 상계돼 셈하지 않는다.
+ * 명세서 대조. 이 달 카드 대장 합 = 이미 청구 + 이번 문서 + 다른 사용용도 + 다른 사람 몫 + 뺀 결제
+ * + 취소 + 환불 + 설명 안 된 결제. 대장 원본의 모든 행(음수, 취소 짝, 환불 포함)을 더하므로 대장 합과
+ * 그대로 같다. `cancelledCount` 는 합이 0 이어도 취소 행이 있었음을 보이려고 센다.
  */
-export function claimStatement({ sorted, planned, purpose, elsewhere = [] }) {
+export function claimStatement({ sorted, planned, purpose }) {
   const sum = (xs) => xs.reduce((t, x) => t + Number(x.row?.amount ?? x.amount ?? 0), 0);
   const thisRows = planned.groups.get(purpose) ?? [];
   const otherRows = planned.rows.filter((r) => r.purposeName !== purpose);
@@ -234,13 +311,20 @@ export function claimStatement({ sorted, planned, purpose, elsewhere = [] }) {
     claimed: sum(sorted.claimed),
     thisDoc: sum(thisRows),
     otherPurposes: sum(otherRows),
-    elsewhere: sum(elsewhere),
+    elsewhere: sum(sorted.elsewhere ?? []),
     excluded: sum(sorted.excluded),
+    cancelled: sum(sorted.cancelled ?? []),
+    cancelledCount: (sorted.cancelled ?? []).length,
+    refunded: sum(sorted.refunded ?? []),
     unexplained: sum(sorted.unexplained) + (sum(sorted.items) - sum(planned.rows)),
   };
-  st.total = sum(sorted.inMonth) + st.elsewhere;
+  st.total = sum(sorted.month ?? sorted.inMonth);
   return st;
 }
+
+/** 대조의 각 칸을 더한 값. 대장 합(`total`)과 같아야 한다. */
+export const statementSum = (st) => st.claimed + st.thisDoc + st.otherPurposes + st.elsewhere + st.excluded
+  + st.cancelled + st.refunded + st.unexplained;
 
 /** `이 달 카드 내역 … = 이미 청구 … + 이번 문서 … + …` */
 export function statementLine(st) {
@@ -248,6 +332,8 @@ export function statementLine(st) {
   if (st.otherPurposes) parts.push(`다른 사용용도 ${won(st.otherPurposes)}`);
   if (st.elsewhere) parts.push(`다른 사람 몫 ${won(st.elsewhere)}`);
   if (st.excluded) parts.push(`뺀 결제 ${won(st.excluded)}`);
+  if (st.cancelledCount) parts.push(`취소 ${st.cancelledCount}건 ${won(st.cancelled)}`);
+  if (st.refunded) parts.push(`환불 ${won(st.refunded)}`);
   if (st.unexplained) parts.push(`설명 안 된 결제 ${won(st.unexplained)}`);
   return `이 달 카드 내역 ${won(st.total)} = ${parts.join(' + ')}`;
 }
@@ -361,14 +447,15 @@ export async function searchCard(page, cardId) {
   );
 }
 
-/** ExtJS 확인 대화상자의 버튼을 누른다. `예`, `아니오`, `확인`. */
-async function answerExtDialog(page, label) {
+/** ExtJS 확인 대화상자의 버튼을 누른다. `예`, `아니오`, `확인`. `beforeClick` 은 누르기 바로 전에 불린다. */
+async function answerExtDialog(page, label, beforeClick = () => {}) {
   await page.waitForFunction(
     (t) => Ext.ComponentQuery.query('messagebox').some(
       (w) => w.isVisible?.() && Ext.ComponentQuery.query('button', w).some((b) => (b.getText?.() ?? '') === t && b.isVisible?.()),
     ),
     label, { timeout: 30_000, polling: 400 },
   );
+  beforeClick();
   await page.evaluate((t) => {
     const box = Ext.ComponentQuery.query('messagebox').find((w) => w.isVisible?.());
     const b = Ext.ComponentQuery.query('button', box).find((x) => (x.getText?.() ?? '') === t && x.isVisible?.());
@@ -379,9 +466,10 @@ async function answerExtDialog(page, label) {
 
 /**
  * 경비 화면에서 대상 행을 골라 지출품의서를 만든다. **서버에 문서가 생긴다.**
- * 문서 ID 와 기안 창(새 페이지)을 돌려준다. 아직 상신 전이다.
+ * 문서 ID 와 기안 창(새 페이지)을 돌려준다. 아직 상신 전이다. `예` 를 누른 뒤에는
+ * `progress.created` 가 참이다. 그 뒤에 멈추면 카드 행이 임시저장 문서에 묶였을 수 있다.
  */
-export async function createClaimDocument(page, baseUrl, { cardId, purchaseIds }) {
+export async function createClaimDocument(page, baseUrl, { cardId, purchaseIds, progress = {} }) {
   assertExecute('지출결의 문서 생성');
   await openCardScreen(page, baseUrl);
   await searchCard(page, cardId);
@@ -420,7 +508,7 @@ export async function createClaimDocument(page, baseUrl, { cardId, purchaseIds }
     const b = Ext.ComponentQuery.query('button', win).find((x) => (x.getText?.() ?? '') === '저장 후 결재요청');
     b.fireHandler ? b.fireHandler() : b.fireEvent('click', b);
   });
-  await answerExtDialog(page, '예');
+  await answerExtDialog(page, '예', () => { progress.created = true; });
 
   const docPage = await opened;
   if (docPage instanceof Error) throw fail('지출결의 기안 창이 열리지 않았습니다. 다우오피스 임시저장 문서를 확인해 주세요.');
@@ -458,8 +546,11 @@ async function closeApprovalLineEditorQuiet(page) {
  *
  * `결재요청` 뒤에는 결재자가 있으면 기안의견 창(.layer_approval), 없으면 바로 완료 경고 창이 뜬다.
  * 둘을 헷갈려 아무 주 버튼이나 누르면 사고가 난다. 창을 특정해서 잡는다.
+ *
+ * 기안의견 창의 `결재요청` 을 누르기 바로 전에 `progress.sent` 를 참으로 둔다. 그 뒤의 실패는 상신이
+ * 됐는지 모르는 것이다. 부르는 쪽이 "올리지 못했다" 가 아니라 "확인하지 못했다" 로 알린다.
  */
-export async function attachAndSubmit(docPage, { files, approvers, title, links = [], opinion = '' }) {
+export async function attachAndSubmit(docPage, { files, approvers, title, links = [], opinion = '', progress = {} }) {
   await docPage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
   await docPage.waitForTimeout(5000);
   await dismissDialogs(docPage);
@@ -537,6 +628,8 @@ export async function attachAndSubmit(docPage, { files, approvers, title, links 
     await box.fill(opinion);
     if ((await box.inputValue()) !== opinion) throw fail('기안의견이 제대로 들어가지 않았습니다.');
   }
+  markSent('지출결의 결재요청');
+  progress.sent = true;
   await docPage.click('.go_popup.layer_approval a.btn_major_s');
   await docPage.waitForTimeout(10_000);
   return line;
@@ -567,9 +660,29 @@ export async function verifyClaim(api, docId, { waitMs = 90_000, sleep = default
   };
 }
 
-/** 기대와 서버 문서를 대조한다. 어긋난 것의 설명 목록. */
-export function claimMismatches(v, { title, files, links }) {
+/**
+ * 상신한 문서에 묶인 카드 행. 문서를 만들면 카드 대장의 행에 그 문서 ID 가 붙는다. 문서 본문 표의
+ * 모양은 알 수 없어, 행 수와 합계는 대장에서 센다. `{ ids, amount }`
+ */
+export async function claimLedger(api, { cardId, from, to, docId, usage = listUsage }) {
+  const { rows } = await usage(api, { from, to, cardId });
+  const linked = rows.filter((r) => String(r.docId ?? '') === String(docId));
+  return { ids: linked.map((r) => String(r.id)).sort(), amount: linked.reduce((t, r) => t + Number(r.amount), 0) };
+}
+
+/**
+ * 기대와 서버 문서를 대조한다. 어긋난 것의 설명 목록. `ledger` 는 `claimLedger()` 의 결과, `rows` 는
+ * 올리려던 카드 행(`{ id, amount }`)이다.
+ */
+export function claimMismatches(v, { title, files, links, ledger = null, rows = null }) {
   const out = [];
+  if (ledger && rows) {
+    const want = rows.map((r) => String(r.id)).sort();
+    const amount = rows.reduce((t, r) => t + Number(r.amount), 0);
+    if (want.join(',') !== ledger.ids.join(',') || amount !== ledger.amount) {
+      out.push(`문서에 묶인 카드 행이 다릅니다: ${ledger.ids.length}건 ${won(ledger.amount)} (기대 ${want.length}건 ${won(amount)})`);
+    }
+  }
   if (v.status !== '진행중') out.push(`상태가 진행중이 아닙니다: ${v.status || '(비어 있음)'}`);
   if (v.title !== title) out.push(`제목이 다릅니다: ${v.title || '(비어 있음)'}`);
   if (v.attachCount !== files.length) out.push(`첨부 수가 다릅니다: ${v.attachCount}/${files.length}`);

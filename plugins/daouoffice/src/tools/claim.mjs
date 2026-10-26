@@ -1,18 +1,20 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as z from 'zod';
 import { PluginError } from '../errors.mjs';
-import { kstDate } from '../dao/kst.mjs';
-import { listCards, listPurposes, pickCard, last4Of, cardHolder } from '../dao/cards.mjs';
-import { matchCard, overrideRules } from '../dao/card-match.mjs';
+import { digestOf } from '../runtime.mjs';
+import { kstDate, addDays } from '../dao/kst.mjs';
+import { listCards, listPurposes, listUsage, pickCard, last4Of, cardHolder } from '../dao/cards.mjs';
+import { matchCard } from '../dao/card-match.mjs';
 import { claimLine, describeLine } from '../dao/approvers.mjs';
-import { listAllDrafts } from '../dao/documents.mjs';
+import { listDrafts } from '../dao/documents.mjs';
 import { parsePurposeMap, effectivePurposeName, resolvePurpose } from '../dao/expense-map.mjs';
 import { tripsForExpenses, TRIP_EXPENSE_KIND } from '../dao/trip-expenses.mjs';
 import {
   claimMonth, assertMonthOver, claimTitle, claimRef, sortClaimRows, planClaim, groupSummary,
   claimStatement, statementLine, linkCandidates, decideLinks, opinionText, savedNotes, isLiveStatus,
-  savePurposes, createClaimDocument, attachAndSubmit, verifyClaim, claimMismatches, CLAIM_NOTE_KIND,
+  savePurposes, createClaimDocument, attachAndSubmit, verifyClaim, claimLedger, claimMismatches, CLAIM_NOTE_KIND, EDGE_DAYS,
 } from '../dao/expense-claim.mjs';
 
 /**
@@ -53,6 +55,36 @@ async function docState(api, docId) {
 const list = (lines, max = MAX_LINES) => (lines.length > max ? [...lines.slice(0, max), `(외 ${lines.length - max}건)`] : lines);
 
 /**
+ * 내 기안 문서를 최신순으로 `since`(YYYY-MM-DD)보다 앞에 기안한 문서가 나올 때까지 읽는다(100건씩,
+ * 최대 `maxPages` 쪽). 한 달의 지출결의는 그 달 1일 이후에 기안하므로 그 앞은 볼 필요가 없다.
+ */
+async function draftsSince(api, since, maxPages = 20) {
+  const out = [];
+  for (let page = 0; page < maxPages; page++) {
+    const rows = await listDrafts(api, { page, offset: 100 });
+    out.push(...rows);
+    const oldest = rows.map((d) => String(d.draftedAt).slice(0, 10)).filter(Boolean).sort()[0];
+    if (rows.length < 100 || (oldest && oldest < since)) break;
+  }
+  return out;
+}
+
+/** 끝나지 않은 시도의 기록 상태. 그 문서가 임시저장에 남아 있으면 카드 행이 거기 묶였을 수 있다. */
+const UNFINISHED = new Set(['작성중', '상신 실패', '확인 못 함', '생성 중 멈춤']);
+
+/**
+ * 달 앞뒤 `EDGE_DAYS` 일의 카드 대장. 달을 넘긴 취소 짝을 찾는 데만 쓴다. 짝짓기(영수증, 품의)에는
+ * 넣지 않아 이 달 행의 영수증을 빼앗지 않는다. 뒤쪽은 오늘까지만 본다.
+ */
+async function edgeRows(api, cardId, m, today) {
+  const late = addDays(m.to, EDGE_DAYS);
+  const windows = [[addDays(m.from, -EDGE_DAYS), addDays(m.from, -1)], [addDays(m.to, 1), late < today ? late : today]];
+  const out = [];
+  for (const [from, to] of windows) if (from <= to) out.push(...(await listUsage(api, { from, to, cardId })).rows);
+  return out;
+}
+
+/**
  * 미리보기와 실행이 함께 쓰는 계획. 막히면 VALIDATION 이나 CONFLICT 를 던진다. 다우오피스는
  * 읽기만 한다(카드, 사용내역, 사용용도 목록, 문서 상태, 내 기안 문서).
  */
@@ -73,12 +105,12 @@ async function buildClaim(rt, call, { api }, args, today = kstDate()) {
   const matched = await matchCard({
     api, db: rt.db, owner, card, from: m.from, to: m.to, vendorAliases: rt.config.cardMatch?.vendorAliases ?? {},
   });
-  const { isElsewhere } = overrideRules(overrides);
-  const elsewhere = matched.rows.filter((r) => isElsewhere(r) && dayOf(r) >= m.from && dayOf(r) <= m.to);
+  const edge = await edgeRows(api, card.id, m, today);
 
   const notes = [...(args.notes ?? []), ...savedNotes(overrides)];
   const sorted = sortClaimRows({
-    audited: matched.audited, from: m.from, to: m.to, receipts: rt.db.receipts(owner),
+    audited: matched.audited, ledger: matched.rows, cancelled: matched.cancelled, overrides, edge,
+    from: m.from, to: m.to, receipts: rt.db.receipts(owner),
     trips: tripsForExpenses(rt.db.trips(owner)), confirmed: overrides.filter((o) => o.kind === TRIP_EXPENSE_KIND),
     notes, cardLast4: last4,
   });
@@ -112,18 +144,29 @@ async function buildClaim(rt, call, { api }, args, today = kstDate()) {
   // 같은 카드, 같은 달, 같은 사용용도에 살아 있는 문서가 있으면 두 번째 문서다. 만들지 않는다.
   const existing = [];
   const seen = new Set();
-  for (const d of await listAllDrafts(api, { maxPages: 3 })) {
-    if ((d.title === title || d.title === baseTitle) && isLiveStatus(d.docStatusName)) {
-      existing.push({ docId: String(d.documentId), title: d.title, status: d.docStatusName });
-      seen.add(String(d.documentId));
+  for (const d of await draftsSince(api, m.from)) {
+    if ((d.title === title || d.title === baseTitle) && isLiveStatus(d.status)) {
+      existing.push({ docId: d.id, title: d.title, status: d.status });
+      seen.add(d.id);
     }
   }
   const claimedHere = sorted.claimed.filter((a) => a.row.docId && a.row.purpose === purpose).map((a) => String(a.row.docId));
-  const filed = rt.db.filings(owner, { kind: 'claim', ref }).map((f) => f.docId).filter(Boolean);
-  for (const docId of new Set([...claimedHere, ...filed])) {
+  const filings = rt.db.filings(owner, { kind: 'claim', ref }).filter((f) => f.docId);
+  const unfinished = new Set(filings.filter((f) => UNFINISHED.has(f.status)).map((f) => String(f.docId)));
+  const stuck = [];
+  for (const docId of new Set([...claimedHere, ...filings.map((f) => String(f.docId))])) {
     if (seen.has(docId)) continue;
     const st = await docState(api, docId);
     if (isLiveStatus(st.status)) existing.push({ docId, title: st.title, status: st.status });
+    // 앞선 시도가 문서를 만들고 멈추면 카드 행이 임시저장 문서에 묶여 남는다. 그대로 두면 "올릴 결제가
+    // 없다" 고 보이므로 그 문서를 알려 주고 멈춘다.
+    else if (st.status === '임시저장' && (claimedHere.includes(docId) || unfinished.has(docId))) stuck.push({ docId, title: st.title });
+  }
+  if (stuck.length) {
+    throw new PluginError('CONFLICT', [
+      `앞선 ${purpose} 지출결의 시도가 임시저장 문서에서 멈췄습니다: ${stuck.map((d) => `${d.title || '(제목 없음)'} (문서 ID ${d.docId})`).join(', ')}.`,
+      '카드 행이 그 문서에 묶여 있을 수 있습니다. 다우오피스에서 그 문서를 열어 확인하고, 지우거나 상신한 뒤 다시 요청해 주세요.',
+    ].join(' '), { stuck });
   }
 
   const rows = [...(planned.groups.get(purpose) ?? [])].sort((a, b) => String(a.row.useDate).localeCompare(String(b.row.useDate)));
@@ -146,6 +189,8 @@ async function buildClaim(rt, call, { api }, args, today = kstDate()) {
   if (lost.length) {
     throw new PluginError('VALIDATION', `영수증 파일이 서버에 없습니다: ${lost.map((f) => path.basename(f)).join(', ')}. 영수증을 다시 올려 주세요.`);
   }
+  // 미리보기와 실행이 같은 파일을 붙이는지 내용으로 맞춘다. 이름이 같아도 바뀐 파일은 다른 것이다.
+  const fileHashes = files.map((f) => ({ name: path.basename(f), sha256: createHash('sha256').update(fs.readFileSync(f)).digest('hex') }));
 
   const cands = linkCandidates(rows, { inspections: rt.db.filings(owner, { kind: 'inspection' }) });
   for (const c of cands) {
@@ -163,16 +208,28 @@ async function buildClaim(rt, call, { api }, args, today = kstDate()) {
 
   const amount = rows.reduce((t, r) => t + r.row.amount, 0);
   const line = claimLine(rt.config, { project: rt.config.cards?.[last4]?.project, amount });
-  const st = claimStatement({ sorted, planned, purpose, elsewhere });
+  const st = claimStatement({ sorted, planned, purpose });
   const from = rt.config.cardMatch?.requisitionFrom;
   const noRequisition = from ? rows.filter((r) => r.kind === '구매' && !r.purchase && dayOf(r.row) >= from) : [];
 
   return {
-    m, card, last4, holder, purpose, purposeCode, title, ref, rows, files, amount, line, st, groups,
+    m, card, last4, holder, purpose, purposeCode, title, ref, rows, files, fileHashes, amount, line, st, groups,
     links: linkPlan.links, opinion: opinionText(linkPlan.opinion), opinionDocs: linkPlan.opinion,
-    elsewhere, sorted, noRequisition,
+    sorted, noRequisition,
   };
 }
+
+/**
+ * 미리보기가 보여 준 것. 실행은 계획을 다시 세워 이 값이 같을 때만 올린다. 카드 대장이 늦게 올라와 행이
+ * 늘거나, 품의가 그사이 결재돼 연결이 늘거나, 영수증이 바뀌면 다르다.
+ */
+const claimDigest = (p) => digestOf({
+  title: p.title, purpose: p.purpose, purposeCode: p.purposeCode, card: p.last4, amount: p.amount,
+  rows: p.rows.map((r) => ({ id: String(r.row.id), amount: r.row.amount, detail: r.detail })),
+  links: p.links.map((c) => c.docId), opinion: p.opinionDocs.map((c) => c.docId),
+  line: p.line.map((a) => ({ name: a.name, type: a.type })),
+  files: p.fileHashes,
+});
 
 /** 메모를 저장해 다음 문서(다른 사용용도, 다시 올리기)에도 쓰이게 한다. 같은 결제의 옛 메모는 바꾼다. */
 function saveNotes(rt, owner, used) {
@@ -202,8 +259,12 @@ function previewText(p) {
     `- 사용용도별 (이 달 아직 안 올린 것): ${p.groups.map((g) => `${g.purpose} ${g.count}건 ${won(g.amount)}`).join(', ')}`,
     `- 명세서 대조: ${statementLine(p.st)}`,
   ];
-  if (p.elsewhere.length) lines.push(`- 다른 사람 몫: ${p.elsewhere.map(tagOf).join(', ')}`);
-  if (p.sorted.excluded.length) lines.push(`- 뺀 결제: ${p.sorted.excluded.map((e) => `${tagOf(e.row)} (${e.reason})`).join(', ')}`);
+  const why = (xs) => xs.map((e) => `${tagOf(e.row)} (${e.reason})`).join(', ');
+  if (p.sorted.elsewhere.length) lines.push(`- 다른 사람 몫: ${why(p.sorted.elsewhere)}`);
+  if (p.sorted.excluded.length) lines.push(`- 뺀 결제: ${why(p.sorted.excluded)}`);
+  if (p.sorted.cancelled.length) lines.push(`- 취소: ${why(p.sorted.cancelled)}`);
+  if (p.sorted.refunded.length) lines.push(`- 환불: ${why(p.sorted.refunded)}`);
+  for (const w of p.sorted.warnings) lines.push(`- 주의: ${w}`);
   lines.push(`- 결재선: 기안 나 → ${describeLine(p.line)}`);
   lines.push(p.links.length
     ? `- 문서 연결 ${p.links.length}건: ${p.links.map((c) => `${c.kind} ${c.title || c.docId}${c.docNum ? ` (${c.docNum})` : ''}`).join(', ')}`
@@ -237,6 +298,7 @@ const DOM = { createClaimDocument, attachAndSubmit };
 export function register(server, rt, { dom = DOM } = {}) {
   rt.tool(server, 'file_expense_claim', {
     kind: 'write',
+    previewDigest: true,
     description: [
       '법인카드 지출결의(경비청구)를 올린다. 카드 한 장, 한 달(KST 1일부터 말일까지), 사용용도 하나가 문서 하나다.',
       '그 달이 끝난 뒤 다음 달 초에 올린다. 사용용도를 모르면 purpose 없이 부르면 사용용도별 묶음을 알려 준다.',
@@ -257,7 +319,7 @@ export function register(server, rt, { dom = DOM } = {}) {
       return rt.session(call, async (s) => {
         const p = await buildClaim(rt, call, s, args);
         p.unusedNotes = p.sorted.unusedNotes;
-        return { text: previewText(p), data: planData(p) };
+        return { text: previewText(p), data: planData(p), digest: claimDigest(p) };
       });
     },
 
@@ -266,10 +328,21 @@ export function register(server, rt, { dom = DOM } = {}) {
       return rt.session(call, async (s) => {
         const { page, api, baseUrl } = s;
         const p = await buildClaim(rt, call, s, args);
+        call.assertPreviewed(claimDigest(p));
         const links = p.links.map((c) => ({ id: c.docId, docNum: c.docNum }));
 
+        const progress = {};
         await savePurposes(api, p.rows.map((r) => ({ raw: r.row.raw, purchaseId: r.row.id, purposeCode: p.purposeCode, detail: r.detail })));
-        const { docId, docPage } = await dom.createClaimDocument(page, baseUrl, { cardId: p.card.id, purchaseIds: p.rows.map((r) => r.row.id) });
+        let made;
+        try {
+          made = await dom.createClaimDocument(page, baseUrl, { cardId: p.card.id, purchaseIds: p.rows.map((r) => r.row.id), progress });
+        } catch (e) {
+          if (!progress.created) throw e;
+          rt.db.addFiling({ owner: call.owner, kind: 'claim', ref: p.ref, docId: null, title: p.title, status: '생성 중 멈춤', detail: { card: p.last4, month: p.m.ym, purpose: p.purpose } });
+          const why = e instanceof PluginError ? e.message : '경비 화면 조작이 실패했습니다.';
+          throw new PluginError('UPSTREAM', `지출결의 문서를 만드는 도중 멈췄습니다: ${why} 카드 행이 임시저장 문서에 묶였을 수 있습니다. 다시 올리기 전에 다우오피스 임시저장 문서를 확인해 주세요.`, { cause: e, data: { afterWrite: true } });
+        }
+        const { docId, docPage } = made;
         const detail = {
           card: p.last4, month: p.m.ym, purpose: p.purpose, amount: p.amount,
           rows: p.rows.map((r) => ({ id: r.row.id, date: dayOf(r.row), amount: r.row.amount })),
@@ -279,21 +352,27 @@ export function register(server, rt, { dom = DOM } = {}) {
 
         let lineText;
         try {
-          lineText = await dom.attachAndSubmit(docPage, { files: p.files, approvers: p.line, title: p.title, links, opinion: p.opinion });
+          lineText = await dom.attachAndSubmit(docPage, { files: p.files, approvers: p.line, title: p.title, links, opinion: p.opinion, progress });
         } catch (e) {
-          rt.db.updateFiling(call.owner, filing.id, { status: '상신 실패' });
           const why = e instanceof PluginError ? e.message : '기안 창 조작이 실패했습니다.';
-          throw new PluginError('UPSTREAM', `지출결의 문서(문서 ID ${docId})를 만들었지만 상신하지 못했습니다: ${why} 다우오피스 임시저장 문서를 확인해 주세요.`, { cause: e, data: { docId } });
+          if (progress.sent) {
+            // 결재요청을 누른 뒤의 실패는 올라갔는지 모르는 것이다. 다시 올리라고 하지 않는다.
+            rt.db.updateFiling(call.owner, filing.id, { status: '확인 못 함' });
+            throw new PluginError('UPSTREAM', `결재요청을 누른 뒤 결과를 확인하지 못했습니다 (문서 ID ${docId}): ${why} 다시 올리기 전에 다우오피스에서 그 문서의 상태를 확인해 주세요.`, { cause: e, data: { docId, afterWrite: true } });
+          }
+          rt.db.updateFiling(call.owner, filing.id, { status: '상신 실패' });
+          throw new PluginError('UPSTREAM', `지출결의 문서(문서 ID ${docId})를 만들었지만 상신하지 못했습니다: ${why} 다우오피스 임시저장 문서를 확인해 주세요.`, { cause: e, data: { docId, afterWrite: true } });
         } finally {
           await docPage.close().catch(() => {});
         }
         saveNotes(rt, call.owner, p.sorted.usedNotes);
 
         const v = await verifyClaim(api, docId, { waitMs: VERIFY_MS });
-        const mismatches = claimMismatches(v, { title: p.title, files: p.files, links });
+        const ledger = await claimLedger(api, { cardId: p.card.id, from: p.m.from, to: p.m.to, docId });
+        const mismatches = claimMismatches(v, { title: p.title, files: p.files, links, ledger, rows: p.rows.map((r) => r.row) });
         rt.db.updateFiling(call.owner, filing.id, { status: v.status || '확인 못 함', detail: { ...detail, line: lineText, verified: !mismatches.length, mismatches } });
         if (mismatches.length) {
-          throw new PluginError('UPSTREAM', `지출결의를 올렸지만 서버 문서가 기대와 다릅니다 (문서 ID ${docId}): ${mismatches.join('; ')}. 다우오피스에서 확인하고, 잘못됐으면 결재자가 처리하기 전에 상신취소해 주세요.`, { data: { docId, mismatches } });
+          throw new PluginError('UPSTREAM', `지출결의를 올렸지만 서버 문서가 기대와 다릅니다 (문서 ID ${docId}): ${mismatches.join('; ')}. 다우오피스에서 확인하고, 잘못됐으면 결재자가 처리하기 전에 상신취소해 주세요.`, { data: { docId, mismatches, afterWrite: true } });
         }
         return {
           text: [

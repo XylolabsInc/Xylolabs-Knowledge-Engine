@@ -95,15 +95,33 @@ export function pickRequest(rows, { kind, purpose, target }, today) {
 
 /**
  * 남은 단계. `save`, `submit`, `approve`, `print`. 셀프승인이 아니면 상신 뒤 결재를 기다린다
- * (`wait`).
+ * (`wait`). 모르는 상태 코드(반려 등)는 다시 상신하지 않고 멈춘다.
  */
 export function certSteps(row, { self }) {
   const code = row ? codeOf(row) : null;
+  if (row && !(code in CERT_STATUS)) {
+    throw new PluginError('CONFLICT', `증명서 신청의 상태를 알 수 없습니다 (코드 ${code}). 다시 올리지 않았습니다. 다우오피스 인사 > 증명서 발급 신청에서 확인해 주세요.`);
+  }
   if (code === '02') return ['print'];
   if (code === '01') return self ? ['approve', 'print'] : ['wait'];
   const rest = self ? ['submit', 'approve', 'print'] : ['submit', 'wait'];
   return row ? rest : ['save', ...rest];
 }
+
+/**
+ * 결재 문서의 결재선에 있는 사람 이름(기안자 포함). `userName` 이 있으면 그것, 없으면 표시 이름의
+ * 첫 말이다. 셀프승인 전에 본인만 있는지 본다.
+ */
+export async function certLineNames(api, docId) {
+  const r = await api(`/gw/api/approval/document/${encodeURIComponent(docId)}`);
+  if (!r.ok) throw fail(`증명서 결재 문서를 읽지 못했습니다 (HTTP ${r.status}).`);
+  return (r.data?.data?.apprFlow?.activityGroups ?? []).flatMap((g) => (g.activities ?? [])
+    .map((a) => String(a.userName ?? '').trim() || String(a.displayName ?? '').trim().split(/[\s(]/)[0]))
+    .filter(Boolean);
+}
+
+/** 결재선이 본인뿐인가. 비어 있으면 아니다(읽지 못한 것이다). */
+export const onlyMe = (names, me) => names.length > 0 && names.every((n) => n === me);
 
 /** 단계 이름 → 사람이 읽는 말. */
 export const STEP_LABEL = Object.freeze({
@@ -341,27 +359,55 @@ export async function approveRequest(page, baseUrl, docId) {
 }
 
 /**
+ * 컨텍스트마다 한 번 거는 다운로드 받개. 기다리는 쪽이 있으면 넘기고, 없으면 바로 지운다. 기다리다
+ * 시간이 지난 뒤에야 시작된 증명서 다운로드가 브라우저 임시 폴더에 남지 않게 한다(주민번호, 주소가
+ * 들어 있다). 이 플러그인에서 파일을 내려받는 것은 증명서뿐이다.
+ */
+const sinks = new WeakMap();
+export function downloadSink(context) {
+  let sink = sinks.get(context);
+  if (sink) return sink;
+  sink = { waiter: null };
+  const onDownload = (d) => {
+    const take = sink.waiter;
+    sink.waiter = null;
+    if (take) take(d);
+    else d.delete().catch(() => {});
+  };
+  const watch = (p) => p.on('download', onDownload);
+  for (const p of context.pages()) watch(p);
+  context.on('page', watch);
+  sinks.set(context, sink);
+  return sink;
+}
+
+/**
  * 결재완료된 건의 PDF 를 받는다. 목록에서 증명서 종류 칸을 누르면 새 창이 뜨며 다운로드가
  * 시작된다. 다운로드 주소가 따로 없어 브라우저의 download 이벤트를 받는다. 받은 파일은 읽고
- * 바로 지운다. 출력이 남긴 빈 창도 닫는다. `Buffer` 를 돌려준다.
+ * 바로 지운다. 늦게 시작된 다운로드도 `downloadSink()` 가 지운다. 출력이 남긴 빈 창도 닫는다.
+ * `Buffer` 를 돌려준다.
  */
 export async function downloadCertificate(page, baseUrl, issuecertId, { timeoutMs = 45_000 } = {}) {
   await openCertList(page, baseUrl);
   const context = page.context();
   const before = new Set(context.pages());
+  const sink = downloadSink(context);
   const download = await new Promise((resolve, reject) => {
-    const watched = new Set();
-    const cleanup = () => {
+    let timer = null;
+    const take = (d) => { clearTimeout(timer); resolve(d); };
+    sink.waiter = take;
+    timer = setTimeout(() => {
+      if (sink.waiter === take) sink.waiter = null;
+      reject(fail('증명서 다운로드가 시작되지 않았습니다.'));
+    }, timeoutMs);
+    clickPrintCell(page, issuecertId).catch((e) => {
       clearTimeout(timer);
-      context.off('page', watch);
-      for (const p of watched) p.off('download', done);
-    };
-    const done = (d) => { cleanup(); resolve(d); };
-    const watch = (p) => { watched.add(p); p.on('download', done); };
-    const timer = setTimeout(() => { cleanup(); reject(fail('증명서 다운로드가 시작되지 않았습니다.')); }, timeoutMs);
-    for (const p of context.pages()) watch(p);
-    context.on('page', watch);
-    clickPrintCell(page, issuecertId).catch((e) => { cleanup(); reject(e); });
+      if (sink.waiter === take) sink.waiter = null;
+      reject(e);
+    });
+  }).catch(async (e) => {
+    for (const p of context.pages()) if (!before.has(p)) await p.close().catch(() => {});
+    throw e;
   });
   try {
     const file = await download.path();

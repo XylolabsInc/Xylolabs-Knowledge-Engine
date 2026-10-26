@@ -1,9 +1,10 @@
 import * as z from 'zod';
 import { PluginError } from '../errors.mjs';
+import { digestOf } from '../runtime.mjs';
 import { kstDate } from '../dao/kst.mjs';
 import { sessionUser } from '../dao/org.mjs';
 import {
-  CERT_KINDS, CERT_PURPOSES, CERT_STATUS, STEP_LABEL, listCertRequests, normalizeCert, pickRequest, certSteps,
+  CERT_KINDS, CERT_PURPOSES, CERT_STATUS, STEP_LABEL, listCertRequests, normalizeCert, pickRequest, certSteps, certLineNames, onlyMe,
   selfApprovalAllowed, checkRequestDialog, saveRequest, submitRequest, approveRequest, downloadCertificate,
 } from '../dao/certificate.mjs';
 
@@ -50,6 +51,19 @@ function decideSelf(rt, args) {
   return args.selfApprove ?? allowed;
 }
 
+/** 이미 결재 중인 신청을 본인 승인으로 끝내도 되는가. 결재선에 본인만 있어야 한다. */
+async function assertSelfLine(api, row, me) {
+  const names = await certLineNames(api, row.docId);
+  if (!onlyMe(names, me)) {
+    throw new PluginError('CONFLICT', `이미 결재 중인 증명서 신청의 결재선에 다른 사람이 있어 본인 승인으로 끝낼 수 없습니다: ${names.join(' → ') || '(읽지 못함)'}. 결재가 끝나면 다시 요청해 주세요.`);
+  }
+}
+
+/** 미리보기가 보여 준 것. 그사이 신청이 결재중에서 결재완료로 바뀌는 식으로 단계가 달라지면 다르다. */
+const certDigest = ({ req, self, steps, row }) => digestOf({
+  request: req, self, steps, docId: row?.docId ? String(row.docId) : null, status: row ? String(row.docStatusCode ?? '') : null,
+});
+
 const describeRow = (r) => {
   const c = normalizeCert(r);
   return `${c.requestDate} ${c.kind} / ${c.purpose} / ${c.target} · ${c.status}${c.expireDate ? ` (유효 ${c.expireDate}까지)` : ''}`;
@@ -61,6 +75,7 @@ const DOM = { checkRequestDialog, saveRequest, submitRequest, approveRequest, do
 export function register(server, rt, { dom = DOM } = {}) {
   rt.tool(server, 'issue_certificate', {
     kind: 'write',
+    previewDigest: true,
     description: [
       '재직증명서나 경력증명서를 발급받는다(신청 저장, 전자결재 상신, 승인, PDF 출력).',
       '용도와 제출처는 사람이 정하는 값이라 모르면 묻는다. PDF 는 본인에게 DM 으로만 간다.',
@@ -86,6 +101,7 @@ export function register(server, rt, { dom = DOM } = {}) {
         }
         if (steps.includes('save')) await dom.checkRequestDialog(page, baseUrl, req);
         const me = rt.db.account(call.owner)?.name ?? (await sessionUser(api)).name;
+        if (steps[0] === 'approve') await assertSelfLine(api, row, me);
         const lines = [
           `증명서 발급 미리보기: ${req.kind}`,
           `- 용도: ${req.purpose}`,
@@ -101,6 +117,7 @@ export function register(server, rt, { dom = DOM } = {}) {
         return {
           text: lines.filter((l) => l !== null).join('\n'),
           data: { request: req, steps, selfApproval: self, existing: row ? normalizeCert(row) : null },
+          digest: certDigest({ req, self, steps, row }),
         };
       });
     },
@@ -115,6 +132,7 @@ export function register(server, rt, { dom = DOM } = {}) {
         if (steps[0] === 'wait') {
           throw new PluginError('CONFLICT', `같은 증명서 신청이 이미 결재 중입니다 (${describeRow(row)}).`);
         }
+        call.assertPreviewed(certDigest({ req, self, steps, row }));
         const account = rt.db.account(call.owner);
         const me = account?.name ?? (await sessionUser(api)).name;
         const ref = `${req.kind}/${req.purpose}/${req.target}`;
@@ -140,14 +158,18 @@ export function register(server, rt, { dom = DOM } = {}) {
           };
         }
         if (String(row.docStatusCode ?? '') === '01') {
+          // 방금 올린 신청이든 전에 올린 신청이든, 결재선에 본인만 있을 때만 승인한다.
+          await assertSelfLine(api, row, me);
           await dom.approveRequest(page, baseUrl, row.docId);
           row = await waitForRow(api, row.issuecertId, (r) => String(r.docStatusCode ?? '') === '02');
           if (String(row?.docStatusCode ?? '') !== '02') {
             throw new PluginError('UPSTREAM', '증명서 결재를 승인했지만 결재완료로 바뀌지 않았습니다. 다우오피스에서 확인해 주세요.');
           }
         }
-        if (filing) rt.db.updateFiling(call.owner, filing.id, { status: CERT_STATUS['02'], detail: { ...filing.detail, steps } });
-        else rt.db.addFiling({ owner: call.owner, kind: 'certificate', ref, docId: row.docId ? String(row.docId) : null, title: req.kind, status: CERT_STATUS['02'], detail: { self, steps } });
+        // 같은 문서의 기록이 있으면 고친다. 다시 출력할 때마다 기록을 늘리지 않는다.
+        filing ??= row.docId ? rt.db.filings(call.owner, { kind: 'certificate', ref }).findLast((f) => f.docId === String(row.docId)) ?? null : null;
+        if (filing) rt.db.updateFiling(call.owner, filing.id, { status: CERT_STATUS['02'], detail: { ...filing.detail, steps, printedAt: kstDate() } });
+        else rt.db.addFiling({ owner: call.owner, kind: 'certificate', ref, docId: row.docId ? String(row.docId) : null, title: req.kind, status: CERT_STATUS['02'], detail: { self, steps, printedAt: kstDate() } });
 
         const pdf = await dom.downloadCertificate(page, baseUrl, row.issuecertId);
         const c = normalizeCert(row);
