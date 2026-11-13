@@ -1,6 +1,8 @@
 [Unit]
 Description=Xylolabs Knowledge Base Worker
-After=network.target
+# Wait for the network and DNS: the bot resolves slack.com at startup.
+Wants=network-online.target
+After=network-online.target nss-lookup.target
 
 [Service]
 Type=simple
