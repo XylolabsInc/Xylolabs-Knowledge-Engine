@@ -119,7 +119,17 @@ func main() {
 		// Set up bot if Gemini is configured
 		if geminiClient != nil {
 			slackAPI := slack.New(cfg.SlackBotToken)
-			authResp, err := slackAPI.AuthTest()
+			// Retry auth.test: at boot or after an unattended upgrade DNS can
+			// be down for a moment, and without the bot user ID the bot stays
+			// off until the next restart. A stop signal ends the wait.
+			authCtx, stopAuth := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			authResp, err := authTestWithRetry(authCtx, slackAPI.AuthTestContext, slackAuthDelays, logger)
+			interrupted := authCtx.Err() != nil
+			stopAuth()
+			if interrupted {
+				logger.Info("shutdown requested while waiting for slack auth.test")
+				return
+			}
 			if err != nil {
 				logger.Error("failed to get slack bot user ID", "error", err)
 			} else {
